@@ -138,7 +138,7 @@ function hasBidAsk_(q) {
 function getOptionQuote_(symbol, expiration, strike, type) {
   const SHEET_NAME = "OptionPricesUploaded";
 
-  const res = XLookupByKeysGrok(
+  const res = XLookupByKeys(
     [symbol, expiration, Number(strike), type],
     ["symbol", "expiration", "strike", "type"],
     ["bid", "mid", "ask"],
