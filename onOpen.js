@@ -1,0 +1,12 @@
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('OptionTools')
+    .addItem('Refresh Option Prices', 'refreshOptionPrices')
+    .addItem('Warm XLookup Cache', 'warmXLookupCache')
+    .addToUi();
+}
+
+function warmXLookupCache() {
+  XLookupByKeys_WarmCache("OptionPricesUploaded", ["Symbol", "Expiration", "Strike", "Type"], ["Bid", "Ask"]);
+  SpreadsheetApp.getActiveSpreadsheet().toast("Cache warmed", "Done", 3);
+}
