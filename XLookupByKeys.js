@@ -5,21 +5,68 @@ const CACHE_KEY_PREFIX = "XLookupByKeys:v3:";
 let __MEMO = Object.create(null);
 
 /**
- * XLookupByKeys (v3.5) — cached return-map builder (robust cache load)
+ * XLookupByKeys - Performs a multi-key lookup in a Google Spreadsheet sheet, returning values from specified return columns.
  *
- * Fix: CacheService can return partial/expired chunks while the count key still exists.
- * We now treat ANY decode/ungzip/parse error as a cache miss (rebuild).
+ * This function builds or retrieves a cached map of return values keyed by a composite key (joined by '|') from the provided key values.
+ * Lookups are case-insensitive (headers are lowercased for matching), and values are normalized (trimmed strings, dates formatted as YYYY-MM-DD, numbers as strings).
  *
- * Added:
- * - XLookupByKeys_WarmCache(sheetName, keyHeaders, returnHeaders) (generic)
- * - OptionTools menu + refreshOptionPrices (option-specific caller)
+ * Caching Strategy:
+ * - In-memory memoization (per execution) for fastest access.
+ * - Document Cache (chunked, gzipped, base64-encoded) with TTL of 1 hour for persistence across executions.
+ * - Cache key incorporates sheet signature (ID, dimensions, header hash) and spec hash (keys/returns) to invalidate on changes.
+ * - If cache miss, builds the map from sheet data, skipping empty rows.
  *
- * Optimizations:
- * - Use cache.getAll/putAll for batch operations in chunked cache (faster than serial gets/puts).
- * - Skip empty rows early with filter.
- * - Minor: Faster header lowercasing, colIndex building.
+ * If no match is found, returns an array of empty strings matching the returnHeaders length.
+ *
+ * Related Functions:
+ * - XLookupByKeys_WarmCache(sheetName, keyHeaders, returnHeaders): Proactively builds/rebuilds the cache for the given spec (useful after data refreshes).
+ * - XLookupByKeys_clearMemo(): Clears the in-memory memo (e.g., for testing or after edits).
+ * - XLookupByKeys_onEdit(e): Clears memo on sheet edits (install as onEdit trigger).
+ *
+ * Version: 3.5
+ * Changes:
+ * - Added generic WarmCache helper and OptionTools menu integration (with refreshOptionPrices caller).
+ * - Optimizations: Batch cache.getAll/putAll for chunks; early empty row filtering; faster header processing.
+ *
+ * Usage Examples:
+ *
+ * 1. Spreadsheet Formula (Custom Function):
+ *    Assume a sheet named "Options" with headers: symbol, expiration, strike, type, bid, mid, ask.
+ *    In cell E2 (to get bid/mid/ask for keys in A2:D2):
+ *    =XLookupByKeys(A2:D2, {"symbol", "expiration", "strike", "type"}, {"bid", "mid", "ask"}, "Options")
+ *
+ *    This returns a horizontal array: [bid, mid, ask] or ["", "", ""] if no match.
+ *
+ * 2. From Another Script (e.g., to fetch values programmatically):
+ *    const result = XLookupByKeys(
+ *      ["TSLA", "2028-06-16", 450, "Call"],
+ *      ["symbol", "expiration", "strike", "type"],
+ *      ["bid", "mid", "ask"],
+ *      "Options"
+ *    );
+ *    // result = [[203.15, 206.00, 208.85]] or [["", "", ""]]
+ *
+ * 3. Warm Cache (e.g., after refreshing data in "Options" sheet):
+ *    XLookupByKeys_WarmCache(
+ *      "Options",
+ *      ["symbol", "expiration", "strike", "type"],
+ *      ["bid", "mid", "ask"]
+ *    );
+ *    // Returns true; cache is built for future lookups.
+ *
+ * 4. Handling Missing Data:
+ *    =XLookupByKeys(A2:D2, {"symbol", "expiration", "strike", "type"}, {"bid", "mid", "ask"}, "Options")
+ *    // If no row matches keys in A2:D2, returns ["", "", ""]
+ *
+ * Note: For vertical output, wrap in TRANSPOSE(). Ensure DEFAULT_SHEET is defined if using default sheetName.
+ *
+ * @param {Array|string} keyValues - The value(s) for the key columns (flattened if array).
+ * @param {Array|string} keyHeaders - The header name(s) of the key columns (flattened if array, case-insensitive).
+ * @param {Array|string} returnHeaders - The header name(s) of the return columns (flattened if array, case-insensitive).
+ * @param {string} [sheetName=DEFAULT_SHEET] - The name of the sheet to query (defaults to DEFAULT_SHEET if not provided).
+ * @returns {Array<Array<*>}} - A 2D array with one row of return values (or empties if no match).
+ * @throws {Error} - If sheet not found, or required headers missing.
  */
-
 function XLookupByKeys(keyValues, keyHeaders, returnHeaders, sheetName = DEFAULT_SHEET) {
   keyValues = flatten_(keyValues);
   keyHeaders = flatten_(keyHeaders);
@@ -30,6 +77,7 @@ function XLookupByKeys(keyValues, keyHeaders, returnHeaders, sheetName = DEFAULT
   if (!hit) return [returnHeaders.map(() => "")];
   return [hit];
 }
+
 /**
  * Generic helper: proactively build the cache for a given (sheet, keys, returns).
  * Call from scripts (e.g., after refreshOptionPrices).
@@ -40,6 +88,7 @@ function XLookupByKeys_WarmCache(sheetName, keyHeaders, returnHeaders) {
   getOrBuildReturnMap_(sheetName, keyHeaders, returnHeaders);
   return true;
 }
+
 function getOrBuildReturnMap_(sheetName, keyHeaders, returnHeaders) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(sheetName);
@@ -90,18 +139,22 @@ function getOrBuildReturnMap_(sheetName, keyHeaders, returnHeaders) {
   __MEMO[cacheKeyBase] = map;
   return { map, sig, cacheKeyBase };
 }
+
 function makeCompositeKey_(keyValues) {
   return keyValues.map(normalize_).join("|");
 }
+
 function normalize_(v) {
   if (v == null) return "";
   if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), "yyyy-MM-dd");
   if (typeof v === "number") return v.toString();
   return v.toString().trim();
 }
+
 function flatten_(v) {
   return Array.isArray(v) ? v.flat() : [v];
 }
+
 function getSheetSignature_(sheet) {
   const r = sheet.getLastRow();
   const c = sheet.getLastColumn();
@@ -111,12 +164,14 @@ function getSheetSignature_(sheet) {
   );
   return `${sheet.getSheetId()}:${r}x${c}:${headerHash}`;
 }
+
 function hashSpec_(keyHeaders, returnHeaders) {
   const spec = JSON.stringify({ k: keyHeaders, r: returnHeaders });
   return Utilities.base64Encode(
     Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, spec)
   );
 }
+
 /** ---- Chunked cache helpers ---- */
 function cacheSaveChunked_(cache, baseKey, obj, ttlSeconds) {
   const json = JSON.stringify(obj);
@@ -134,6 +189,7 @@ function cacheSaveChunked_(cache, baseKey, obj, ttlSeconds) {
   chunks.forEach((chunk, i) => putDict[`${baseKey}:${i}`] = chunk);
   cache.putAll(putDict, ttlSeconds);
 }
+
 /**
  * Robust cache load:
  * - if any chunk missing => miss
@@ -176,14 +232,17 @@ function cacheLoadChunked_(cache, baseKey) {
     return null; // treat ANY error as miss
   }
 }
+
 function XLookupByKeys_clearMemo() {
   __MEMO = Object.create(null);
 }
+
 function XLookupByKeys_onEdit(e) {
   XLookupByKeys_clearMemo();
 }
+
 /** ===========================
- * TESTS (self-contained) — PRESERVED
+ * TESTS (self-contained)
  * =========================== */
 function assertEqual(actual, expected, msg = "") {
   if (actual !== expected) {
@@ -192,6 +251,7 @@ function assertEqual(actual, expected, msg = "") {
     );
   }
 }
+
 function assertArrayEqual(actual, expected, msg = "") {
   if (actual.length !== expected.length) {
     throw new Error(
@@ -206,6 +266,7 @@ function assertArrayEqual(actual, expected, msg = "") {
     }
   });
 }
+
 function ensureTestSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const name = "Options__TEST";
@@ -222,6 +283,7 @@ function ensureTestSheet_() {
   sh.getRange(2, 1, rows.length, headers.length).setValues(rows);
   return sh.getName();
 }
+
 function test_XLookupByKeys_returns_expected_values() {
   XLookupByKeys_clearMemo();
   const sheetName = ensureTestSheet_();
@@ -234,6 +296,7 @@ function test_XLookupByKeys_returns_expected_values() {
   assertArrayEqual(result[0], [203.15, 206.00, 208.85], "lookup returned wrong bid/mid/ask");
   Logger.log("✅ test_XLookupByKeys_returns_expected_values PASSED");
 }
+
 function test_XLookupByKeys_cache_reused_in_memory() {
   XLookupByKeys_clearMemo();
   const sheetName = ensureTestSheet_();
@@ -258,6 +321,7 @@ function test_XLookupByKeys_cache_reused_in_memory() {
   assertEqual(afterSecondKeys, afterFirstKeys, "Memo should be reused without creating new entries");
   Logger.log("✅ test_XLookupByKeys_cache_reused_in_memory PASSED");
 }
+
 function test_XLookupByKeys_missing_row_returns_blanks() {
   XLookupByKeys_clearMemo();
   const sheetName = ensureTestSheet_();
@@ -270,6 +334,7 @@ function test_XLookupByKeys_missing_row_returns_blanks() {
   assertArrayEqual(result[0], ["", "", ""], "missing row should return blanks");
   Logger.log("✅ test_XLookupByKeys_missing_row_returns_blanks PASSED");
 }
+
 function test_XLookupByKeys_all() {
   const globalObj = globalThis;
   const tests = Object.keys(globalObj)

@@ -1,3 +1,10 @@
+/**
+ *  Add AppScript menu items to a google sheet
+ *  OptionTools/
+ *    RefreshOptionPrices
+ *    Warm XLookup Cache
+ **/
+
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('OptionTools')

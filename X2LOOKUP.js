@@ -3,6 +3,11 @@
  * X2LOOKUP(expiration, strike, ExpCol, StrikeCol, ReturnCol)
  * Two-key lookup for Google Sheets custom functions.
  *
+ *  USAGE: X2LOOKUP(jun, 350, Exp, Strike, Bid)
+ *
+ * looks for a row with 'jun' in the Exp range and 350 in the Strike range
+ * and returns the corresponding value from the Bid range
+ *
  * Returns:
  *  - value from ReturnCol when found
  *  - "NA" if not found

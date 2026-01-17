@@ -1,8 +1,8 @@
 /*******************************************************
- * OPTIONSTRAT SPREAD URL BUILDER
+ * Optionstrat.com  URL BUILDER
  *
  * Usage in Google Sheets:
- *   =buildOptionStratSpreadUrl(I7, "TSLA", "bull-call-spread", "expiration")
+ *   =buildOptionStratUrl("350/450","TSLA", "bull-call-spread", 'Jun 17 2028');
  *
  * Strike cell may contain:
  *   "450/460"
@@ -12,19 +12,28 @@
  * Option type (C/P) is inferred from strategy.
  *******************************************************/
 
-// =buildOptionStratUrl(B4,"TSLA","bull-call-spread", C4)
 
 function testbuildOptionStratUrl () {
   
   buildOptionStratUrl("350/450","TSLA", "bull-call-spread", new Date(2028, 5, 16));
   buildOptionStratUrl("350/450","TSLA", "bull-call-spread", 'Jun \'28');
-  buildOptionStratUrl("350/450","TSLA", "bull-call-spread", 'Jun 17 2028');
+  buildOptionStratUrl("350/450","TSLA", "bull-put-spread", 'Jun 17 2028');
   buildOptionStratUrl("350/450","TSLA", "bull-call-spread", 'Jun 2028');
   buildOptionStratUrl("350/450","TSLA", "bull-call-spread", 'Jan 16 2026');
   //buildOptionStratUrl(undefined,"TSLA", "bull-call-spread", 'Jan 16 2026');
   console.log("✅ testbuildOptionStratUrl PASSED");
 }
 
+/**
+ * build a URL for optionstrat.com
+ * @param strikes -- a string containing strikes separated by '/' characters such as 400/450
+ * @param ticker -- an uppercase stock symbol such as TSLA
+ * @param strategy -- bull-call-spread, bull-put-spread literals as they appear in Optionstrat
+ *                    URLs such as https://optionstrat.com/build/bull-call-spread/TSLA/.TSLA281215C440,-.TSLA281215C490
+ * @param expiration -- an expiration date in many forms such as "Jun '28", or a Date.  If
+ *                      no day-of-month is specified, then the 3rd Friday of the month is
+ *                      computed (typical for long LEAPS)
+ */
 function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
 
   const months = {
