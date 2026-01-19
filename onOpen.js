@@ -9,7 +9,7 @@ function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('OptionTools')
     .addItem('Refresh Option Prices', 'refreshOptionPrices')
-    .addItem('Warm XLookup Cache', 'warmXLookupCache')
+    .addItem("PlotPortfolioValueByPrice", "PlotPortfolioValueByPrice")
     .addToUi();
 }
 
