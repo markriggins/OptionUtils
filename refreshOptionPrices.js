@@ -208,7 +208,7 @@ function parseCsvData_(csvData, symbol, expDate) {
     const strike = safeNumber_(r[strikeIdx]);
     if (!Number.isFinite(strike)) continue;
 
-    const type = normalizeType_(r[typeIdx]);
+    const optionType = normalizeOptionType_(r[typeIdx]);
     if (!type) continue;
 
     const bid = safeNumber_(r[bidIdx]);
@@ -219,7 +219,7 @@ function parseCsvData_(csvData, symbol, expDate) {
       symbol,
       expDate,
       strike,
-      type,
+      optionType,
       Number.isFinite(bid) ? bid : null,
       Number.isFinite(mid) ? mid : null,
       Number.isFinite(ask) ? ask : null
@@ -284,7 +284,7 @@ function safeNumber_(v) {
   return Number.isFinite(n) ? n : NaN;
 }
 
-function normalizeType_(v) {
+function normalizeOptionType_(v) {
   const s = String(v || "").trim().toLowerCase();
   if (!s) return null;
   if (["call", "calls", "c"].includes(s)) return "Call";

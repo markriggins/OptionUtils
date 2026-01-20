@@ -8,54 +8,43 @@
  *
  * For each symbol tab:
  *   - Creates/maintains a per-symbol Config table at H1:I9
- *   - Writes a generated data table (Price vs Shares P/L vs Spreads P/L vs Total P/L)
- *   - Creates a chart at the top (created once; later runs preserve user resizing/position)
- *   - If the stock table contains a "Current Price" column, draws a VERTICAL DASHED LINE at that price.
- *     (Implemented as an added series of two points at X=currentPrice spanning [minY,maxY].)
+ *   - Writes a generated data table with both $ and % series:
+ *       Price | Shares $ | Options $ | Total $ | Shares % | Options %
+ *   - Creates TWO charts (created once; later runs preserve user resizing/position):
+ *       Chart 1: $ P/L vs Price (Shares $, Options $, Total $) + vertical dashed line at Current Price (if available)
+ *       Chart 2: % Return vs Price (Shares %, Options %) (no vertical line)
+ *   - If the stock table contains a "Current Price" column, draws a VERTICAL DASHED LINE at that price on the $ chart.
  *
  * Portfolios table:
  *   - Sheet: "Portfolios" (created if missing)
  *   - Columns: Symbol | Type | RangeName
- *   - Type is FORCED to singular canonical values (case-insensitive, dash-normalized):
+ *   - Type is canonical singular (case-insensitive, dash/space-normalized):
  *       stock
- *       bull-call-spread
- *       bull-put-spread
- *     Accepted aliases:
- *       shares -> stock
- *       bull-call-spreads -> bull-call-spread
- *       bull-put-spreads  -> bull-put-spread
- *       BCS -> bull-call-spread
- *       BPS -> bull-put-spread
+ *       bull-call-spread  (aliases: bull-call-spreads, BCS)
+ *       bull-put-spread   (aliases: bull-put-spreads, BPS)
  *
  * RangeName:
  *   - Must be a Named Range.
  *   - Convenience convention: if RangeName isn't found, the script tries RangeName + "Table"
- *     (e.g., Sheets Table "Stocks" paired with Named Range "StocksTable").
  *
  * Input tables:
  *   - Header matching is case/space-insensitive.
- *   - If an input table includes a "Symbol" or "Ticker" column, rows not matching the desired symbol
- *     are ignored.
+ *   - If an input table includes a "Symbol" or "Ticker" column, rows not matching the desired symbol are ignored.
  *
  * Spread tables special handling:
- *   Many users store one “summary” row per spread (has Long Strike, Short Strike, Contracts, Ave Debit),
- *   followed by “fill detail” rows that may have Contracts/Prices but do NOT repeat strikes.
- *   This script:
- *     - Treats ONLY rows that have BOTH Long Strike and Short Strike as actual spread definitions
- *     - Ignores fill-detail rows automatically
- *     - Uses "Ave Debit" (or "Avg Debit"/"Average Debit") as the cost to enter when present
- *       otherwise falls back to "Rec Debit", otherwise "Debit/Net Debit/Cost/Entry"
+ *   - Only rows with BOTH Long Strike and Short Strike are treated as spread definition rows
+ *   - Fill-detail rows (missing strikes) are ignored automatically
+ *   - Debit column preference:
+ *       Ave Debit / Avg Debit / Average Debit
+ *       else Rec Debit / Recommended Debit
+ *       else Net Debit / Debit / Cost / Entry / Price
  *
  * Config tables:
- *   - Named ranges are global (not scoped per sheet), so each symbol has a unique config named range:
- *       Config_<SYMBOL> (e.g., Config_TSLA)
- *   - Config columns H:I are hidden AFTER a successful build, but kept visible if inputs are missing.
+ *   - Named ranges are global, so each symbol has a unique config named range: Config_<SYMBOL>
+ *   - Config columns H:I are hidden AFTER a successful build, visible if inputs are missing or parsing yields nothing.
  *
  * Auto-refresh:
- *   - onEdit(e) rebuilds only when the edited cell intersects any Config_<SYMBOL> range.
- *
- * Chart sizing:
- *   - The chart is created only if none exists yet to preserve manual resizing/position.
+ *   - onEdit(e) rebuilds only when edits intersect any Config_<SYMBOL> named range.
  */
 
 /* =========================================================
@@ -63,7 +52,6 @@
    ========================================================= */
 
 function PlotPortfolioValueByPrice() {
-
   Logger.log("PlotPortfolioValueByPrice Started");
 
   const ss = SpreadsheetApp.getActive();
@@ -73,12 +61,12 @@ function PlotPortfolioValueByPrice() {
   if (symbols.length === 0) {
     SpreadsheetApp.getUi().alert(
       "No symbols found in Portfolios.\n\n" +
-      "Add rows to the 'Portfolios' sheet with columns:\n" +
-      "  Symbol | Type | RangeName\n\n" +
-      "Type must be one of:\n" +
-      "  stock\n" +
-      "  bull-call-spread\n" +
-      "  bull-put-spread\n"
+        "Add rows to the 'Portfolios' sheet with columns:\n" +
+        "  Symbol | Type | RangeName\n\n" +
+        "Type must be one of:\n" +
+        "  stock\n" +
+        "  bull-call-spread\n" +
+        "  bull-put-spread\n"
     );
     return;
   }
@@ -90,7 +78,6 @@ function PlotPortfolioValueByPrice() {
 
 /**
  * Simple trigger: rebuild only when edits intersect any Config_<SYMBOL> named range.
- * (It is OK that onEdit fires for all user edits — we return immediately unless config was edited.)
  */
 function onEdit(e) {
   try {
@@ -202,7 +189,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
       `Parsed 0 rows for ${symbol}.\n` +
         `This usually means your headers don't match expected names, or numeric cells are non-numeric.\n\n` +
         `Try:\n` +
-        `- Ensure stock table has Shares/Qty + AvgCost/Basis/Ave Price columns\n` +
+        `- Ensure stock table has Shares/Qty + AvgCost/Basis/Ave Price (Paid) columns\n` +
         `- Ensure spread tables have Long Strike + Short Strike + Contracts + Ave Debit (or Rec Debit)\n` +
         `- Ensure numbers aren't stored as text with commas/extra characters`
     );
@@ -210,13 +197,31 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     return;
   }
 
+  // --- ROI denominators ---
+  // Shares denominator: total cost basis
+  const sharesCost = shares.reduce((sum, sh) => sum + sh.qty * sh.basis, 0);
+
+  // Options denominator: debit paid for call spreads + max-risk for put spreads
+  const callInvest = callSpreads.reduce((sum, sp) => sum + (sp.debit * 100 * sp.qty), 0);
+
+  const putRisk = putSpreads.reduce((sum, sp) => {
+    const width = sp.kShort - sp.kLong;
+    if (width <= 0) return sum;
+    const credit = -sp.debit; // debit stored negative for credit spreads
+    const maxLossPer = (width - credit) * 100;
+    return sum + maxLossPer * sp.qty;
+  }, 0);
+
+  const optionsDenom = callInvest + putRisk;
+
   // ---------- Build output table ----------
-  const table = [["Price", "Shares", "Options", "Total"]]; // Updated headers for simpler labels
+  const table = [["Price", "Shares $", "Options $", "Total $", "Shares %", "Options %"]];
 
   for (let S = cfg.minPrice; S <= cfg.maxPrice + 1e-9; S += cfg.step) {
     let sharesPL = 0;
     let spreadsPL = 0;
 
+    // Shares P/L at scenario price S
     for (const sh of shares) sharesPL += (S - sh.basis) * sh.qty;
 
     // CALL spreads: payoff at expiration (intrinsic)
@@ -229,7 +234,6 @@ function plotForSymbol_(ss, symbolRaw, entries) {
 
     // PUT spreads (bull put spread credit convention):
     // Store 'Ave Debit' as NEGATIVE credit (e.g., -2.50) for credit spreads.
-    // Then -debit = credit. Terminal loss component is clamp_(kShort - S, 0, width).
     for (const sp of putSpreads) {
       const width = sp.kShort - sp.kLong;
       if (width <= 0) continue;
@@ -237,10 +241,21 @@ function plotForSymbol_(ss, symbolRaw, entries) {
       spreadsPL += (-sp.debit - loss) * 100 * sp.qty;
     }
 
-    table.push([round2_(S), round2_(sharesPL), round2_(spreadsPL), round2_(sharesPL + spreadsPL)]);
+    const totalPL = sharesPL + spreadsPL;
+    const sharesPct = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
+    const optionsPct = optionsDenom > 0 ? (spreadsPL / optionsDenom) : 0;
+
+    table.push([
+      round2_(S),
+      round2_(sharesPL),
+      round2_(spreadsPL),
+      round2_(totalPL),
+      round4_(sharesPct),
+      round4_(optionsPct)
+    ]);
   }
 
-  // Compute Y bounds for vertical current-price line
+  // Compute Y bounds for vertical current-price line (use Total $)
   const totalYs = table
     .slice(1)
     .map(r => toNum_(r[3]))
@@ -252,12 +267,18 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   const startRow = cfg.tableStartRow;
   const startCol = cfg.tableStartCol;
 
-  // Clear data area only (preserve chart + config)
+  // Clear data area only (preserve charts + config)
   sheet.getRange(startRow - 1, startCol, 2000, 30).clearContent();
 
   sheet.getRange(startRow - 1, startCol).setValue("Data (generated)").setFontWeight("bold");
   sheet.getRange(startRow, startCol, table.length, table[0].length).setValues(table);
   sheet.autoResizeColumns(startCol, table[0].length);
+
+  // Format % columns as percent
+  // Shares % is col +4, Options % is col +5
+  if (table.length > 1) {
+    sheet.getRange(startRow + 1, startCol + 4, table.length - 1, 2).setNumberFormat("0.00%");
+  }
 
   // Write vertical-line helper table (off to the right)
   const vlineCol = startCol + table[0].length + 2;
@@ -274,61 +295,61 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     ]);
   }
 
-  // ---------- Chart (create once only to preserve user sizing) ----------
+  // ---------- Charts (create once only to preserve user sizing) ----------
   const charts = sheet.getCharts();
   if (charts.length === 0) {
-    const dataRange = sheet.getRange(startRow, startCol, table.length, table[0].length);
+    // ----- Chart 1: $ P/L -----
+    // Use columns: Price, Shares $, Options $, Total $
+    const dollarRange = sheet.getRange(startRow, startCol, table.length, 4);
 
-    let chartBuilder = sheet
+    let dollarChart = sheet
       .newChart()
       .setChartType(Charts.ChartType.LINE)
-      .addRange(dataRange)
+      .addRange(dollarRange)
       .setPosition(1, 1, 0, 0)
-      .setOption("title", cfg.chartTitle || `${symbol} Portfolio Value by Price`)
+      .setOption("title", cfg.chartTitle || `${symbol} Portfolio Value by Price ($)`)
       .setOption("hAxis", { title: `${symbol} Price` })
-      .setOption("vAxis", { title: "Unrealized P/L" })
-      .setOption("legend", { position: "right" });
+      .setOption("vAxis", { title: "P/L ($)" })
+      .setOption("legend", { position: "right" })
+      .setOption("curveType", "none");
 
-    if (!cfg.includeComponentSeries) {
-      const priceColRange = sheet.getRange(startRow, startCol, table.length, 1);
-      const totalColRange = sheet.getRange(startRow, startCol + 3, table.length, 1);
-
-      chartBuilder = sheet
-        .newChart()
-        .setChartType(Charts.ChartType.LINE)
-        .addRange(priceColRange) // X axis
-        .addRange(totalColRange) // Total P/L series
-        .setPosition(1, 1, 0, 0)
-        .setOption("title", cfg.chartTitle || `${symbol} Portfolio Value by Price`)
-        .setOption("hAxis", { title: `${symbol} Price` })
-        .setOption("vAxis", { title: "Unrealized P/L" })
-        .setOption("legend", { position: "right" });
-    }
-
-    // Add vertical line as an extra series if we have current price
+    // Add vertical current price line as an extra series if available
     if (hasCurrentPrice) {
       const vlineRange = sheet.getRange(vlineRow + 1, vlineCol, 2, 2);
-      chartBuilder = chartBuilder.addRange(vlineRange);
+      dollarChart = dollarChart.addRange(vlineRange);
+
+      // Series indexes: 0 Shares$, 1 Options$, 2 Total$, 3 vline
+      const seriesOpt = {
+        3: { lineDashStyle: [6, 4], lineWidth: 2 }
+      };
+      dollarChart = dollarChart.setOption("series", seriesOpt);
     }
 
-    // Style the series with colors and labels (best-effort; Google Charts defaults may vary, but this sets them explicitly)
-    const seriesOpt = {
-      0: { color: 'blue', labelInLegend: 'Shares' }, // First series: Shares
-      1: { color: 'red', labelInLegend: 'Options' }, // Second: Options (Spreads)
-      2: { color: 'yellow', labelInLegend: 'Total' } // Third: Total
-    };
+    sheet.insertChart(dollarChart.build());
 
-    // Style the vertical line series as dashed (last series index). Best-effort.
-    if (hasCurrentPrice) {
-      // includeComponentSeries=true => 3 series => vline is 4th (index 3)
-      // includeComponentSeries=false => Total => 1 series => vline is 2nd (index 1)
-      const vlineSeriesIndex = cfg.includeComponentSeries ? 3 : 1;
-      seriesOpt[vlineSeriesIndex] = { lineDashStyle: [6, 4], lineWidth: 2 };
-    }
+    // ----- Chart 2: % Return -----
+    // Use columns: Price, Shares %, Options %
+    // We'll build a range that includes these three columns in one contiguous block by writing a helper table
+    // OR simply add multiple ranges (Price + Shares% + Options%) and let Charts infer.
+    const priceColRange = sheet.getRange(startRow, startCol, table.length, 1);
+    const sharesPctRange = sheet.getRange(startRow, startCol + 4, table.length, 1);
+    const optionsPctRange = sheet.getRange(startRow, startCol + 5, table.length, 1);
 
-    chartBuilder = chartBuilder.setOption("series", seriesOpt).setOption("curveType", "none");
+    const pctChart = sheet
+      .newChart()
+      .setChartType(Charts.ChartType.LINE)
+      .addRange(priceColRange)
+      .addRange(sharesPctRange)
+      .addRange(optionsPctRange)
+      .setPosition(15, 1, 0, 0) // below the first chart (user can resize/reposition)
+      .setOption("title", (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " (%)")
+      .setOption("hAxis", { title: `${symbol} Price` })
+      .setOption("vAxis", { title: "% Return", format: "percent" })
+      .setOption("legend", { position: "right" })
+      .setOption("curveType", "none")
+      .build();
 
-    sheet.insertChart(chartBuilder.build());
+    sheet.insertChart(pctChart);
   }
 
   // Hide config after successful build
@@ -353,6 +374,8 @@ function ensureAndReadPortfolios_(ss) {
 
   const lastRow = Math.max(1, sh.getLastRow());
   const rng = sh.getRange(1, 1, lastRow, 3);
+
+  // Maintain named range "Portfolios" for the A:C range we use
   const nr = ss.getNamedRanges().find(x => x.getName() === "Portfolios");
   if (!nr) {
     ss.setNamedRange("Portfolios", rng);
@@ -387,132 +410,20 @@ function ensureAndReadPortfolios_(ss) {
   return out;
 }
 
-/**
- * test_normalizePortfolioType_ - Runs assertions for normalizePortfolioType_ function.
- *
- * Covers:
- * - Null/undefined/empty inputs
- * - Case insensitivity
- * - Whitespace variations (spaces, nbsp)
- * - Dash variants (hyphens, en/em dashes)
- * - Unicode normalization (e.g., accented chars if any)
- * - Plurals and singulars
- * - Invalid inputs
- *
- * Run this in Google Apps Script editor or console.
- * Logs "✅ All tests passed" if successful.
- */
-function test_normalizePortfolioType() {
-  // Helper assert
-  function assertEqual(actual, expected, msg) {
-    if (actual !== expected) {
-      throw new Error(`ASSERT FAILED: ${msg}\nExpected: ${expected}\nActual: ${actual}`);
-    }
-  }
-
-  // ---- Null/Empty ----
-  assertEqual(normalizePortfolioType_(null), null, "null input");
-  assertEqual(normalizePortfolioType_(undefined), null, "undefined input");
-  assertEqual(normalizePortfolioType_(""), null, "empty string");
-  assertEqual(normalizePortfolioType_("   "), null, "whitespace only");
-
-  // ---- STOCK ----
-  // Basics
-  assertEqual(normalizePortfolioType_("stock"), "stock", "stock basic");
-  assertEqual(normalizePortfolioType_("STOCK"), "stock", "stock uppercase");
-  assertEqual(normalizePortfolioType_("Stock"), "stock", "stock mixed case");
-  // Plurals
-  assertEqual(normalizePortfolioType_("stocks"), "stock", "stocks plural");
-  assertEqual(normalizePortfolioType_("SHARES"), "stock", "shares uppercase");
-  assertEqual(normalizePortfolioType_("share"), "stock", "share singular");
-  // Whitespace/dashes
-  assertEqual(normalizePortfolioType_(" stock "), "stock", "stock with spaces");
-  assertEqual(normalizePortfolioType_("st ock"), null, "invalid with space inside");
-  // Unicode/dashes (though not directly in "stock")
-  assertEqual(normalizePortfolioType_("stock\u00a0"), "stock", "stock with nbsp"); // nbsp -> space -> trim
-
-  // ---- BULL CALL SPREAD ----
-  // Basics
-  assertEqual(normalizePortfolioType_("bcs"), "bull-call-spread", "bcs abbr");
-  assertEqual(normalizePortfolioType_("BCS"), "bull-call-spread", "BCS upper");
-  assertEqual(normalizePortfolioType_("bull call spread"), "bull-call-spread", "bull call spread spaces");
-  assertEqual(normalizePortfolioType_("Bull-Call-Spread"), "bull-call-spread", "bull-call-spread dashes");
-  assertEqual(normalizePortfolioType_("bull.call.spread"), "bull-call-spread", "bull.call.spread dots");
-  // Plurals
-  assertEqual(normalizePortfolioType_("bull call spreads"), "bull-call-spread", "bull call spreads plural");
-  // Variations
-  assertEqual(normalizePortfolioType_("bull\u2013call\u2014spread"), "bull-call-spread", "bull en/em dash spread"); // dashes → "-"
-  assertEqual(normalizePortfolioType_(" bull  call   spread "), "bull-call-spread", "extra spaces");
-  assertEqual(normalizePortfolioType_("BuLl CaLl SpReAd"), "bull-call-spread", "mixed case");
-  // Invalid for BCS
-  assertEqual(normalizePortfolioType_("bull calls spread"), null, "invalid plural mismatch");
-  assertEqual(normalizePortfolioType_("bcs extra"), null, "bcs with extra");
-
-  // ---- BULL PUT SPREAD ----
-  // Basics
-  assertEqual(normalizePortfolioType_("bps"), "bull-put-spread", "bps abbr");
-  assertEqual(normalizePortfolioType_("BPS"), "bull-put-spread", "BPS upper");
-  assertEqual(normalizePortfolioType_("bull put spread"), "bull-put-spread", "bull put spread spaces");
-  assertEqual(normalizePortfolioType_("Bull-Put-Spread"), "bull-put-spread", "bull-put-spread dashes");
-  assertEqual(normalizePortfolioType_("bull.put.spread"), "bull-put-spread", "bull.put.spread dots");
-  // Plurals
-  assertEqual(normalizePortfolioType_("bull put spreads"), "bull-put-spread", "bull put spreads plural");
-  // Variations
-  assertEqual(normalizePortfolioType_("bull\u2013put\u2014spread"), "bull-put-spread", "bull en/em dash spread");
-  assertEqual(normalizePortfolioType_(" bull  put   spread "), "bull-put-spread", "extra spaces");
-  assertEqual(normalizePortfolioType_("BuLl PuT SpReAd"), "bull-put-spread", "mixed case");
-  // Invalid for BPS
-  assertEqual(normalizePortfolioType_("bull puts spread"), null, "invalid plural mismatch");
-  assertEqual(normalizePortfolioType_("bps extra"), null, "bps with extra");
-
-  // ---- Invalid/General ----
-  assertEqual(normalizePortfolioType_("call"), null, "partial match");
-  assertEqual(normalizePortfolioType_("bull spread"), null, "missing type");
-  assertEqual(normalizePortfolioType_("bear call spread"), null, "wrong direction");
-  assertEqual(normalizePortfolioType_("123"), null, "numbers");
-  assertEqual(normalizePortfolioType_("stock spread"), null, "mixed invalid");
-
-  // ---- Unicode edge ----
-  // Assuming no accents in types, but normalization
-  assertEqual(normalizePortfolioType_("sto\u0301ck"), null, "accented stock -> 'stóck' -> 'stock' after NFKD? Wait, 'ó' -> 'o' + combining acute");
-  Logger.log("✅ All normalizePortfolioType_ tests passed");
-}
-
 function normalizePortfolioType_(raw) {
   if (raw == null) return null;
 
   const t = String(raw)
-    .normalize("NFKD")                     // Unicode canonicalization
+    .normalize("NFKD")
     .toLowerCase()
-    .replace(/[\u2010-\u2015\u2212]/g, "-") // dash variants → "-"
-    .replace(/\u00a0/g, " ")               // nbsp → space
-    .replace(/\s+/g, " ")                  // collapse whitespace
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 
-  // ---- STOCK ----
-  if (/^(stock|stocks|share|shares)$/.test(t)) {
-    return "stock";
-  }
-
-  // ---- BULL CALL SPREAD ----
-  // Matches:
-  //   bcs
-  //   bull-call-spread
-  //   bull call spreads
-  //   bull.call.spread
-  if (/^(bcs|bull[\s.\-]?call[\s.\-]?spread(s)?)$/.test(t)) {
-    return "bull-call-spread";
-  }
-
-  // ---- BULL PUT SPREAD ----
-  // Matches:
-  //   bps
-  //   bull-put-spread
-  //   bull put spreads
-  //   bull.put.spread
-  if (/^(bps|bull[\s.\-]?put[\s.\-]?spread(s)?)$/.test(t)) {
-    return "bull-put-spread";
-  }
+  if (/^(stock|stocks|share|shares)$/.test(t)) return "stock";
+  if (/^(bcs|bull[\s.\-]?call[\s.\-]?spread(s)?)$/.test(t)) return "bull-call-spread";
+  if (/^(bps|bull[\s.\-]?put[\s.\-]?spread(s)?)$/.test(t)) return "bull-put-spread";
 
   return null;
 }
@@ -523,32 +434,28 @@ function validatePortfoliosTableOrThrow_(rows) {
   const header = rows[0].map(normKey_);
   const iSym = findCol_(header, ["symbol"]);
   const iType = findCol_(header, ["type"]);
+  const iRange = findCol_(header, ["rangename"]);
 
-  if (iSym < 0 || iType < 0) return;
+  if (iSym < 0 || iType < 0 || iRange < 0) return;
 
   const errors = [];
 
   for (let r = 1; r < rows.length; r++) {
     const rowNum = r + 1;
-
     const rawSym = rows[r][iSym];
     const rawType = rows[r][iType];
-
-    Logger.log(debugChars_("Raw Type Before Norm:", rawType));
+    const rawRange = rows[r][iRange];
 
     const sym = String(rawSym || "").trim().toUpperCase();
     const typ = normalizePortfolioType_(rawType);
+    const rangeName = String(rawRange || "").trim();
 
-    if (!sym) {
-      errors.push(`Row ${rowNum}: Symbol is blank`);
-    } else if (!/^[A-Z0-9.-]+$/.test(sym)) {
-      errors.push(`Row ${rowNum}: Invalid symbol "${rawSym}"`);
-    }
+    if (!sym) errors.push(`Row ${rowNum}: Symbol is blank`);
+    else if (!/^[A-Z0-9.-]+$/.test(sym)) errors.push(`Row ${rowNum}: Invalid symbol "${rawSym}"`);
 
-    if (!typ) {
-      errors.push(`Row ${rowNum}: Invalid Type ${debugChars_(rawType)}`);
-      errors.push(`Row ${rowNum}: Invalid Type "${rawType}"`);
-    }
+    if (!typ) errors.push(`Row ${rowNum}: Invalid Type "${rawType}"`);
+
+    if (!rangeName) errors.push(`Row ${rowNum}: RangeName is blank`);
   }
 
   if (errors.length > 0) {
@@ -557,41 +464,28 @@ function validatePortfoliosTableOrThrow_(rows) {
   }
 }
 
-/**
- * Prints a string char-by-char with Unicode code points.
- * Useful to detect NBSP, zero-width, Unicode hyphens, etc.
- */
-function debugChars_(label, s) {
-  s = (s == null) ? "" : String(s);
-  const parts = [];
-  for (let i = 0; i < s.length; i++) {
-    const ch = s.charAt(i);
-    const cp = s.codePointAt(i);
-    // If it's a surrogate pair, advance i an extra step
-    if (cp > 0xffff) i++;
-    parts.push(`${i}:${JSON.stringify(ch)} U+${cp.toString(16).toUpperCase().padStart(4, "0")}`);
-  }
-  return `${label} len=${s.length} -> ${parts.join(" | ")}`;
-}
-
-
 function showPortfolioValidationDialog_(errors) {
   const html = HtmlService.createHtmlOutput(
     `<div style="font-family:Arial; font-size:13px">
        <h3>Invalid Portfolios Table</h3>
        <p>Please fix the following issues before running the tool:</p>
-       <ul>${errors.map(e => `<li>${e}</li>`).join("")}</ul>
+       <ul>${errors.map(e => `<li><pre style="margin:0;white-space:pre-wrap">${escapeHtml_(e)}</pre></li>`).join("")}</ul>
        <p><b>Allowed Types (singular):</b><br>
-          stock<br>
-          bull-call-spread (BCS)<br>
-          bull-put-spread (BPS)
+          stock (or stocks/shares)<br>
+          bull-call-spread (or bull-call-spreads / BCS)<br>
+          bull-put-spread (or bull-put-spreads / BPS)
        </p>
      </div>`
-  )
-    .setWidth(520)
-    .setHeight(380);
+  ).setWidth(700).setHeight(520);
 
   SpreadsheetApp.getUi().showModalDialog(html, "Portfolio Validation Error");
+}
+
+function escapeHtml_(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 /* =========================================================
@@ -606,7 +500,7 @@ function ensureAndReadConfig_(ss, sheet, symbol) {
     tableStartRow: 25,
     tableStartCol: 1,
     includeComponentSeries: true,
-    chartTitle: `${symbol} Portfolio Value (P/L) vs ${symbol} Price`,
+    chartTitle: `${symbol} Portfolio Value by Price`,
   };
 
   const cfgRow = 1;
@@ -699,12 +593,8 @@ function buildMissingRangeMessage_(ss, symbol, missingItems, stockRangeCount, sp
   lines.push(`Missing inputs for ${symbol}:`);
   lines.push(`- Missing named ranges:`);
 
-  const tableHints = [];
   for (const item of (missingItems || [])) {
     lines.push(`  • ${item.type} -> ${item.rangeName}`);
-    if (tableExistsByStructuredRefProbe_(ss, item.rangeName)) {
-      tableHints.push(item.rangeName);
-    }
   }
 
   if (stockRangeCount === 0 && spreadRangeCount === 0) {
@@ -714,42 +604,7 @@ function buildMissingRangeMessage_(ss, symbol, missingItems, stockRangeCount, sp
   lines.push("");
   lines.push("Fix Portfolios (Symbol | Type | RangeName) and create the named ranges, then rerun PlotPortfolioValueByPrice.");
 
-  if (tableHints.length > 0) {
-    lines.push("");
-    for (const t of tableHints) {
-      lines.push(`I can see a Sheets TABLE named ${t},`);
-      lines.push(`but Apps Script can’t read tables directly.`);
-      lines.push(`Please create a range named "${t}Table"`);
-      lines.push(`that contains the table’s data`);
-      lines.push("");
-    }
-  }
-
   return lines.join("\n");
-}
-
-function tableExistsByStructuredRefProbe_(ss, tableNameRaw) {
-  const name = String(tableNameRaw || "").trim();
-  if (!name) return false;
-
-  const scratchSheet = ss.getSheetByName("Portfolios") || ss.getActiveSheet();
-  const cell = scratchSheet.getRange("ZZ1");
-
-  const ref = tableRefName_(name);
-  const formula = `=IFERROR(ROWS(${ref}[#ALL]),"")`;
-
-  cell.setFormula(formula);
-  SpreadsheetApp.flush();
-  const v = String(cell.getDisplayValue() || "").trim();
-  cell.clearContent();
-
-  return v !== "";
-}
-
-function tableRefName_(name) {
-  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return name;
-  const escaped = name.replace(/'/g, "''");
-  return `'${escaped}'`;
 }
 
 /* =========================================================
@@ -757,52 +612,58 @@ function tableRefName_(name) {
    ========================================================= */
 
 function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
-  if (!rows || rows.length < 2) return []; // No data rows
+  if (!rows || rows.length < 2) return [];
 
-  const headers = rows[0].map(h => String(h || '').trim());
+  const headerNorm = rows[0].map(normKey_);
 
-  // Flexible column lookup: qtyCol for Shares/Qty, basisCol for AvgCost/Basis/Ave Price
-  const symbolCol = headers.findIndex(h => h.toUpperCase() === 'SYMBOL' || h.toUpperCase() === 'TICKER');
-  const qtyCol = headers.findIndex(h => ['SHARES', 'QTY', 'QUANTITY'].includes(h.toUpperCase()));
-  const basisCol = headers.findIndex(h => ['AVGCOST', 'BASIS', 'AVE PRICE', 'AVERAGE PRICE', 'COST BASIS'].includes(h.toUpperCase()));
-  const priceCol = headers.findIndex(h => ['CURRENT PRICE', 'MARKET PRICE', 'PRICE'].includes(h.toUpperCase())); // For meta.currentPrice
+  const idxSym = findCol_(headerNorm, ["symbol", "ticker"]);
+  const idxQty = findCol_(headerNorm, ["shares", "share", "qty", "quantity", "units", "position"]);
+  const idxBasis = findCol_(headerNorm, [
+    "costbasis",
+    "basis",
+    "avgcost",
+    "averagecost",
+    "avgprice",
+    "averageprice",
+    "aveprice",
+    "avepricepaid",
+    "avepricepaid", // (intentional duplicate harmless)
+    "pricepaid",
+    "entry",
+    "entryprice",
+    "cost",
+    "purchaseprice",
+  ]);
 
-  if (qtyCol === -1 || basisCol === -1) return []; // Missing required columns
+  const idxCurrentPrice = findCol_(headerNorm, ["currentprice", "marketprice", "mark", "last", "price"]);
 
-  const shares = [];
-  for (let i = 1; i < rows.length; i++) { // Skip header
-    const row = rows[i];
-    const rowSymbol = symbolCol !== -1 ? String(row[symbolCol] || '').trim().toUpperCase() : symbol; // Default to input symbol if no column
+  const out = [];
 
-    if (rowSymbol !== symbol) continue; // Filter for this symbol
-
-    const qty = parseFloat(row[qtyCol]);
-    const basis = parseFloat(row[basisCol]);
-
-    if (isNaN(qty) || qty <= 0 || isNaN(basis)) continue; // Invalid row
-
-    shares.push({ qty, basis });
-
-    // Update meta if current price available
-    if (priceCol !== -1) {
-      const price = parseFloat(row[priceCol]);
-      if (!isNaN(price)) outMeta.currentPrice = price;
+  for (let r = 1; r < rows.length; r++) {
+    if (idxSym >= 0) {
+      const rowSym = String(rows[r][idxSym] ?? "").trim().toUpperCase();
+      if (rowSym && rowSym !== symbol) continue;
     }
+
+    if (idxCurrentPrice >= 0 && outMeta && !isFinite(outMeta.currentPrice)) {
+      const cp = toNum_(rows[r][idxCurrentPrice]);
+      if (isFinite(cp)) outMeta.currentPrice = cp;
+    }
+
+    if (idxQty < 0 || idxBasis < 0) continue;
+
+    const qty = toNum_(rows[r][idxQty]);
+    const basis = toNum_(rows[r][idxBasis]);
+
+    if (!isFinite(qty) || qty === 0) continue;
+    if (!isFinite(basis)) continue;
+
+    out.push({ qty, basis });
   }
 
-  return shares;
+  return out;
 }
 
-/**
- * Spread parsing:
- * - Counts ONLY “definition rows” that contain BOTH Long Strike and Short Strike
- * - Ignores fill-detail rows automatically
- * - Uses debit cost preference:
- *     1) "Ave Debit" / "Avg Debit" / "Average Debit"
- *     2) "Rec Debit" / "Recommended Debit"
- *     3) "Net Debit" / "Debit" / "Cost" / "Entry"
- * - If contracts column missing, defaults qty=1
- */
 function parseSpreadsFromTableForSymbol_(rows, symbol, flavor /* "CALL" or "PUT" */) {
   if (!rows || rows.length < 2) return [];
 
@@ -814,9 +675,9 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor /* "CALL" or "PUT"
   const idxLong = findCol_(headerNorm, ["lower", "lowerstrike", "long", "longstrike", "buystrike", "strikebuy", "strikelong"]);
   const idxShort = findCol_(headerNorm, ["upper", "upperstrike", "short", "shortstrike", "sellstrike", "strikesell", "strikeshort"]);
 
-  const idxAveDebit = findCol_(headerNorm, ["avedebit", "avgdebit", "averagedebit", "avedevit"]);
+  const idxAveDebit = findCol_(headerNorm, ["avedebit", "avgdebit", "averagedebit"]);
   const idxRecDebit = findCol_(headerNorm, ["recdebit", "recommendeddebit"]);
-  const idxDebitFallback = findCol_(headerNorm, ["netdebit", "debit", "cost", "price", "entry", "premiumpaid", "premium"]);
+  const idxDebitFallback = findCol_(headerNorm, ["netdebit", "debit", "cost", "price", "entry"]);
 
   if (idxLong < 0 || idxShort < 0) return [];
 
@@ -869,13 +730,11 @@ function clearStatus_(sheet) {
 function rangesIntersect_(a, b) {
   if (a.getSheet().getSheetId() !== b.getSheet().getSheetId()) return false;
 
-  const aR1 = a.getRow(),
-    aC1 = a.getColumn();
+  const aR1 = a.getRow(), aC1 = a.getColumn();
   const aR2 = aR1 + a.getNumRows() - 1;
   const aC2 = aC1 + a.getNumColumns() - 1;
 
-  const bR1 = b.getRow(),
-    bC1 = b.getColumn();
+  const bR1 = b.getRow(), bC1 = b.getColumn();
   const bR2 = bR1 + b.getNumRows() - 1;
   const bC2 = bC1 + b.getNumColumns() - 1;
 
@@ -906,13 +765,6 @@ function findCol_(normalizedHeaderRow, synonyms) {
     if (syn.includes(normalizedHeaderRow[i])) return i;
   }
   return -1;
-}
-
-function test_normKey() {
-  let normKey1 = normKey_("average price");
-  let normKey2 = normKey_("ave price");
-  Logger.log("normKey1=" + normKey1)
-  Logger.log("normKey2=" + normKey2)
 }
 
 /**
@@ -956,4 +808,8 @@ function clamp_(x, lo, hi) {
 
 function round2_(x) {
   return Math.round(x * 100) / 100;
+}
+
+function round4_(x) {
+  return Math.round(x * 10000) / 10000;
 }
