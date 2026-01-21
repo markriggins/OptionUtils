@@ -232,10 +232,6 @@ function getOptionQuote_(symbol, expiration, strike, type) {
  * @returns {number} Rounded to 2 decimals.
  */
 
-function round2_(n) {
-  return Math.round(n * 100) / 100;
-}
-
 /**
  * BCS_OPEN_DEBIT_XX - Alias for recommendBullCallSpreadOpenDebit.
  *

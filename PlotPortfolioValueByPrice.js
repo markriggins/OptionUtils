@@ -883,10 +883,6 @@ function clamp_(x, lo, hi) {
   return Math.max(lo, Math.min(hi, x));
 }
 
-function round2_(x) {
-  return Math.round(x * 100) / 100;
-}
-
 function round4_(x) {
   return Math.round(x * 10000) / 10000;
 }

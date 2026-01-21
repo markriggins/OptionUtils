@@ -244,7 +244,7 @@ function XLookupByKeys_onEdit(e) {
 /** ===========================
  * TESTS (self-contained)
  * =========================== */
-function assertEqual(actual, expected, msg = "") {
+function assertEqual_XLookupByKeys_(actual, expected, msg = "") {
   if (actual !== expected) {
     throw new Error(
       `ASSERT FAILED${msg ? " – " + msg : ""}\nExpected: ${expected}\nActual: ${actual}`
@@ -318,7 +318,7 @@ function test_XLookupByKeys_cache_reused_in_memory() {
   );
   assertArrayEqual(r2[0], [6.10, 6.30, 6.50], "second call wrong");
   const afterSecondKeys = Object.keys(__MEMO).length;
-  assertEqual(afterSecondKeys, afterFirstKeys, "Memo should be reused without creating new entries");
+  assertEqual_XLookupByKeys_(afterSecondKeys, afterFirstKeys, "Memo should be reused without creating new entries");
   Logger.log("✅ test_XLookupByKeys_cache_reused_in_memory PASSED");
 }
 
