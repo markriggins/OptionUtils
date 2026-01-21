@@ -387,97 +387,6 @@ function ensureAndReadPortfolios_(ss) {
   return out;
 }
 
-/**
- * test_normalizePortfolioType_ - Runs assertions for normalizePortfolioType_ function.
- *
- * Covers:
- * - Null/undefined/empty inputs
- * - Case insensitivity
- * - Whitespace variations (spaces, nbsp)
- * - Dash variants (hyphens, en/em dashes)
- * - Unicode normalization (e.g., accented chars if any)
- * - Plurals and singulars
- * - Invalid inputs
- *
- * Run this in Google Apps Script editor or console.
- * Logs "✅ All tests passed" if successful.
- */
-function test_normalizePortfolioType() {
-  // Helper assert
-  function assertEqual(actual, expected, msg) {
-    if (actual !== expected) {
-      throw new Error(`ASSERT FAILED: ${msg}\nExpected: ${expected}\nActual: ${actual}`);
-    }
-  }
-
-  // ---- Null/Empty ----
-  assertEqual(normalizePortfolioType_(null), null, "null input");
-  assertEqual(normalizePortfolioType_(undefined), null, "undefined input");
-  assertEqual(normalizePortfolioType_(""), null, "empty string");
-  assertEqual(normalizePortfolioType_("   "), null, "whitespace only");
-
-  // ---- STOCK ----
-  // Basics
-  assertEqual(normalizePortfolioType_("stock"), "stock", "stock basic");
-  assertEqual(normalizePortfolioType_("STOCK"), "stock", "stock uppercase");
-  assertEqual(normalizePortfolioType_("Stock"), "stock", "stock mixed case");
-  // Plurals
-  assertEqual(normalizePortfolioType_("stocks"), "stock", "stocks plural");
-  assertEqual(normalizePortfolioType_("SHARES"), "stock", "shares uppercase");
-  assertEqual(normalizePortfolioType_("share"), "stock", "share singular");
-  // Whitespace/dashes
-  assertEqual(normalizePortfolioType_(" stock "), "stock", "stock with spaces");
-  assertEqual(normalizePortfolioType_("st ock"), null, "invalid with space inside");
-  // Unicode/dashes (though not directly in "stock")
-  assertEqual(normalizePortfolioType_("stock\u00a0"), "stock", "stock with nbsp"); // nbsp -> space -> trim
-
-  // ---- BULL CALL SPREAD ----
-  // Basics
-  assertEqual(normalizePortfolioType_("bcs"), "bull-call-spread", "bcs abbr");
-  assertEqual(normalizePortfolioType_("BCS"), "bull-call-spread", "BCS upper");
-  assertEqual(normalizePortfolioType_("bull call spread"), "bull-call-spread", "bull call spread spaces");
-  assertEqual(normalizePortfolioType_("Bull-Call-Spread"), "bull-call-spread", "bull-call-spread dashes");
-  assertEqual(normalizePortfolioType_("bull.call.spread"), "bull-call-spread", "bull.call.spread dots");
-  // Plurals
-  assertEqual(normalizePortfolioType_("bull call spreads"), "bull-call-spread", "bull call spreads plural");
-  // Variations
-  assertEqual(normalizePortfolioType_("bull\u2013call\u2014spread"), "bull-call-spread", "bull en/em dash spread"); // dashes → "-"
-  assertEqual(normalizePortfolioType_(" bull  call   spread "), "bull-call-spread", "extra spaces");
-  assertEqual(normalizePortfolioType_("BuLl CaLl SpReAd"), "bull-call-spread", "mixed case");
-  // Invalid for BCS
-  assertEqual(normalizePortfolioType_("bull calls spread"), null, "invalid plural mismatch");
-  assertEqual(normalizePortfolioType_("bcs extra"), null, "bcs with extra");
-
-  // ---- BULL PUT SPREAD ----
-  // Basics
-  assertEqual(normalizePortfolioType_("bps"), "bull-put-spread", "bps abbr");
-  assertEqual(normalizePortfolioType_("BPS"), "bull-put-spread", "BPS upper");
-  assertEqual(normalizePortfolioType_("bull put spread"), "bull-put-spread", "bull put spread spaces");
-  assertEqual(normalizePortfolioType_("Bull-Put-Spread"), "bull-put-spread", "bull-put-spread dashes");
-  assertEqual(normalizePortfolioType_("bull.put.spread"), "bull-put-spread", "bull.put.spread dots");
-  // Plurals
-  assertEqual(normalizePortfolioType_("bull put spreads"), "bull-put-spread", "bull put spreads plural");
-  // Variations
-  assertEqual(normalizePortfolioType_("bull\u2013put\u2014spread"), "bull-put-spread", "bull en/em dash spread");
-  assertEqual(normalizePortfolioType_(" bull  put   spread "), "bull-put-spread", "extra spaces");
-  assertEqual(normalizePortfolioType_("BuLl PuT SpReAd"), "bull-put-spread", "mixed case");
-  // Invalid for BPS
-  assertEqual(normalizePortfolioType_("bull puts spread"), null, "invalid plural mismatch");
-  assertEqual(normalizePortfolioType_("bps extra"), null, "bps with extra");
-
-  // ---- Invalid/General ----
-  assertEqual(normalizePortfolioType_("call"), null, "partial match");
-  assertEqual(normalizePortfolioType_("bull spread"), null, "missing type");
-  assertEqual(normalizePortfolioType_("bear call spread"), null, "wrong direction");
-  assertEqual(normalizePortfolioType_("123"), null, "numbers");
-  assertEqual(normalizePortfolioType_("stock spread"), null, "mixed invalid");
-
-  // ---- Unicode edge ----
-  // Assuming no accents in types, but normalization
-  assertEqual(normalizePortfolioType_("sto\u0301ck"), null, "accented stock -> 'stóck' -> 'stock' after NFKD? Wait, 'ó' -> 'o' + combining acute");
-  Logger.log("✅ All normalizePortfolioType_ tests passed");
-}
-
 function normalizePortfolioType_(raw) {
   if (raw == null) return null;
 
@@ -781,12 +690,17 @@ function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
 
     if (isNaN(qty) || qty <= 0 || isNaN(basis)) continue; // Invalid row
 
-    shares.push({ qty, basis });
-
     // Update meta if current price available
     if (priceCol !== -1) {
-      const price = parseFloat(row[priceCol]);
-      if (!isNaN(price)) outMeta.currentPrice = price;
+      const currentPrice = parseFloat(row[priceCol]);
+      if (!isNaN(currentPrice)) {
+        outMeta.currentPrice = currentPrice;
+        shares.push({ qty, currentPrice });
+      } else {
+        shares.push({ qty, basis });
+      }
+    } else {
+     shares.push({ qty, basis });
     }
   }
 

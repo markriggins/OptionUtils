@@ -10,15 +10,15 @@
  *   - Creates/maintains a per-symbol Config table at H1:I9
  *   - Writes a generated data table with both $ and % series:
  *       Price | Shares $ | Options $ | Total $ | Shares % | Options %
- *   - Creates TWO charts (created once; later runs preserve user resizing/position):
+ *   - Ensures TWO charts exist (and refreshes them on every run while preserving position best-effort):
  *       Chart 1: $ P/L vs Price (Shares $, Options $, Total $) + vertical dashed line at Current Price (if available)
- *       Chart 2: % Return vs Price (Shares %, Options %) (no vertical line)
+ *       Chart 2: % Return vs Price (Shares %, Options %)
  *   - If the stock table contains a "Current Price" column, draws a VERTICAL DASHED LINE at that price on the $ chart.
  *
  * Portfolios table:
  *   - Sheet: "Portfolios" (created if missing)
  *   - Columns: Symbol | Type | RangeName
- *   - Type is canonical singular (case-insensitive, dash/space-normalized):
+ *   - Type canonical singular:
  *       stock
  *       bull-call-spread  (aliases: bull-call-spreads, BCS)
  *       bull-put-spread   (aliases: bull-put-spreads, BPS)
@@ -26,6 +26,7 @@
  * RangeName:
  *   - Must be a Named Range.
  *   - Convenience convention: if RangeName isn't found, the script tries RangeName + "Table"
+ *     (e.g., Sheets table "Stocks" paired with named range "StocksTable").
  *
  * Input tables:
  *   - Header matching is case/space-insensitive.
@@ -38,6 +39,11 @@
  *       Ave Debit / Avg Debit / Average Debit
  *       else Rec Debit / Recommended Debit
  *       else Net Debit / Debit / Cost / Entry / Price
+ *
+ * ROI (% Return) definitions:
+ *   - Shares % = Shares $ / Total Shares Cost Basis
+ *   - Options % = Options $ / (Sum(Call debits paid) + Sum(Put spread max risk))
+ *     For bull put spreads: credit is stored as NEGATIVE debit. Max risk per contract = (width - credit) * 100.
  *
  * Config tables:
  *   - Named ranges are global, so each symbol has a unique config named range: Config_<SYMBOL>
@@ -164,7 +170,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
 
   clearStatus_(sheet);
 
-  // Parse
+  // Parse inputs
   const shares = [];
   const meta = { currentPrice: null };
 
@@ -198,12 +204,8 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   }
 
   // --- ROI denominators ---
-  // Shares denominator: total cost basis
   const sharesCost = shares.reduce((sum, sh) => sum + sh.qty * sh.basis, 0);
-
-  // Options denominator: debit paid for call spreads + max-risk for put spreads
   const callInvest = callSpreads.reduce((sum, sp) => sum + (sp.debit * 100 * sp.qty), 0);
-
   const putRisk = putSpreads.reduce((sum, sp) => {
     const width = sp.kShort - sp.kLong;
     if (width <= 0) return sum;
@@ -211,7 +213,6 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     const maxLossPer = (width - credit) * 100;
     return sum + maxLossPer * sp.qty;
   }, 0);
-
   const optionsDenom = callInvest + putRisk;
 
   // ---------- Build output table ----------
@@ -232,8 +233,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
       spreadsPL += (intrinsic - sp.debit) * 100 * sp.qty;
     }
 
-    // PUT spreads (bull put spread credit convention):
-    // Store 'Ave Debit' as NEGATIVE credit (e.g., -2.50) for credit spreads.
+    // PUT spreads (bull put spread credit convention: debit is negative credit)
     for (const sp of putSpreads) {
       const width = sp.kShort - sp.kLong;
       if (width <= 0) continue;
@@ -263,7 +263,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   const minY = totalYs.length ? Math.min(...totalYs) : 0;
   const maxY = totalYs.length ? Math.max(...totalYs) : 0;
 
-  // ---------- Layout ----------
+  // ---------- Layout (table below charts) ----------
   const startRow = cfg.tableStartRow;
   const startCol = cfg.tableStartCol;
 
@@ -275,7 +275,6 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   sheet.autoResizeColumns(startCol, table[0].length);
 
   // Format % columns as percent
-  // Shares % is col +4, Options % is col +5
   if (table.length > 1) {
     sheet.getRange(startRow + 1, startCol + 4, table.length - 1, 2).setNumberFormat("0.00%");
   }
@@ -295,65 +294,126 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     ]);
   }
 
-  // ---------- Charts (create once only to preserve user sizing) ----------
-  const charts = sheet.getCharts();
-  if (charts.length === 0) {
-    // ----- Chart 1: $ P/L -----
-    // Use columns: Price, Shares $, Options $, Total $
-    const dollarRange = sheet.getRange(startRow, startCol, table.length, 4);
-
-    let dollarChart = sheet
-      .newChart()
-      .setChartType(Charts.ChartType.LINE)
-      .addRange(dollarRange)
-      .setPosition(1, 1, 0, 0)
-      .setOption("title", cfg.chartTitle || `${symbol} Portfolio Value by Price ($)`)
-      .setOption("hAxis", { title: `${symbol} Price` })
-      .setOption("vAxis", { title: "P/L ($)" })
-      .setOption("legend", { position: "right" })
-      .setOption("curveType", "none");
-
-    // Add vertical current price line as an extra series if available
-    if (hasCurrentPrice) {
-      const vlineRange = sheet.getRange(vlineRow + 1, vlineCol, 2, 2);
-      dollarChart = dollarChart.addRange(vlineRange);
-
-      // Series indexes: 0 Shares$, 1 Options$, 2 Total$, 3 vline
-      const seriesOpt = {
-        3: { lineDashStyle: [6, 4], lineWidth: 2 }
-      };
-      dollarChart = dollarChart.setOption("series", seriesOpt);
-    }
-
-    sheet.insertChart(dollarChart.build());
-
-    // ----- Chart 2: % Return -----
-    // Use columns: Price, Shares %, Options %
-    // We'll build a range that includes these three columns in one contiguous block by writing a helper table
-    // OR simply add multiple ranges (Price + Shares% + Options%) and let Charts infer.
-    const priceColRange = sheet.getRange(startRow, startCol, table.length, 1);
-    const sharesPctRange = sheet.getRange(startRow, startCol + 4, table.length, 1);
-    const optionsPctRange = sheet.getRange(startRow, startCol + 5, table.length, 1);
-
-    const pctChart = sheet
-      .newChart()
-      .setChartType(Charts.ChartType.LINE)
-      .addRange(priceColRange)
-      .addRange(sharesPctRange)
-      .addRange(optionsPctRange)
-      .setPosition(15, 1, 0, 0) // below the first chart (user can resize/reposition)
-      .setOption("title", (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " (%)")
-      .setOption("hAxis", { title: `${symbol} Price` })
-      .setOption("vAxis", { title: "% Return", format: "percent" })
-      .setOption("legend", { position: "right" })
-      .setOption("curveType", "none")
-      .build();
-
-    sheet.insertChart(pctChart);
-  }
+  // ---------- Charts (ensure both exist; refresh each run preserving placement best-effort) ----------
+  ensureOrRefreshCharts_(
+    sheet,
+    symbol,
+    cfg,
+    startRow,
+    startCol,
+    table.length,
+    hasCurrentPrice,
+    vlineRow,
+    vlineCol
+  );
 
   // Hide config after successful build
   hideConfig_(sheet);
+}
+
+/**
+ * Ensures BOTH charts exist and refreshes them on every run.
+ * Preserves position (anchor row/col and offsets) best-effort by rebuilding charts at the same container.
+ * NOTE: Apps Script does not expose explicit width/height, but anchor+offset is preserved.
+ */
+function ensureOrRefreshCharts_(sheet, symbol, cfg, startRow, startCol, nRows, hasCurrentPrice, vlineRow, vlineCol) {
+  const charts = sheet.getCharts();
+
+  // Identify by title convention
+  const dollarTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " ($)";
+  const pctTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " (%)";
+
+  let dollarChart = null;
+  let pctChart = null;
+
+  for (const ch of charts) {
+    const t = getChartTitle_(ch);
+    if (t === dollarTitle) dollarChart = ch;
+    if (t === pctTitle) pctChart = ch;
+  }
+
+  // Build ranges
+  const dollarRange = sheet.getRange(startRow, startCol, nRows, 4); // Price + 3 $ series
+  const priceColRange = sheet.getRange(startRow, startCol, nRows, 1);
+  const sharesPctRange = sheet.getRange(startRow, startCol + 4, nRows, 1);
+  const optionsPctRange = sheet.getRange(startRow, startCol + 5, nRows, 1);
+
+  const vlineRange = hasCurrentPrice ? sheet.getRange(vlineRow + 1, vlineCol, 2, 2) : null;
+
+  // Helper: remove+insert chart preserving anchor/offset
+  function rebuildChartPreserveBox_(oldChart, builder) {
+    const ci = oldChart.getContainerInfo();
+    const anchorRow = ci.getAnchorRow();
+    const anchorCol = ci.getAnchorColumn();
+    const offsetX = ci.getOffsetX();
+    const offsetY = ci.getOffsetY();
+
+    sheet.removeChart(oldChart);
+    const built = builder.setPosition(anchorRow, anchorCol, offsetX, offsetY).build();
+    sheet.insertChart(built);
+  }
+
+  // ----- Chart 1: $ P/L -----
+  let dollarBuilder = sheet
+    .newChart()
+    .setChartType(Charts.ChartType.LINE)
+    .addRange(dollarRange)
+    .setOption("title", dollarTitle)
+    .setOption("hAxis", { title: `${symbol} Price` })
+    .setOption("vAxis", { title: "P/L ($)" })
+    .setOption("legend", { position: "right" })
+    .setOption("curveType", "none");
+
+  if (vlineRange) {
+    dollarBuilder = dollarBuilder.addRange(vlineRange);
+    // Series indices: 0 Shares$, 1 Options$, 2 Total$, 3 vline
+    dollarBuilder = dollarBuilder.setOption("series", {
+      3: { lineDashStyle: [6, 4], lineWidth: 2 }
+    });
+  }
+
+  if (!dollarChart) {
+    // Default top placement
+    sheet.insertChart(dollarBuilder.setPosition(1, 1, 0, 0).build());
+  } else {
+    rebuildChartPreserveBox_(dollarChart, dollarBuilder);
+  }
+
+  // ----- Chart 2: % Return -----
+  let pctBuilder = sheet
+    .newChart()
+    .setChartType(Charts.ChartType.LINE)
+    .addRange(priceColRange)
+    .addRange(sharesPctRange)
+    .addRange(optionsPctRange)
+    .setOption("title", pctTitle)
+    .setOption("hAxis", { title: `${symbol} Price` })
+    .setOption("vAxis", { title: "% Return", format: "percent" })
+    .setOption("legend", { position: "right" })
+    .setOption("curveType", "none");
+
+  if (!pctChart) {
+    // Default below the first chart
+    sheet.insertChart(pctBuilder.setPosition(15, 1, 0, 0).build());
+  } else {
+    rebuildChartPreserveBox_(pctChart, pctBuilder);
+  }
+}
+
+/**
+ * Best-effort chart title getter. The EmbeddedChart API does not provide a reliable direct title accessor,
+ * so we read options when available.
+ */
+function getChartTitle_(chart) {
+  try {
+    const opts = chart.getOptions && chart.getOptions();
+    if (opts && typeof opts.get === "function") {
+      const t = opts.get("title");
+      if (t != null) return String(t);
+    }
+    if (opts && opts.title != null) return String(opts.title);
+  } catch (e) {}
+  return "";
 }
 
 /* =========================================================
@@ -627,7 +687,6 @@ function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
     "averageprice",
     "aveprice",
     "avepricepaid",
-    "avepricepaid", // (intentional duplicate harmless)
     "pricepaid",
     "entry",
     "entryprice",
@@ -635,7 +694,9 @@ function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
     "purchaseprice",
   ]);
 
-  const idxCurrentPrice = findCol_(headerNorm, ["currentprice", "marketprice", "mark", "last", "price"]);
+  // For meta.currentPrice line:
+  // Prefer "Current Price" explicitly; avoid accidentally using a generic "Price Paid" column.
+  const idxCurrentPrice = findCol_(headerNorm, ["currentprice", "marketprice", "mark", "last"]);
 
   const out = [];
 
@@ -677,7 +738,7 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor /* "CALL" or "PUT"
 
   const idxAveDebit = findCol_(headerNorm, ["avedebit", "avgdebit", "averagedebit"]);
   const idxRecDebit = findCol_(headerNorm, ["recdebit", "recommendeddebit"]);
-  const idxDebitFallback = findCol_(headerNorm, ["netdebit", "debit", "cost", "price", "entry"]);
+  const idxDebitFallback = findCol_(headerNorm, ["netdebit", "debit", "cost", "entry", "price"]);
 
   if (idxLong < 0 || idxShort < 0) return [];
 

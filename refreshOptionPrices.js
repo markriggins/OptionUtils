@@ -209,7 +209,7 @@ function parseCsvData_(csvData, symbol, expDate) {
     if (!Number.isFinite(strike)) continue;
 
     const optionType = normalizeOptionType_(r[typeIdx]);
-    if (!type) continue;
+    if (!optionType) continue;
 
     const bid = safeNumber_(r[bidIdx]);
     const ask = safeNumber_(r[askIdx]);
