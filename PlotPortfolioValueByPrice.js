@@ -7,55 +7,14 @@
  * a "<SYMBOL>PortfolioValueByPrice" tab for EACH symbol.
  *
  * For each symbol tab:
- *   - Creates/maintains a per-symbol Config table at H1:I9
- *   - Writes a generated data table (Price vs Shares P/L vs Spreads P/L vs Total P/L)
+ *   - Creates/maintains a per-symbol Config table at K1:L9 (moved from H:I)
+ *   - Writes a generated data table (Price vs Shares P/L vs Options P/L vs Total P/L + % contrib)
  *   - Creates a chart at the top (created once; later runs preserve user resizing/position)
- *   - If the stock table contains a "Current Price" column, draws a VERTICAL DASHED LINE at that price.
- *     (Implemented as an added series of two points at X=currentPrice spanning [minY,maxY].)
+ *   - If the stock table contains a "Current Price" column, draws a VERTICAL DASHED LINE
  *
- * Portfolios table:
- *   - Sheet: "Portfolios" (created if missing)
- *   - Columns: Symbol | Type | RangeName
- *   - Type is FORCED to singular canonical values (case-insensitive, dash-normalized):
- *       stock
- *       bull-call-spread
- *       bull-put-spread
- *     Accepted aliases:
- *       shares -> stock
- *       bull-call-spreads -> bull-call-spread
- *       bull-put-spreads  -> bull-put-spread
- *       BCS -> bull-call-spread
- *       BPS -> bull-put-spread
- *
- * RangeName:
- *   - Must be a Named Range.
- *   - Convenience convention: if RangeName isn't found, the script tries RangeName + "Table"
- *     (e.g., Sheets Table "Stocks" paired with Named Range "StocksTable").
- *
- * Input tables:
- *   - Header matching is case/space-insensitive.
- *   - If an input table includes a "Symbol" or "Ticker" column, rows not matching the desired symbol
- *     are ignored.
- *
- * Spread tables special handling:
- *   Many users store one “summary” row per spread (has Long Strike, Short Strike, Contracts, Ave Debit),
- *   followed by “fill detail” rows that may have Contracts/Prices but do NOT repeat strikes.
- *   This script:
- *     - Treats ONLY rows that have BOTH Long Strike and Short Strike as actual spread definitions
- *     - Ignores fill-detail rows automatically
- *     - Uses "Ave Debit" (or "Avg Debit"/"Average Debit") as the cost to enter when present
- *       otherwise falls back to "Rec Debit", otherwise "Debit/Net Debit/Cost/Entry"
- *
- * Config tables:
- *   - Named ranges are global (not scoped per sheet), so each symbol has a unique config named range:
- *       Config_<SYMBOL> (e.g., Config_TSLA)
- *   - Config columns H:I are hidden AFTER a successful build, but kept visible if inputs are missing.
- *
- * Auto-refresh:
- *   - onEdit(e) rebuilds only when the edited cell intersects any Config_<SYMBOL> range.
- *
- * Chart sizing:
- *   - The chart is created only if none exists yet to preserve manual resizing/position.
+ * Updated Jan 2026:
+ *   - Default tableStartRow = 50
+ *   - Config moved to columns K:L so it doesn't sit under the chart
  */
 
 /* =========================================================
@@ -63,7 +22,6 @@
    ========================================================= */
 
 function PlotPortfolioValueByPrice() {
-
   Logger.log("PlotPortfolioValueByPrice Started");
 
   const ss = SpreadsheetApp.getActive();
@@ -89,8 +47,7 @@ function PlotPortfolioValueByPrice() {
 }
 
 /**
- * Simple trigger: rebuild only when edits intersect any Config_<SYMBOL> named range.
- * (It is OK that onEdit fires for all user edits — we return immediately unless config was edited.)
+ * Simple trigger: rebuild only when Config_<SYMBOL> is edited
  */
 function onEdit(e) {
   try {
@@ -111,7 +68,7 @@ function onEdit(e) {
       }
     }
   } catch (err) {
-    // swallow to avoid noisy errors on edit
+    // silent fail on edit
   }
 }
 
@@ -128,7 +85,6 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   if (!sheet) sheet = ss.insertSheet(sheetName);
   sheet.showSheet();
 
-  // Ensure config exists and read it (kept visible unless we succeed)
   const cfg = ensureAndReadConfig_(ss, sheet, symbol);
 
   if (!entries || entries.length === 0) {
@@ -140,11 +96,11 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   const stockRanges = [];
   const callSpreadRanges = [];
   const putSpreadRanges = [];
-  const missingItems = []; // [{type, rangeName}]
+  const missingItems = [];
 
   for (const e of entries) {
     const rangeNameRaw = String(e.rangeName ?? "").trim();
-    const type = String(e.type ?? "").trim(); // canonical singular values
+    const type = String(e.type ?? "").trim();
 
     if (!rangeNameRaw || !type) continue;
 
@@ -159,17 +115,10 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     else if (type === "bull-put-spread") putSpreadRanges.push(rng);
   }
 
-  if (
-    missingItems.length > 0 ||
-    (stockRanges.length === 0 && callSpreadRanges.length === 0 && putSpreadRanges.length === 0)
-  ) {
-    const msg = buildMissingRangeMessage_(
-      ss,
-      symbol,
-      missingItems,
-      stockRanges.length,
-      callSpreadRanges.length + putSpreadRanges.length
-    );
+  if (missingItems.length > 0 ||
+      (stockRanges.length === 0 && callSpreadRanges.length === 0 && putSpreadRanges.length === 0)) {
+    const msg = buildMissingRangeMessage_(ss, symbol, missingItems,
+      stockRanges.length, callSpreadRanges.length + putSpreadRanges.length);
     writeStatus_(sheet, msg);
     showConfig_(sheet);
     return;
@@ -177,7 +126,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
 
   clearStatus_(sheet);
 
-  // Parse
+  // Parse inputs
   const shares = [];
   const meta = { currentPrice: null };
 
@@ -195,31 +144,26 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     putSpreads.push(...parseSpreadsFromTableForSymbol_(rng.getValues(), symbol, "PUT"));
   }
 
-  // If we parsed nothing, say so clearly (helps debugging)
   if (shares.length === 0 && callSpreads.length === 0 && putSpreads.length === 0) {
-    writeStatus_(
-      sheet,
-      `Parsed 0 rows for ${symbol}.\n` +
-        `This usually means your headers don't match expected names, or numeric cells are non-numeric.\n\n` +
-        `Try:\n` +
-        `- Ensure stock table has Shares/Qty + AvgCost/Basis/Ave Price columns\n` +
-        `- Ensure spread tables have Long Strike + Short Strike + Contracts + Ave Debit (or Rec Debit)\n` +
-        `- Ensure numbers aren't stored as text with commas/extra characters`
-    );
+    writeStatus_(sheet, `Parsed 0 valid rows for ${symbol}.\n` +
+      `Check headers, numeric formatting, and that rows contain required columns.`);
     showConfig_(sheet);
     return;
   }
 
-  // ---------- Build output table ----------
-  const table = [["Price", "Shares", "Options", "Total"]]; // Updated headers for simpler labels
+  // Build data table with headers
+  const table = [
+    ["Price ($)", "$ Shares P/L", "$ Options P/L", "$ Total P/L", "% Shares", "% Options"]
+  ];
 
   for (let S = cfg.minPrice; S <= cfg.maxPrice + 1e-9; S += cfg.step) {
     let sharesPL = 0;
     let spreadsPL = 0;
 
-    for (const sh of shares) sharesPL += (S - sh.basis) * sh.qty;
+    for (const sh of shares) {
+      sharesPL += (S - sh.basis) * sh.qty;
+    }
 
-    // CALL spreads: payoff at expiration (intrinsic)
     for (const sp of callSpreads) {
       const width = sp.kShort - sp.kLong;
       if (width <= 0) continue;
@@ -227,9 +171,6 @@ function plotForSymbol_(ss, symbolRaw, entries) {
       spreadsPL += (intrinsic - sp.debit) * 100 * sp.qty;
     }
 
-    // PUT spreads (bull put spread credit convention):
-    // Store 'Ave Debit' as NEGATIVE credit (e.g., -2.50) for credit spreads.
-    // Then -debit = credit. Terminal loss component is clamp_(kShort - S, 0, width).
     for (const sp of putSpreads) {
       const width = sp.kShort - sp.kLong;
       if (width <= 0) continue;
@@ -237,29 +178,37 @@ function plotForSymbol_(ss, symbolRaw, entries) {
       spreadsPL += (-sp.debit - loss) * 100 * sp.qty;
     }
 
-    table.push([round2_(S), round2_(sharesPL), round2_(spreadsPL), round2_(sharesPL + spreadsPL)]);
+    const totalPL = sharesPL + spreadsPL;
+
+    const pctShares  = totalPL !== 0 ? (sharesPL  / totalPL) * 100 : 0;
+    const pctOptions = totalPL !== 0 ? (spreadsPL / totalPL) * 100 : 0;
+
+    table.push([
+      round2_(S),
+      round2_(sharesPL),
+      round2_(spreadsPL),
+      round2_(totalPL),
+      round2_(pctShares),
+      round2_(pctOptions)
+    ]);
   }
 
-  // Compute Y bounds for vertical current-price line
-  const totalYs = table
-    .slice(1)
-    .map(r => toNum_(r[3]))
-    .filter(n => isFinite(n));
+  // Y bounds for vertical current-price line
+  const totalYs = table.slice(1).map(r => toNum_(r[3])).filter(n => isFinite(n));
   const minY = totalYs.length ? Math.min(...totalYs) : 0;
   const maxY = totalYs.length ? Math.max(...totalYs) : 0;
 
-  // ---------- Layout ----------
+  // Write table to sheet
   const startRow = cfg.tableStartRow;
   const startCol = cfg.tableStartCol;
 
-  // Clear data area only (preserve chart + config)
   sheet.getRange(startRow - 1, startCol, 2000, 30).clearContent();
 
   sheet.getRange(startRow - 1, startCol).setValue("Data (generated)").setFontWeight("bold");
   sheet.getRange(startRow, startCol, table.length, table[0].length).setValues(table);
   sheet.autoResizeColumns(startCol, table[0].length);
 
-  // Write vertical-line helper table (off to the right)
+  // Vertical line helper table (to the right)
   const vlineCol = startCol + table[0].length + 2;
   const vlineRow = startRow;
 
@@ -270,68 +219,54 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     sheet.getRange(vlineRow, vlineCol, 3, 2).setValues([
       ["CurrentPrice", "Y"],
       [meta.currentPrice, minY],
-      [meta.currentPrice, maxY],
+      [meta.currentPrice, maxY]
     ]);
   }
 
-  // ---------- Chart (create once only to preserve user sizing) ----------
+  // Create chart (only if none exists)
   const charts = sheet.getCharts();
   if (charts.length === 0) {
     const dataRange = sheet.getRange(startRow, startCol, table.length, table[0].length);
 
-    let chartBuilder = sheet
-      .newChart()
+    let chartBuilder = sheet.newChart()
       .setChartType(Charts.ChartType.LINE)
       .addRange(dataRange)
       .setPosition(1, 1, 0, 0)
-      .setOption("title", cfg.chartTitle || `${symbol} Portfolio Value by Price`)
-      .setOption("hAxis", { title: `${symbol} Price` })
-      .setOption("vAxis", { title: "Unrealized P/L" })
-      .setOption("legend", { position: "right" });
+      .setOption('title', cfg.chartTitle || `${symbol} Portfolio Value (P/L) vs Price`)
+      .setOption('hAxis', { title: `${symbol} Price ($)` })
+      .setOption('vAxes', {
+        0: { title: 'P/L ($)' },
+        1: { title: 'Contribution (%)', viewWindow: { min: -200, max: 200 } }
+      })
+      .setOption('legend', { position: 'right' })
+      .setOption('curveType', 'none');
 
-    if (!cfg.includeComponentSeries) {
-      const priceColRange = sheet.getRange(startRow, startCol, table.length, 1);
-      const totalColRange = sheet.getRange(startRow, startCol + 3, table.length, 1);
+    // Explicit series labels from header row
+    const seriesOpt = {
+      0: { targetAxisIndex: 0, labelInLegend: table[0][1] }, // $ Shares P/L
+      1: { targetAxisIndex: 0, labelInLegend: table[0][2] }, // $ Options P/L
+      2: { targetAxisIndex: 0, labelInLegend: table[0][3] }, // $ Total P/L
+      3: { targetAxisIndex: 1, labelInLegend: table[0][4] }, // % Shares
+      4: { targetAxisIndex: 1, labelInLegend: table[0][5] }  // % Options
+    };
 
-      chartBuilder = sheet
-        .newChart()
-        .setChartType(Charts.ChartType.LINE)
-        .addRange(priceColRange) // X axis
-        .addRange(totalColRange) // Total P/L series
-        .setPosition(1, 1, 0, 0)
-        .setOption("title", cfg.chartTitle || `${symbol} Portfolio Value by Price`)
-        .setOption("hAxis", { title: `${symbol} Price` })
-        .setOption("vAxis", { title: "Unrealized P/L" })
-        .setOption("legend", { position: "right" });
-    }
-
-    // Add vertical line as an extra series if we have current price
     if (hasCurrentPrice) {
       const vlineRange = sheet.getRange(vlineRow + 1, vlineCol, 2, 2);
       chartBuilder = chartBuilder.addRange(vlineRange);
+      seriesOpt[5] = {
+        targetAxisIndex: 0,
+        labelInLegend: "Current Price",
+        lineDashStyle: [6, 4],
+        lineWidth: 2,
+        color: "#999999"
+      };
     }
 
-    // Style the series with colors and labels (best-effort; Google Charts defaults may vary, but this sets them explicitly)
-    const seriesOpt = {
-      0: { color: 'blue', labelInLegend: 'Shares' }, // First series: Shares
-      1: { color: 'red', labelInLegend: 'Options' }, // Second: Options (Spreads)
-      2: { color: 'yellow', labelInLegend: 'Total' } // Third: Total
-    };
-
-    // Style the vertical line series as dashed (last series index). Best-effort.
-    if (hasCurrentPrice) {
-      // includeComponentSeries=true => 3 series => vline is 4th (index 3)
-      // includeComponentSeries=false => Total => 1 series => vline is 2nd (index 1)
-      const vlineSeriesIndex = cfg.includeComponentSeries ? 3 : 1;
-      seriesOpt[vlineSeriesIndex] = { lineDashStyle: [6, 4], lineWidth: 2 };
-    }
-
-    chartBuilder = chartBuilder.setOption("series", seriesOpt).setOption("curveType", "none");
+    chartBuilder = chartBuilder.setOption('series', seriesOpt);
 
     sheet.insertChart(chartBuilder.build());
   }
 
-  // Hide config after successful build
   hideConfig_(sheet);
 }
 
@@ -372,10 +307,10 @@ function ensureAndReadPortfolios_(ss) {
   const iRange = findCol_(h, ["rangename"]);
   if ([iSym, iType, iRange].some(i => i < 0)) return {};
 
-  const out = {}; // symbol -> [{type, rangeName}]
+  const out = {};
   for (let r = 1; r < values.length; r++) {
     const sym = String(values[r][iSym] ?? "").trim().toUpperCase();
-    const typ = normalizePortfolioType_(values[r][iType]); // canonical singular
+    const typ = normalizePortfolioType_(values[r][iType]);
     const rangeName = String(values[r][iRange] ?? "").trim();
 
     if (!sym || !typ || !rangeName) continue;
@@ -391,37 +326,16 @@ function normalizePortfolioType_(raw) {
   if (raw == null) return null;
 
   const t = String(raw)
-    .normalize("NFKD")                     // Unicode canonicalization
+    .normalize("NFKD")
     .toLowerCase()
-    .replace(/[\u2010-\u2015\u2212]/g, "-") // dash variants → "-"
-    .replace(/\u00a0/g, " ")               // nbsp → space
-    .replace(/\s+/g, " ")                  // collapse whitespace
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 
-  // ---- STOCK ----
-  if (/^(stock|stocks|share|shares)$/.test(t)) {
-    return "stock";
-  }
-
-  // ---- BULL CALL SPREAD ----
-  // Matches:
-  //   bcs
-  //   bull-call-spread
-  //   bull call spreads
-  //   bull.call.spread
-  if (/^(bcs|bull[\s.\-]?call[\s.\-]?spread(s)?)$/.test(t)) {
-    return "bull-call-spread";
-  }
-
-  // ---- BULL PUT SPREAD ----
-  // Matches:
-  //   bps
-  //   bull-put-spread
-  //   bull put spreads
-  //   bull.put.spread
-  if (/^(bps|bull[\s.\-]?put[\s.\-]?spread(s)?)$/.test(t)) {
-    return "bull-put-spread";
-  }
+  if (/^(stock|stocks|share|shares)$/.test(t)) return "stock";
+  if (/^(bcs|bull[\s.\-]?call[\s.\-]?spread(s)?)$/.test(t)) return "bull-call-spread";
+  if (/^(bps|bull[\s.\-]?put[\s.\-]?spread(s)?)$/.test(t)) return "bull-put-spread";
 
   return null;
 }
@@ -439,25 +353,16 @@ function validatePortfoliosTableOrThrow_(rows) {
 
   for (let r = 1; r < rows.length; r++) {
     const rowNum = r + 1;
-
     const rawSym = rows[r][iSym];
     const rawType = rows[r][iType];
-
-    Logger.log(debugChars_("Raw Type Before Norm:", rawType));
 
     const sym = String(rawSym || "").trim().toUpperCase();
     const typ = normalizePortfolioType_(rawType);
 
-    if (!sym) {
-      errors.push(`Row ${rowNum}: Symbol is blank`);
-    } else if (!/^[A-Z0-9.-]+$/.test(sym)) {
-      errors.push(`Row ${rowNum}: Invalid symbol "${rawSym}"`);
-    }
+    if (!sym) errors.push(`Row ${rowNum}: Symbol is blank`);
+    else if (!/^[A-Z0-9.-]+$/.test(sym)) errors.push(`Row ${rowNum}: Invalid symbol "${rawSym}"`);
 
-    if (!typ) {
-      errors.push(`Row ${rowNum}: Invalid Type ${debugChars_(rawType)}`);
-      errors.push(`Row ${rowNum}: Invalid Type "${rawType}"`);
-    }
+    if (!typ) errors.push(`Row ${rowNum}: Invalid Type "${rawType}"`);
   }
 
   if (errors.length > 0) {
@@ -465,24 +370,6 @@ function validatePortfoliosTableOrThrow_(rows) {
     throw new Error("Invalid Portfolios table");
   }
 }
-
-/**
- * Prints a string char-by-char with Unicode code points.
- * Useful to detect NBSP, zero-width, Unicode hyphens, etc.
- */
-function debugChars_(label, s) {
-  s = (s == null) ? "" : String(s);
-  const parts = [];
-  for (let i = 0; i < s.length; i++) {
-    const ch = s.charAt(i);
-    const cp = s.codePointAt(i);
-    // If it's a surrogate pair, advance i an extra step
-    if (cp > 0xffff) i++;
-    parts.push(`${i}:${JSON.stringify(ch)} U+${cp.toString(16).toUpperCase().padStart(4, "0")}`);
-  }
-  return `${label} len=${s.length} -> ${parts.join(" | ")}`;
-}
-
 
 function showPortfolioValidationDialog_(errors) {
   const html = HtmlService.createHtmlOutput(
@@ -504,7 +391,7 @@ function showPortfolioValidationDialog_(errors) {
 }
 
 /* =========================================================
-   Config per symbol sheet: table at H1:I9, named range Config_<SYMBOL>
+   Config per symbol sheet: now at K1:L9, named range Config_<SYMBOL>
    ========================================================= */
 
 function ensureAndReadConfig_(ss, sheet, symbol) {
@@ -512,14 +399,13 @@ function ensureAndReadConfig_(ss, sheet, symbol) {
     minPrice: 350,
     maxPrice: 900,
     step: 5,
-    tableStartRow: 25,
+    tableStartRow: 50,           // ← changed default from 25 to 50
     tableStartCol: 1,
-    includeComponentSeries: true,
     chartTitle: `${symbol} Portfolio Value (P/L) vs ${symbol} Price`,
   };
 
   const cfgRow = 1;
-  const cfgCol = 8; // H
+  const cfgCol = 11; // K (column 11)
   const cfgNumRows = 9;
   const cfgNumCols = 2;
 
@@ -530,9 +416,8 @@ function ensureAndReadConfig_(ss, sheet, symbol) {
     ["step", defaults.step],
     ["tableStartRow", defaults.tableStartRow],
     ["tableStartCol", defaults.tableStartCol],
-    ["includeComponentSeries", defaults.includeComponentSeries],
     ["chartTitle", defaults.chartTitle],
-    ["(unhide columns H:I to edit)", ""],
+    ["(unhide columns K:L to edit)", ""],
   ];
 
   const header = sheet.getRange(cfgRow, cfgCol).getValue();
@@ -566,7 +451,6 @@ function ensureAndReadConfig_(ss, sheet, symbol) {
     step: numOr_(map.step, defaults.step),
     tableStartRow: Math.max(5, Math.floor(numOr_(map.tableStartRow, defaults.tableStartRow))),
     tableStartCol: Math.max(1, Math.floor(numOr_(map.tableStartCol, defaults.tableStartCol))),
-    includeComponentSeries: boolOr_(map.includeComponentSeries, defaults.includeComponentSeries),
     chartTitle: String(map.chartTitle ?? defaults.chartTitle),
   };
 
@@ -580,10 +464,11 @@ function ensureAndReadConfig_(ss, sheet, symbol) {
 }
 
 function hideConfig_(sheet) {
-  sheet.hideColumns(8, 2); // H:I
+  sheet.hideColumns(11, 2); // K:L
 }
+
 function showConfig_(sheet) {
-  sheet.showColumns(8, 2); // H:I
+  sheet.showColumns(11, 2); // K:L
 }
 
 /* =========================================================
@@ -662,72 +547,54 @@ function tableRefName_(name) {
 }
 
 /* =========================================================
-   Parsing with optional Symbol column filtering
+   Parsing helpers
    ========================================================= */
 
 function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
-  if (!rows || rows.length < 2) return []; // No data rows
+  if (!rows || rows.length < 2) return [];
 
   const headers = rows[0].map(h => String(h || '').trim());
 
-  // Flexible column lookup: qtyCol for Shares/Qty, basisCol for AvgCost/Basis/Ave Price
   const symbolCol = headers.findIndex(h => h.toUpperCase() === 'SYMBOL' || h.toUpperCase() === 'TICKER');
   const qtyCol = headers.findIndex(h => ['SHARES', 'QTY', 'QUANTITY'].includes(h.toUpperCase()));
   const basisCol = headers.findIndex(h => ['AVGCOST', 'BASIS', 'AVE PRICE', 'AVERAGE PRICE', 'COST BASIS'].includes(h.toUpperCase()));
-  const priceCol = headers.findIndex(h => ['CURRENT PRICE', 'MARKET PRICE', 'PRICE'].includes(h.toUpperCase())); // For meta.currentPrice
+  const priceCol = headers.findIndex(h => ['CURRENT PRICE', 'MARKET PRICE', 'PRICE'].includes(h.toUpperCase()));
 
-  if (qtyCol === -1 || basisCol === -1) return []; // Missing required columns
+  if (qtyCol === -1 || basisCol === -1) return [];
 
   const shares = [];
-  for (let i = 1; i < rows.length; i++) { // Skip header
+  for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
-    const rowSymbol = symbolCol !== -1 ? String(row[symbolCol] || '').trim().toUpperCase() : symbol; // Default to input symbol if no column
+    const rowSymbol = symbolCol !== -1 ? String(row[symbolCol] || '').trim().toUpperCase() : symbol;
 
-    if (rowSymbol !== symbol) continue; // Filter for this symbol
+    if (rowSymbol !== symbol) continue;
 
     const qty = parseFloat(row[qtyCol]);
     const basis = parseFloat(row[basisCol]);
 
-    if (isNaN(qty) || qty <= 0 || isNaN(basis)) continue; // Invalid row
+    if (isNaN(qty) || qty <= 0 || isNaN(basis)) continue;
 
-    // Update meta if current price available
     if (priceCol !== -1) {
       const currentPrice = parseFloat(row[priceCol]);
       if (!isNaN(currentPrice)) {
         outMeta.currentPrice = currentPrice;
-        shares.push({ qty, currentPrice });
-      } else {
-        shares.push({ qty, basis });
       }
-    } else {
-     shares.push({ qty, basis });
     }
+
+    shares.push({ qty, basis });
   }
 
   return shares;
 }
 
-/**
- * Spread parsing:
- * - Counts ONLY “definition rows” that contain BOTH Long Strike and Short Strike
- * - Ignores fill-detail rows automatically
- * - Uses debit cost preference:
- *     1) "Ave Debit" / "Avg Debit" / "Average Debit"
- *     2) "Rec Debit" / "Recommended Debit"
- *     3) "Net Debit" / "Debit" / "Cost" / "Entry"
- * - If contracts column missing, defaults qty=1
- */
-function parseSpreadsFromTableForSymbol_(rows, symbol, flavor /* "CALL" or "PUT" */) {
+function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
   if (!rows || rows.length < 2) return [];
 
   const headerNorm = rows[0].map(normKey_);
   const idxSym = findCol_(headerNorm, ["symbol", "ticker"]);
-
   const idxQty = findCol_(headerNorm, ["contracts", "contract", "qty", "quantity", "count", "numcontracts", "spreads", "spreadqty"]);
-
   const idxLong = findCol_(headerNorm, ["lower", "lowerstrike", "long", "longstrike", "buystrike", "strikebuy", "strikelong"]);
   const idxShort = findCol_(headerNorm, ["upper", "upperstrike", "short", "shortstrike", "sellstrike", "strikesell", "strikeshort"]);
-
   const idxAveDebit = findCol_(headerNorm, ["avedebit", "avgdebit", "averagedebit", "avedevit"]);
   const idxRecDebit = findCol_(headerNorm, ["recdebit", "recommendeddebit"]);
   const idxDebitFallback = findCol_(headerNorm, ["netdebit", "debit", "cost", "price", "entry", "premiumpaid", "premium"]);
@@ -746,7 +613,6 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor /* "CALL" or "PUT"
     const kLong = toNum_(rows[r][idxLong]);
     const kShort = toNum_(rows[r][idxShort]);
 
-    // Only definition rows have both strikes (auto-ignores fill detail rows)
     if (!isFinite(kLong) || !isFinite(kShort)) continue;
 
     const qty = assumeQty ? 1 : toNum_(rows[r][idxQty]);
@@ -765,34 +631,26 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor /* "CALL" or "PUT"
 }
 
 /* =========================================================
-   Status messaging
+   Status + Range helpers
    ========================================================= */
 
 function writeStatus_(sheet, message) {
   sheet.getRange("D1").setValue("Status").setFontWeight("bold");
   sheet.getRange("D2").setValue(message).setWrap(true);
 }
+
 function clearStatus_(sheet) {
   sheet.getRange("D1:D2").clearContent();
 }
 
-/* =========================================================
-   Range helpers
-   ========================================================= */
-
 function rangesIntersect_(a, b) {
   if (a.getSheet().getSheetId() !== b.getSheet().getSheetId()) return false;
-
-  const aR1 = a.getRow(),
-    aC1 = a.getColumn();
+  const aR1 = a.getRow(), aC1 = a.getColumn();
   const aR2 = aR1 + a.getNumRows() - 1;
   const aC2 = aC1 + a.getNumColumns() - 1;
-
-  const bR1 = b.getRow(),
-    bC1 = b.getColumn();
+  const bR1 = b.getRow(), bC1 = b.getColumn();
   const bR2 = bR1 + b.getNumRows() - 1;
   const bC2 = bC1 + b.getNumColumns() - 1;
-
   return aR1 <= bR2 && aR2 >= bR1 && aC1 <= bC2 && aC2 >= bC1;
 }
 
@@ -822,18 +680,6 @@ function findCol_(normalizedHeaderRow, synonyms) {
   return -1;
 }
 
-function test_normKey() {
-  let normKey1 = normKey_("average price");
-  let normKey2 = normKey_("ave price");
-  Logger.log("normKey1=" + normKey1)
-  Logger.log("normKey2=" + normKey2)
-}
-
-/**
- * Robust numeric parse:
- * - strips $, %, commas
- * - supports parentheses negatives: (123.45) => -123.45
- */
 function toNum_(v) {
   if (v == null || v === "") return NaN;
   if (typeof v === "number") return v;
@@ -854,14 +700,6 @@ function toNum_(v) {
 function numOr_(v, fallback) {
   const n = toNum_(v);
   return isFinite(n) ? n : fallback;
-}
-
-function boolOr_(v, fallback) {
-  if (typeof v === "boolean") return v;
-  const s = String(v ?? "").trim().toLowerCase();
-  if (["true", "yes", "y", "1"].includes(s)) return true;
-  if (["false", "no", "n", "0"].includes(s)) return false;
-  return fallback;
 }
 
 function clamp_(x, lo, hi) {
