@@ -182,7 +182,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
 
   // ── Build data table ────────────────────────────────────────────────
   // Changed headers: Portfolio VALUE not P/L
-  const headerRow = ["Price ($)", "Shares $", "Options $", "Total $", "Shares % ROI", "Options % ROI"];
+  const headerRow = ["Price ($)", "Shares $", "Options $", "Total $", "Shares % ROI", "Options % ROI", "Current Price"];
   const table = [headerRow];
 
   for (let S = cfg.minPrice; S <= cfg.maxPrice + 1e-9; S += cfg.step) {
@@ -215,21 +215,13 @@ function plotForSymbol_(ss, symbolRaw, entries) {
       optionsValue += valuePerSpread * sp.qty;
     }
 
-    Logger.log(`DEBUG Bull Calls: Found ${callSpreads.length} spreads`);
-    callSpreads.forEach((sp, i) => {
-      Logger.log(`  Spread ${i}: ${sp.kLong}/${sp.kShort}, qty=${sp.qty}, debit=${sp.debit}`);
-      const width = sp.kShort - sp.kLong;
-      const maxValue = width * 100 * sp.qty;
-      Logger.log(`    Max value at expiration: $${maxValue.toFixed(2)}`);
-    });
-
     const totalValue = sharesValue + optionsValue;
 
     // ROI still based on P/L
     const sharesPL = sharesValue - sharesCost;
     const optionsPL = optionsValue - callInvest - putRisk; // P/L relative to capital at risk
 
-    const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
+const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
     const optionsROI = optionsDenom > 0 ? (optionsPL / optionsDenom) : 0;
 
     table.push([
@@ -239,11 +231,31 @@ function plotForSymbol_(ss, symbolRaw, entries) {
       round2_(totalValue),
       round4_(sharesROI),
       round4_(optionsROI),
+      "", // Will fill in current price marker in post-processing
     ]);
   }
 
+  // Post-process: find the row closest to current price and mark it
+  if (meta.currentPrice != null && Number.isFinite(meta.currentPrice) && table.length > 1) {
+    let closestIdx = -1;
+    let closestDiff = Infinity;
+
+    for (let i = 1; i < table.length; i++) {
+      const priceInRow = table[i][0];
+      const diff = Math.abs(priceInRow - meta.currentPrice);
+      if (diff < closestDiff) {
+        closestDiff = diff;
+        closestIdx = i;
+      }
+    }
+
+    if (closestIdx >= 0) {
+      const totalValueAtPrice = table[closestIdx][3];
+      table[closestIdx][6] = totalValueAtPrice; // Set marker in column 7
+    }
+  }
   // For vline series bounds on $ chart (use Total $)
-  const totalYs = table.slice(1).map(r => toNum_(r[3])).filter(n => isFinite(n));
+  const totalYs = table.slice(1).map(r => toNum_(r[3])).filter(n => Number.isFinite(n));
   const minY = totalYs.length ? Math.min(...totalYs) : 0;
   const maxY = totalYs.length ? Math.max(...totalYs) : 0;
 
@@ -270,7 +282,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
 
   sheet.getRange(vlineRow, vlineCol, 3, 2).clearContent();
 
-  const hasCurrentPrice = isFinite(meta.currentPrice);
+  const hasCurrentPrice = Number.isFinite(meta.currentPrice);
   Logger.log(`Current Price Detection: hasCurrentPrice=${hasCurrentPrice}, meta.currentPrice=${meta.currentPrice}`);
   if (hasCurrentPrice) {
     sheet.getRange(vlineRow, vlineCol, 3, 2).setValues([
@@ -702,7 +714,7 @@ function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
     "cost",
     "purchaseprice",
   ]);
-  const idxCurrentPrice = findCol_(headerNorm, ["currentprice", "marketprice", "mark", "last", "price"]);
+  const idxCurrentPrice = findCol_(headerNorm, ["currentprice", "marketprice"]);
   
   // Debug: log what we're looking for
   Logger.log(`parseSharesFromTableForSymbol: symbol=${symbol}`);
@@ -717,10 +729,13 @@ function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
       if (rowSym && rowSym !== symbol) continue;
     }
 
-    if (idxCurrentPrice >= 0 && outMeta && !isFinite(outMeta.currentPrice)) {
+    if (idxCurrentPrice >= 0 && outMeta && !Number.isFinite(outMeta.currentPrice)) {
       const cp = toNum_(rows[r][idxCurrentPrice]);
-      if (isFinite(cp)) outMeta.currentPrice = cp;
-      Logger.log(`Row ${r}: Found current price = ${cp}`);
+      Logger.log(`Row ${r}: raw value="${rows[r][idxCurrentPrice]}", parsed cp=${cp}, isFinite=${Number.isFinite(cp)}`);
+      if (Number.isFinite(cp)) {
+        outMeta.currentPrice = cp;
+        Logger.log(`  -> Set meta.currentPrice = ${cp}`);
+      }
     }
 
     if (idxQty < 0 || idxBasis < 0) continue;
@@ -728,8 +743,8 @@ function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
     const qty = toNum_(rows[r][idxQty]);
     const basis = toNum_(rows[r][idxBasis]);
 
-    if (!isFinite(qty) || qty === 0) continue;
-    if (!isFinite(basis)) continue;
+    if (!Number.isFinite(qty) || qty === 0) continue;
+    if (!Number.isFinite(basis)) continue;
 
     out.push({ qty, basis });
   }
@@ -813,7 +828,7 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
     const kShort = toNum_(rows[r][idxShort]);
 
     // Only definition rows have both strikes
-    if (!isFinite(kLong) || !isFinite(kShort)) continue;
+    if (!Number.isFinite(kLong) || !Number.isFinite(kShort)) continue;
 
     const qty = assumeQty ? 1 : toNum_(rows[r][idxQty]);
     
@@ -821,13 +836,13 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
       Logger.log(`Row ${r}: assumeQty=${assumeQty}, raw="${rows[r][idxQty]}", parsed qty=${qty}`);
     }
     
-    if (!isFinite(qty) || qty === 0) continue;
+    if (!Number.isFinite(qty) || qty === 0) continue;
 
     let debit = NaN;
     if (idxAveDebit >= 0) debit = toNum_(rows[r][idxAveDebit]);
-    if (!isFinite(debit) && idxRecDebit >= 0) debit = toNum_(rows[r][idxRecDebit]);
-    if (!isFinite(debit) && idxDebitFallback >= 0) debit = toNum_(rows[r][idxDebitFallback]);
-    if (!isFinite(debit)) continue;
+    if (!Number.isFinite(debit) && idxRecDebit >= 0) debit = toNum_(rows[r][idxRecDebit]);
+    if (!Number.isFinite(debit) && idxDebitFallback >= 0) debit = toNum_(rows[r][idxDebitFallback]);
+    if (!Number.isFinite(debit)) continue;
 
     out.push({ qty, kLong, kShort, debit, flavor });
   }
@@ -912,13 +927,13 @@ function toNum_(v) {
   s = s.replace(/[$,%]/g, "").replace(/,/g, "").trim();
   const n = Number(s);
 
-  if (!isFinite(n)) return NaN;
+  if (!Number.isFinite(n)) return NaN;
   return neg ? -n : n;
 }
 
 function numOr_(v, fallback) {
   const n = toNum_(v);
-  return isFinite(n) ? n : fallback;
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function clamp_(x, lo, hi) {
