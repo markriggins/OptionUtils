@@ -9,11 +9,12 @@
  * For each symbol tab:
  *   - Config table at K1:L10 (column K = 11) with labels/descriptions
  *   - Config columns are NEVER hidden
- *   - Default tableStartRow = 50
+ *   - Default tableStartRow = 85
  *   - Generated data table starts at row tableStartRow (headers) / tableStartRow+1 (data)
- *   - TWO charts:
+ *   - THREE charts:
  *       Chart 1: Portfolio Value vs Price (Shares $, Options $, Total $)
  *       Chart 2: % Return vs Price (Shares %, Options %) (ROI style, not contribution)
+ *       Chart 3: Individual Spreads by Price (one series per spread, labeled like "Dec 28 350/450")
  *   - Chart series labels come from the first row of the data table (headers)
  *
  * Portfolios table columns: Symbol | Type | RangeName
@@ -180,9 +181,14 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   }, 0);
   const optionsDenom = callInvest + putRisk;
 
+  // ── Collect all spreads with labels for individual charting ────────────────
+  const allSpreads = [...callSpreads, ...putSpreads];
+
   // ── Build data table ────────────────────────────────────────────────
-  // Changed headers: Portfolio VALUE not P/L
-  const headerRow = ["Price ($)", "Shares $", "Options $", "Total $", "Shares % ROI", "Options % ROI"];
+  // Base headers + individual spread columns
+  const baseHeaders = ["Price ($)", "Shares $", "Options $", "Total $", "Shares % ROI", "Options % ROI"];
+  const spreadLabels = allSpreads.map(sp => sp.label);
+  const headerRow = [...baseHeaders, ...spreadLabels];
   const table = [headerRow];
 
   for (let S = cfg.minPrice; S <= cfg.maxPrice + 1e-9; S += cfg.step) {
@@ -197,22 +203,35 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     // Options value = intrinsic value at expiration
     let optionsValue = 0;
 
+    // Track individual spread values
+    const individualSpreadValues = [];
+
     // Bull call (debit) spread value at expiration
     for (const sp of callSpreads) {
       const width = sp.kShort - sp.kLong;
-      if (width <= 0) continue;
+      if (width <= 0) {
+        individualSpreadValues.push(0);
+        continue;
+      }
       const intrinsic = clamp_(S - sp.kLong, 0, width);
       const valuePerSpread = intrinsic * 100; // intrinsic value in dollars
-      optionsValue += valuePerSpread * sp.qty;
+      const totalValue = valuePerSpread * sp.qty;
+      optionsValue += totalValue;
+      individualSpreadValues.push(round2_(totalValue));
     }
 
     // Bull put (credit) spread value at expiration
     for (const sp of putSpreads) {
       const width = sp.kShort - sp.kLong;
-      if (width <= 0) continue;
+      if (width <= 0) {
+        individualSpreadValues.push(0);
+        continue;
+      }
       const loss = clamp_(sp.kShort - S, 0, width);
       const valuePerSpread = (width - loss) * 100; // what you keep
-      optionsValue += valuePerSpread * sp.qty;
+      const totalValue = valuePerSpread * sp.qty;
+      optionsValue += totalValue;
+      individualSpreadValues.push(round2_(totalValue));
     }
 
     const totalValue = sharesValue + optionsValue;
@@ -231,6 +250,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
       round2_(totalValue),
       round4_(sharesROI),
       round4_(optionsROI),
+      ...individualSpreadValues,
     ]);
   }
 
@@ -256,12 +276,14 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     sheet.getRange(startRow + 1, startCol + 4, table.length - 1, 2).setNumberFormat("0.00%");
   }
 
-  // ── Charts: ensure TWO charts exist (create missing; refresh existing preserving box) ──────────────────
-  ensureTwoCharts_(sheet, symbol, cfg, {
+  // ── Charts: ensure THREE charts exist (create missing; refresh existing preserving box) ──────────────────
+  ensureThreeCharts_(sheet, symbol, cfg, {
     startRow,
     startCol,
     tableRows: table.length,
     headerRow,
+    spreadLabels,
+    baseHeaderCount: baseHeaders.length,
   });
 }
 
@@ -269,23 +291,26 @@ function plotForSymbol_(ss, symbolRaw, entries) {
    Charts
    ========================================================= */
 
-function ensureTwoCharts_(sheet, symbol, cfg, args) {
-  const { startRow, startCol, tableRows, headerRow } = args;
+function ensureThreeCharts_(sheet, symbol, cfg, args) {
+  const { startRow, startCol, tableRows, headerRow, spreadLabels, baseHeaderCount } = args;
 
   const dollarTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " ($)";
   const pctTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " (%)";
+  const spreadsTitle = `${symbol} Individual Spreads`;
 
   const existingCharts = sheet.getCharts();
 
   // Identify charts by title substring (best-effort)
   let dollarChart = null;
   let pctChart = null;
+  let spreadsChart = null;
 
   for (const ch of existingCharts) {
     const t = extractChartTitle_(ch);
     if (!t) continue;
     if (t === dollarTitle || t.indexOf(" ($)") >= 0) dollarChart = dollarChart || ch;
-    if (t === pctTitle || t.indexOf(" (%)") >= 0) pctChart = pctChart || ch;
+    else if (t === pctTitle || t.indexOf(" (%)") >= 0) pctChart = pctChart || ch;
+    else if (t === spreadsTitle || t.indexOf("Individual Spreads") >= 0) spreadsChart = spreadsChart || ch;
   }
 
   // Ranges:
@@ -349,12 +374,41 @@ function ensureTwoCharts_(sheet, symbol, cfg, args) {
       1: { labelInLegend: headerRow[5] },
     });
 
+  // --- Build individual spreads chart builder ---
+  let spreadsBuilder = null;
+  if (spreadLabels && spreadLabels.length > 0) {
+    // Individual spread columns start after base headers
+    const spreadsRange = sheet.getRange(startRow, startCol + baseHeaderCount, tableRows, spreadLabels.length);
+
+    spreadsBuilder = sheet
+      .newChart()
+      .setChartType(Charts.ChartType.LINE)
+      .addRange(priceColRange)
+      .addRange(spreadsRange)
+      .setOption("title", spreadsTitle)
+      .setOption("hAxis", { title: `${symbol} Price ($)` })
+      .setOption("vAxis", { title: "Spread Value ($)" })
+      .setOption("legend", { position: "right" })
+      .setOption("curveType", "none");
+
+    // Set series labels from spread labels
+    const spreadsSeries = {};
+    for (let i = 0; i < spreadLabels.length; i++) {
+      spreadsSeries[i] = { labelInLegend: spreadLabels[i] };
+    }
+    spreadsBuilder = spreadsBuilder.setOption("series", spreadsSeries);
+  }
+
   // Create / rebuild while preserving chart placement
   // Default positions if missing:
   //   $ chart: top-left
   //   % chart: below it
+  //   spreads chart: below % chart
   rebuildChartPreserveBox_(dollarChart, dollarBuilder, 1, 1);
   rebuildChartPreserveBox_(pctChart, pctBuilder, 15, 1);
+  if (spreadsBuilder) {
+    rebuildChartPreserveBox_(spreadsChart, spreadsBuilder, 29, 1);
+  }
 }
 
 function extractChartTitle_(chart) {
@@ -373,7 +427,7 @@ function extractChartTitle_(chart) {
   }
 }
 /* =========================================================
-   Config table – now in K:L, default tableStartRow = 50
+   Config table – now in K:L, default tableStartRow = 85
    Includes descriptions/labels in-column K.
    ========================================================= */
 
@@ -382,7 +436,7 @@ function ensureAndReadConfig_(ss, sheet, symbol) {
     minPrice: 350,
     maxPrice: 900,
     step: 5,
-    tableStartRow: 50, // default is 50
+    tableStartRow: 85, // default is 85
     tableStartCol: 1,
     chartTitle: `${symbol} Portfolio Value by Price`,
   };
@@ -698,6 +752,7 @@ function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
  *     else Rec Debit / Recommended Debit
  *     else Net Debit / Debit / Cost / Entry / Price
  * - If contracts column missing, defaults qty=1
+ * - Captures expiration date to generate labels like "Dec 28 350/450"
  */
 function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
   if (!rows || rows.length < 2) return [];
@@ -736,6 +791,14 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
     "strikeshort",
   ]);
 
+  const idxExp = findCol_(headerNorm, [
+    "expiration",
+    "exp",
+    "expiry",
+    "expirationdate",
+    "expdate",
+  ]);
+
   const idxAveDebit = findCol_(headerNorm, ["avedebit", "avgdebit", "averagedebit"]);
   const idxRecDebit = findCol_(headerNorm, ["recdebit", "recommendeddebit"]);
   const idxDebitFallback = findCol_(headerNorm, ["netdebit", "debit", "cost", "price", "entry", "premium"]);
@@ -767,10 +830,36 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
     if (!Number.isFinite(debit) && idxDebitFallback >= 0) debit = toNum_(rows[r][idxDebitFallback]);
     if (!Number.isFinite(debit)) continue;
 
-    out.push({ qty, kLong, kShort, debit, flavor });
+    // Build label like "Dec 28 350/450"
+    let label = `${kLong}/${kShort}`;
+    if (idxExp >= 0) {
+      const expLabel = formatExpLabel_(rows[r][idxExp]);
+      if (expLabel) label = `${expLabel} ${label}`;
+    }
+
+    out.push({ qty, kLong, kShort, debit, flavor, label });
   }
 
   return out;
+}
+
+/**
+ * Format expiration for chart label: "Dec 28" from a Date or string
+ */
+function formatExpLabel_(exp) {
+  if (!exp) return null;
+
+  let d = exp;
+  if (!(d instanceof Date)) {
+    d = new Date(exp);
+  }
+  if (isNaN(d.getTime())) return null;
+
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const mon = months[d.getMonth()];
+  const yr = String(d.getFullYear()).slice(-2);
+  return `${mon} ${yr}`;
 }
 
 /* =========================================================
