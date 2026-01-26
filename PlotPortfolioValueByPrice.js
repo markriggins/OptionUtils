@@ -11,10 +11,11 @@
  *   - Config columns are NEVER hidden
  *   - Default tableStartRow = 85
  *   - Generated data table starts at row tableStartRow (headers) / tableStartRow+1 (data)
- *   - THREE charts:
+ *   - FOUR charts:
  *       Chart 1: Portfolio Value vs Price (Shares $, Options $, Total $)
  *       Chart 2: % Return vs Price (Shares %, Options %) (ROI style, not contribution)
- *       Chart 3: Individual Spreads by Price (one series per spread, labeled like "Dec 28 350/450")
+ *       Chart 3: Individual Spreads Value by Price (one series per spread, labeled like "Dec 28 350/450")
+ *       Chart 4: Individual Spreads ROI by Price (% return for each spread)
  *   - Chart series labels come from the first row of the data table (headers)
  *
  * Portfolios table columns: Symbol | Type | RangeName
@@ -184,11 +185,25 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   // ── Collect all spreads with labels for individual charting ────────────────
   const allSpreads = [...callSpreads, ...putSpreads];
 
+  // ── Calculate individual spread investments (for ROI) ────────────────
+  const spreadInvestments = allSpreads.map((sp, idx) => {
+    if (idx < callSpreads.length) {
+      // Bull call spread: investment = debit * 100 * qty
+      return sp.debit * 100 * sp.qty;
+    } else {
+      // Bull put spread: investment = max risk = (width - credit) * 100 * qty
+      const width = sp.kShort - sp.kLong;
+      const credit = -sp.debit;
+      return (width - credit) * 100 * sp.qty;
+    }
+  });
+
   // ── Build data table ────────────────────────────────────────────────
-  // Base headers + individual spread columns
+  // Base headers + individual spread value columns + individual spread ROI columns
   const baseHeaders = ["Price ($)", "Shares $", "Options $", "Total $", "Shares % ROI", "Options % ROI"];
   const spreadLabels = allSpreads.map(sp => sp.label);
-  const headerRow = [...baseHeaders, ...spreadLabels];
+  const spreadRoiLabels = allSpreads.map(sp => sp.label + " %");
+  const headerRow = [...baseHeaders, ...spreadLabels, ...spreadRoiLabels];
   const table = [headerRow];
 
   for (let S = cfg.minPrice; S <= cfg.maxPrice + 1e-9; S += cfg.step) {
@@ -243,6 +258,14 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
     const optionsROI = optionsDenom > 0 ? (optionsPL / optionsDenom) : 0;
 
+    // Calculate individual spread ROIs
+    const individualSpreadROIs = individualSpreadValues.map((val, idx) => {
+      const investment = spreadInvestments[idx];
+      if (investment <= 0) return 0;
+      const pl = val - investment;
+      return round4_(pl / investment);
+    });
+
     table.push([
       round2_(S),
       round2_(sharesValue),
@@ -251,6 +274,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
       round4_(sharesROI),
       round4_(optionsROI),
       ...individualSpreadValues,
+      ...individualSpreadROIs,
     ]);
   }
 
@@ -274,15 +298,22 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   if (table.length > 1) {
     // columns: Price=0, Shares$=1, Options$=2, Total$=3, Shares%=4, Options%=5
     sheet.getRange(startRow + 1, startCol + 4, table.length - 1, 2).setNumberFormat("0.00%");
+
+    // Format individual spread ROI columns as percent (after spread value columns)
+    if (spreadLabels.length > 0) {
+      const spreadRoiStartCol = startCol + baseHeaders.length + spreadLabels.length;
+      sheet.getRange(startRow + 1, spreadRoiStartCol, table.length - 1, spreadLabels.length).setNumberFormat("0.00%");
+    }
   }
 
-  // ── Charts: ensure THREE charts exist (create missing; refresh existing preserving box) ──────────────────
-  ensureThreeCharts_(sheet, symbol, cfg, {
+  // ── Charts: ensure FOUR charts exist (create missing; refresh existing preserving box) ──────────────────
+  ensureFourCharts_(sheet, symbol, cfg, {
     startRow,
     startCol,
     tableRows: table.length,
     headerRow,
     spreadLabels,
+    spreadRoiLabels,
     baseHeaderCount: baseHeaders.length,
   });
 }
@@ -291,12 +322,13 @@ function plotForSymbol_(ss, symbolRaw, entries) {
    Charts
    ========================================================= */
 
-function ensureThreeCharts_(sheet, symbol, cfg, args) {
-  const { startRow, startCol, tableRows, headerRow, spreadLabels, baseHeaderCount } = args;
+function ensureFourCharts_(sheet, symbol, cfg, args) {
+  const { startRow, startCol, tableRows, headerRow, spreadLabels, spreadRoiLabels, baseHeaderCount } = args;
 
   const dollarTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " ($)";
   const pctTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " (%)";
-  const spreadsTitle = `${symbol} Individual Spreads`;
+  const spreadsTitle = `${symbol} Individual Spreads ($)`;
+  const spreadsRoiTitle = `${symbol} Individual Spreads ROI`;
 
   const existingCharts = sheet.getCharts();
 
@@ -304,13 +336,20 @@ function ensureThreeCharts_(sheet, symbol, cfg, args) {
   let dollarChart = null;
   let pctChart = null;
   let spreadsChart = null;
+  let spreadsRoiChart = null;
 
   for (const ch of existingCharts) {
     const t = extractChartTitle_(ch);
     if (!t) continue;
-    if (t === dollarTitle || t.indexOf(" ($)") >= 0) dollarChart = dollarChart || ch;
-    else if (t === pctTitle || t.indexOf(" (%)") >= 0) pctChart = pctChart || ch;
-    else if (t === spreadsTitle || t.indexOf("Individual Spreads") >= 0) spreadsChart = spreadsChart || ch;
+    if (t === dollarTitle || (t.indexOf(" ($)") >= 0 && t.indexOf("Spreads") < 0)) {
+      dollarChart = dollarChart || ch;
+    } else if (t === pctTitle || (t.indexOf(" (%)") >= 0 && t.indexOf("Spreads") < 0)) {
+      pctChart = pctChart || ch;
+    } else if (t === spreadsTitle || (t.indexOf("Spreads") >= 0 && t.indexOf("($)") >= 0)) {
+      spreadsChart = spreadsChart || ch;
+    } else if (t === spreadsRoiTitle || (t.indexOf("Spreads") >= 0 && t.indexOf("ROI") >= 0)) {
+      spreadsRoiChart = spreadsRoiChart || ch;
+    }
   }
 
   // Ranges:
@@ -374,10 +413,12 @@ function ensureThreeCharts_(sheet, symbol, cfg, args) {
       1: { labelInLegend: headerRow[5] },
     });
 
-  // --- Build individual spreads chart builder ---
+  // --- Build individual spreads value chart builder ---
   let spreadsBuilder = null;
+  let spreadsRoiBuilder = null;
+
   if (spreadLabels && spreadLabels.length > 0) {
-    // Individual spread columns start after base headers
+    // Individual spread value columns start after base headers
     const spreadsRange = sheet.getRange(startRow, startCol + baseHeaderCount, tableRows, spreadLabels.length);
 
     spreadsBuilder = sheet
@@ -397,17 +438,43 @@ function ensureThreeCharts_(sheet, symbol, cfg, args) {
       spreadsSeries[i] = { labelInLegend: spreadLabels[i] };
     }
     spreadsBuilder = spreadsBuilder.setOption("series", spreadsSeries);
+
+    // --- Build individual spreads ROI chart builder ---
+    // ROI columns start after spread value columns
+    const spreadsRoiRange = sheet.getRange(startRow, startCol + baseHeaderCount + spreadLabels.length, tableRows, spreadLabels.length);
+
+    spreadsRoiBuilder = sheet
+      .newChart()
+      .setChartType(Charts.ChartType.LINE)
+      .addRange(priceColRange)
+      .addRange(spreadsRoiRange)
+      .setOption("title", spreadsRoiTitle)
+      .setOption("hAxis", { title: `${symbol} Price ($)` })
+      .setOption("vAxis", { title: "% Return (ROI)", format: "percent" })
+      .setOption("legend", { position: "right" })
+      .setOption("curveType", "none");
+
+    // Set series labels (without the " %" suffix for cleaner legend)
+    const spreadsRoiSeries = {};
+    for (let i = 0; i < spreadLabels.length; i++) {
+      spreadsRoiSeries[i] = { labelInLegend: spreadLabels[i] };
+    }
+    spreadsRoiBuilder = spreadsRoiBuilder.setOption("series", spreadsRoiSeries);
   }
 
   // Create / rebuild while preserving chart placement
   // Default positions if missing:
   //   $ chart: top-left
   //   % chart: below it
-  //   spreads chart: below % chart
+  //   spreads $ chart: below % chart
+  //   spreads ROI chart: below spreads $ chart
   rebuildChartPreserveBox_(dollarChart, dollarBuilder, 1, 1);
   rebuildChartPreserveBox_(pctChart, pctBuilder, 15, 1);
   if (spreadsBuilder) {
     rebuildChartPreserveBox_(spreadsChart, spreadsBuilder, 29, 1);
+  }
+  if (spreadsRoiBuilder) {
+    rebuildChartPreserveBox_(spreadsRoiChart, spreadsRoiBuilder, 43, 1);
   }
 }
 
