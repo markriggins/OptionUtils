@@ -13,7 +13,7 @@
  *       120.00,+49.62%,136.50,138.75,141.00,144.00,unch,unch,0,156,unch,44.10%,0.9228,Call,01/13/26
  *
  * Output sheet columns (lowercase headers):
- *   symbol | expiration | strike | type | bid | mid | ask
+ *   symbol | expiration | strike | type | bid | mid | ask | iv | delta | volume | openint | moneyness
  *
  * Notes:
  * - expiration is stored as a REAL Date (midnight) for proper sorting/date math
@@ -76,7 +76,7 @@ function refreshOptionPrices() {
   }
 
   // ---- Write output ----
-  const headersOut = ["symbol", "expiration", "strike", "type", "bid", "mid", "ask"];
+  const headersOut = ["symbol", "expiration", "strike", "type", "bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness"];
   targetSheet.getRange(1, 1, 1, headersOut.length).setValues([headersOut]);
   targetSheet.getRange(2, 1, allRows.length, headersOut.length).setValues(allRows);
 
@@ -90,6 +90,14 @@ function refreshOptionPrices() {
     { column: 3, ascending: true }
   ]);
 
+  // Format IV and moneyness columns as percent
+  const ivCol = headersOut.indexOf("iv") + 1;
+  const moneynessCol = headersOut.indexOf("moneyness") + 1;
+  if (allRows.length > 0) {
+    targetSheet.getRange(2, ivCol, allRows.length, 1).setNumberFormat("0.00%");
+    targetSheet.getRange(2, moneynessCol, allRows.length, 1).setNumberFormat("0.00%");
+  }
+
   // Filter + banding
   const fullRange = targetSheet.getRange(1, 1, allRows.length + 1, headersOut.length);
   if (targetSheet.getFilter()) targetSheet.getFilter().remove();
@@ -99,7 +107,7 @@ function refreshOptionPrices() {
   // Warm caches (optional but recommended)
   // (Assumes XLookupByKeys_WarmCache exists; comment out if you don't have it.)
   try {
-    XLookupByKeys_WarmCache(SHEET_NAME, ["symbol", "expiration", "strike", "type"], ["bid", "mid", "ask"]);
+    XLookupByKeys_WarmCache(SHEET_NAME, ["symbol", "expiration", "strike", "type"], ["bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness"]);
   } catch (e) {
     // ignore if warm function not present
   }
@@ -179,18 +187,18 @@ function findInputFiles_(path = "Investing/Data/OptionPrices") {
  * and extracts relevant fields for each data row.
  *
  * Skips rows with invalid strike or type.
- * Mid is optional; set to null if column not found.
+ * Optional columns (mid, iv, delta, volume, openInt, moneyness) set to null if not found.
  *
  * @param {Array<Array<string>>} csvData - Parsed CSV array (headers in row 0).
  * @param {string} symbol - Uppercase symbol.
  * @param {Date} expDate - Expiration as Date object (midnight).
- * @returns {Array<Array<*>}} Array of [symbol, expDate, strike, type, bid, mid, ask] rows.
+ * @returns {Array<Array<*>}} Array of [symbol, expDate, strike, type, bid, mid, ask, iv, delta, volume, openInt, moneyness] rows.
  */
 function parseCsvData_(csvData, symbol, expDate) {
   const rows = [];
 
   const headers = csvData[0].map(h => String(h).trim().toLowerCase());
-  const { strikeIdx, bidIdx, midIdx, askIdx, typeIdx } = findColumnIndexes_(headers);
+  const { strikeIdx, bidIdx, midIdx, askIdx, typeIdx, ivIdx, deltaIdx, volumeIdx, openIntIdx, moneynessIdx } = findColumnIndexes_(headers);
 
   if (strikeIdx === -1 || bidIdx === -1 || askIdx === -1 || typeIdx === -1) {
     Logger.log(`Skipping ${symbol} for exp ${expDate}: missing required columns`);
@@ -215,6 +223,21 @@ function parseCsvData_(csvData, symbol, expDate) {
     const ask = safeNumber_(r[askIdx]);
     const mid = midIdx === -1 ? null : safeNumber_(r[midIdx]);
 
+    // Parse IV (stored as decimal, e.g., 0.5532 for 55.32%)
+    const ivRaw = ivIdx === -1 ? null : safePercent_(r[ivIdx]);
+
+    // Parse delta (already a decimal like 0.6873)
+    const delta = deltaIdx === -1 ? null : safeNumber_(r[deltaIdx]);
+
+    // Parse volume (integer)
+    const volume = volumeIdx === -1 ? null : safeInteger_(r[volumeIdx]);
+
+    // Parse open interest (integer)
+    const openInt = openIntIdx === -1 ? null : safeInteger_(r[openIntIdx]);
+
+    // Parse moneyness (stored as decimal, e.g., -0.0912 for -9.12%)
+    const moneyness = moneynessIdx === -1 ? null : safePercent_(r[moneynessIdx]);
+
     rows.push([
       symbol,
       expDate,
@@ -222,7 +245,12 @@ function parseCsvData_(csvData, symbol, expDate) {
       optionType,
       Number.isFinite(bid) ? bid : null,
       Number.isFinite(mid) ? mid : null,
-      Number.isFinite(ask) ? ask : null
+      Number.isFinite(ask) ? ask : null,
+      Number.isFinite(ivRaw) ? ivRaw : null,
+      Number.isFinite(delta) ? delta : null,
+      Number.isFinite(volume) ? volume : null,
+      Number.isFinite(openInt) ? openInt : null,
+      Number.isFinite(moneyness) ? moneyness : null,
     ]);
   }
 
@@ -238,9 +266,14 @@ function parseCsvData_(csvData, symbol, expDate) {
  * - mid: "mid" (optional)
  * - ask: "ask"
  * - type: "type", "option type", "call/put", "cp", "put/call"
+ * - iv: "iv", "implied volatility", "impliedvolatility"
+ * - delta: "delta"
+ * - volume: "volume", "vol"
+ * - openInt: "open int", "openint", "open interest", "openinterest", "oi"
+ * - moneyness: "moneyness", "money", "itm/otm"
  *
  * @param {Array<string>} headers - Lowercased, trimmed headers.
- * @returns {Object} { strikeIdx, bidIdx, midIdx, askIdx, typeIdx } (-1 if not found).
+ * @returns {Object} { strikeIdx, bidIdx, midIdx, askIdx, typeIdx, ivIdx, deltaIdx, volumeIdx, openIntIdx, moneynessIdx } (-1 if not found).
  */
 function findColumnIndexes_(headers) {
   const strikeIdx = headers.indexOf("strike");
@@ -254,7 +287,26 @@ function findColumnIndexes_(headers) {
   if (typeIdx === -1) typeIdx = headers.indexOf("cp");
   if (typeIdx === -1) typeIdx = headers.indexOf("put/call");
 
-  return { strikeIdx, bidIdx, midIdx, askIdx, typeIdx };
+  let ivIdx = headers.indexOf("iv");
+  if (ivIdx === -1) ivIdx = headers.indexOf("implied volatility");
+  if (ivIdx === -1) ivIdx = headers.indexOf("impliedvolatility");
+
+  const deltaIdx = headers.indexOf("delta");
+
+  let volumeIdx = headers.indexOf("volume");
+  if (volumeIdx === -1) volumeIdx = headers.indexOf("vol");
+
+  let openIntIdx = headers.indexOf("open int");
+  if (openIntIdx === -1) openIntIdx = headers.indexOf("openint");
+  if (openIntIdx === -1) openIntIdx = headers.indexOf("open interest");
+  if (openIntIdx === -1) openIntIdx = headers.indexOf("openinterest");
+  if (openIntIdx === -1) openIntIdx = headers.indexOf("oi");
+
+  let moneynessIdx = headers.indexOf("moneyness");
+  if (moneynessIdx === -1) moneynessIdx = headers.indexOf("money");
+  if (moneynessIdx === -1) moneynessIdx = headers.indexOf("itm/otm");
+
+  return { strikeIdx, bidIdx, midIdx, askIdx, typeIdx, ivIdx, deltaIdx, volumeIdx, openIntIdx, moneynessIdx };
 }
 
 /** ---------- helpers ---------- */
@@ -279,8 +331,38 @@ function parseYyyyMmDdToDate_(s) {
 function safeNumber_(v) {
   if (v === null || v === undefined) return NaN;
   const s = String(v).trim();
-  if (!s || s === "--" || s.toLowerCase() === "na" || s.toLowerCase() === "n/a") return NaN;
+  if (!s || s === "--" || s.toLowerCase() === "na" || s.toLowerCase() === "n/a" || s.toLowerCase() === "unch") return NaN;
   const n = Number(s.replace(/,/g, ""));
+  return Number.isFinite(n) ? n : NaN;
+}
+
+/**
+ * Parse a percentage string like "55.32%" or "-9.12%" to decimal (0.5532 or -0.0912)
+ */
+function safePercent_(v) {
+  if (v === null || v === undefined) return NaN;
+  const s = String(v).trim();
+  if (!s || s === "--" || s.toLowerCase() === "na" || s.toLowerCase() === "n/a") return NaN;
+
+  // Handle +/- prefix and % suffix
+  const cleaned = s.replace(/,/g, "").replace(/%$/, "");
+  const n = Number(cleaned);
+  if (!Number.isFinite(n)) return NaN;
+
+  // Convert from percentage to decimal (55.32 -> 0.5532)
+  return n / 100;
+}
+
+/**
+ * Parse an integer, handling commas
+ */
+function safeInteger_(v) {
+  if (v === null || v === undefined) return NaN;
+  const s = String(v).trim();
+  if (!s || s === "--" || s.toLowerCase() === "na" || s.toLowerCase() === "n/a" || s.toLowerCase() === "unch") return NaN;
+
+  const cleaned = s.replace(/,/g, "").replace(/^\+/, "");
+  const n = parseInt(cleaned, 10);
   return Number.isFinite(n) ? n : NaN;
 }
 
