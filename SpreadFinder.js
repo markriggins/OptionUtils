@@ -1,0 +1,412 @@
+/**
+ * SpreadFinder.js
+ * Analyzes OptionPricesUploaded to find and rank bull call spread opportunities.
+ *
+ * Uses a config table at top of SpreadFinder sheet for tunable parameters.
+ * Results appear below the config on the same sheet.
+ *
+ * Config table format (auto-created):
+ *   | Setting            | Value | Description                                    |
+ *   | maxSpreadWidth     | 150   | Maximum spread width in dollars                |
+ *   | minOpenInterest    | 10    | Minimum open interest for both legs            |
+ *   | minVolume          | 0     | Minimum volume for both legs                   |
+ *   | patience           | 60    | Minutes for price calculation (0=aggressive)   |
+ *   | maxDebit           | 50    | Maximum debit per share                        |
+ *   | minROI             | 0.5   | Minimum ROI (0.5 = 50%)                        |
+ *
+ * Version: 1.0
+ */
+
+const SPREAD_FINDER_SHEET = "SpreadFinder";
+const OPTION_PRICES_SHEET = "OptionPricesUploaded";
+const CONFIG_COL = 17; // Column Q
+const CONFIG_START_ROW = 1;
+const RESULTS_START_ROW = 3;
+
+// Column letters for formulas
+const COLS = "ABCDEFGHIJKLMNOP";
+// A=Symbol, B=Expiration, C=Lower, D=Upper, E=Width, F=Debit, G=MaxProfit, H=ROI,
+// I=LowerDelta, J=UpperDelta, K=LowerOI, L=UpperOI, M=Liquidity, N=Tightness, O=Fitness, P=OptionStrat
+
+/**
+ * Runs the spread finder analysis. Call from menu or script.
+ * Ensures config exists, reads it, scans options, ranks spreads, outputs results.
+ */
+function runSpreadFinder() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Ensure sheet and config exist
+  const sheet = ensureSpreadFinderSheet_(ss);
+
+  // Load config from sheet
+  const config = loadSpreadFinderConfig_(sheet);
+  Logger.log("SpreadFinder config: " + JSON.stringify(config));
+
+  // Load option data
+  const options = loadOptionData_(ss);
+  Logger.log("Loaded " + options.length + " options");
+
+  // Filter to calls only
+  const calls = options.filter(o => o.type === "Call");
+  Logger.log("Filtered to " + calls.length + " calls");
+
+  // Group by symbol+expiration
+  const grouped = groupBySymbolExpiration_(calls);
+
+  // Generate and score all spreads
+  const spreads = [];
+  for (const key of Object.keys(grouped)) {
+    const chain = grouped[key];
+    const chainSpreads = generateSpreads_(chain, config);
+    spreads.push(...chainSpreads);
+  }
+  Logger.log("Generated " + spreads.length + " spreads");
+
+  // Filter by config constraints
+  const minExpDate = config.minExpirationDate;
+  const filtered = spreads.filter(s => {
+    // Parse expiration date
+    const expDate = new Date(s.expiration);
+    return s.debit > 0 &&
+      s.debit <= config.maxDebit &&
+      s.roi >= config.minROI &&
+      s.lowerOI >= config.minOpenInterest &&
+      s.upperOI >= config.minOpenInterest &&
+      s.lowerVol >= config.minVolume &&
+      s.upperVol >= config.minVolume &&
+      s.lowerStrike <= config.maxLowerStrike &&
+      expDate >= minExpDate;
+  });
+  Logger.log("Filtered to " + filtered.length + " spreads meeting criteria");
+
+  // Sort by fitness (descending)
+  filtered.sort((a, b) => b.fitness - a.fitness);
+
+  // Output results to same sheet below config
+  outputSpreadResults_(sheet, filtered);
+
+  // Debug info
+  const debugMsg = `Options loaded: ${options.length}\n` +
+    `Calls found: ${calls.length}\n` +
+    `Spreads generated: ${spreads.length}\n` +
+    `After filtering: ${filtered.length}`;
+
+  SpreadsheetApp.getUi().alert(
+    "SpreadFinder Complete",
+    debugMsg,
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+/**
+ * Ensures SpreadFinder sheet exists with config table.
+ * Creates sheet and config if needed, returns sheet.
+ */
+function ensureSpreadFinderSheet_(ss) {
+  let sheet = ss.getSheetByName(SPREAD_FINDER_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(SPREAD_FINDER_SHEET);
+  }
+
+  // Always recreate config to ensure latest settings
+  const configData = [
+    ["Setting", "Value", "Description"],
+    ["maxSpreadWidth", 150, "Maximum spread width in dollars"],
+    ["minOpenInterest", 10, "Minimum open interest for both legs"],
+    ["minVolume", 0, "Minimum volume for both legs"],
+    ["patience", 60, "Minutes for price calculation (0=aggressive, 60=patient)"],
+    ["maxDebit", 50, "Maximum debit per share"],
+    ["minROI", 0.5, "Minimum ROI (0.5 = 50% return)"],
+    ["maxLowerStrike", 9999, "Maximum lower strike price"],
+    ["minExpirationMonths", 6, "Minimum months until expiration"]
+  ];
+  // Read existing values to preserve user edits
+  const existingValues = {};
+  try {
+    const existing = sheet.getRange(CONFIG_START_ROW + 1, CONFIG_COL, 10, 2).getValues();
+    for (const row of existing) {
+      if (row[0] && row[1] !== "") existingValues[row[0]] = row[1];
+    }
+  } catch (e) { /* ignore */ }
+  // Merge existing values
+  for (let i = 1; i < configData.length; i++) {
+    const key = configData[i][0];
+    if (key in existingValues) configData[i][1] = existingValues[key];
+  }
+  sheet.getRange(CONFIG_START_ROW, CONFIG_COL, configData.length, 3).setValues(configData);
+  sheet.getRange(CONFIG_START_ROW, CONFIG_COL, 1, 3).setFontWeight("bold");
+  sheet.autoResizeColumn(CONFIG_COL);
+  sheet.autoResizeColumn(CONFIG_COL + 1);
+  sheet.autoResizeColumn(CONFIG_COL + 2);
+
+  return sheet;
+}
+
+/**
+ * Loads config from SpreadFinder sheet config table.
+ * Returns object with settings and defaults.
+ */
+function loadSpreadFinderConfig_(sheet) {
+  const defaults = {
+    maxSpreadWidth: 150,
+    minOpenInterest: 10,
+    minVolume: 0,
+    patience: 60,
+    maxDebit: 50,
+    minROI: 0.5,
+    maxLowerStrike: 9999,
+    minExpirationMonths: 6
+  };
+
+  const config = { ...defaults };
+
+  // Read config rows (rows 2-10, columns Q-R)
+  const data = sheet.getRange(CONFIG_START_ROW + 1, CONFIG_COL, 9, 2).getValues();
+  for (const row of data) {
+    const setting = (row[0] || "").toString().trim();
+    const value = row[1];
+    if (setting && value !== "" && value != null && setting in defaults) {
+      config[setting] = +value;
+    }
+  }
+
+  // Calculate min expiration date
+  const now = new Date();
+  config.minExpirationDate = new Date(now.getFullYear(), now.getMonth() + config.minExpirationMonths, now.getDate());
+
+  return config;
+}
+
+/**
+ * Loads all options from OptionPricesUploaded.
+ * Returns array of option objects.
+ */
+function loadOptionData_(ss) {
+  const sheet = ss.getSheetByName(OPTION_PRICES_SHEET);
+  if (!sheet) throw new Error(`Sheet '${OPTION_PRICES_SHEET}' not found`);
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return [];
+
+  // Build header index
+  const headers = data[0].map(h => h.toString().trim().toLowerCase());
+  const idx = {};
+  headers.forEach((h, i) => idx[h] = i);
+
+  const required = ["symbol", "expiration", "strike", "type", "bid", "ask"];
+  for (const r of required) {
+    if (!(r in idx)) throw new Error(`Required column '${r}' not found`);
+  }
+
+  const options = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const symbol = (row[idx.symbol] || "").toString().trim().toUpperCase();
+    if (!symbol) continue;
+
+    let exp = row[idx.expiration];
+    if (exp instanceof Date) {
+      exp = Utilities.formatDate(exp, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    } else {
+      exp = (exp || "").toString().trim();
+    }
+    if (!exp) continue;
+
+    const strike = +row[idx.strike];
+    if (!Number.isFinite(strike)) continue;
+
+    const type = normalizeType_(row[idx.type]);
+    if (!type) continue;
+
+    const bid = +row[idx.bid] || 0;
+    const ask = +row[idx.ask] || 0;
+    const mid = idx.mid !== undefined ? (+row[idx.mid] || 0) : (bid + ask) / 2;
+    const iv = idx.iv !== undefined ? (+row[idx.iv] || 0) : 0;
+    const delta = idx.delta !== undefined ? (+row[idx.delta] || 0) : 0;
+    const volume = idx.volume !== undefined ? (+row[idx.volume] || 0) : 0;
+    const openint = idx.openint !== undefined ? (+row[idx.openint] || 0) : 0;
+    const moneyness = idx.moneyness !== undefined ? (row[idx.moneyness] || "") : "";
+
+    options.push({
+      symbol, expiration: exp, strike, type,
+      bid, mid, ask, iv, delta, volume, openint, moneyness
+    });
+  }
+
+  return options;
+}
+
+/**
+ * Groups options by symbol+expiration key.
+ * Returns { "TSLA|2028-06-16": [options...], ... }
+ */
+function groupBySymbolExpiration_(options) {
+  const groups = {};
+  for (const o of options) {
+    const key = `${o.symbol}|${o.expiration}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(o);
+  }
+  // Sort each group by strike
+  for (const key of Object.keys(groups)) {
+    groups[key].sort((a, b) => a.strike - b.strike);
+  }
+  return groups;
+}
+
+/**
+ * Generates all valid spreads from a sorted chain of calls.
+ * Returns array of spread objects with metrics.
+ */
+function generateSpreads_(chain, config) {
+  const spreads = [];
+  const n = chain.length;
+
+  for (let i = 0; i < n; i++) {
+    const lower = chain[i];
+    for (let j = i + 1; j < n; j++) {
+      const upper = chain[j];
+      const width = upper.strike - lower.strike;
+
+      // Skip if too wide
+      if (width > config.maxSpreadWidth) continue;
+
+      // Skip if no valid bid/ask
+      if (lower.ask <= 0 || upper.bid < 0) continue;
+
+      // Calculate debit using patience/alpha model
+      const alpha = 1 - Math.exp(-config.patience / 60);
+      const buyLimit = lower.ask - alpha * (lower.ask - lower.bid);
+      const sellLimit = upper.bid + alpha * (upper.ask - upper.bid);
+      let debit = buyLimit - sellLimit;
+      if (debit < 0) debit = 0;
+      debit = round2_(debit);
+
+      // Calculate metrics
+      const maxProfit = width - debit;
+      const maxLoss = debit;
+      const roi = debit > 0 ? maxProfit / debit : 0;
+
+      // Liquidity score: geometric mean of OI, scaled
+      const minOI = Math.min(lower.openint, upper.openint);
+      const liquidityScore = Math.sqrt(lower.openint * upper.openint) / 100;
+
+      // Bid-ask tightness (lower is better, so invert)
+      const lowerSpread = lower.ask - lower.bid;
+      const upperSpread = upper.ask - upper.bid;
+      const avgBidAskSpread = (lowerSpread + upperSpread) / 2;
+      const tightness = avgBidAskSpread > 0 ? 1 / avgBidAskSpread : 10;
+
+      // Delta-based probability estimate (rough)
+      // Lower delta = more OTM = lower prob but higher reward
+      const probITM = Math.abs(lower.delta); // P(stock > lower strike)
+
+      // Fitness = ROI * liquidity * tightness (tunable)
+      const fitness = round2_(roi * Math.sqrt(liquidityScore) * Math.sqrt(tightness));
+
+      spreads.push({
+        symbol: lower.symbol,
+        expiration: lower.expiration,
+        lowerStrike: lower.strike,
+        upperStrike: upper.strike,
+        width,
+        debit,
+        maxProfit: round2_(maxProfit),
+        maxLoss: round2_(maxLoss),
+        roi: round2_(roi),
+        lowerDelta: round2_(lower.delta),
+        upperDelta: round2_(upper.delta),
+        lowerOI: lower.openint,
+        upperOI: upper.openint,
+        lowerVol: lower.volume,
+        upperVol: upper.volume,
+        liquidityScore: round2_(liquidityScore),
+        tightness: round2_(tightness),
+        fitness: round2_(fitness)
+      });
+    }
+  }
+
+  return spreads;
+}
+
+/**
+ * Outputs spread results to SpreadFinder sheet below config.
+ * Uses formulas for MaxProfit, ROI, Fitness so user can edit Debit.
+ */
+function outputSpreadResults_(sheet, spreads) {
+  // Clear results area (from RESULTS_START_ROW down)
+  const lastRow = sheet.getLastRow();
+  if (lastRow >= RESULTS_START_ROW) {
+    sheet.getRange(RESULTS_START_ROW, 1, lastRow - RESULTS_START_ROW + 1, 20).clearContent();
+  }
+
+  // Remove existing filter if any
+  const existingFilter = sheet.getFilter();
+  if (existingFilter) existingFilter.remove();
+
+  // Timestamp in row 1
+  sheet.getRange(1, 1).setValue("Results - " + new Date().toLocaleString());
+
+  // Headers (A-P)
+  const headers = [
+    "Symbol", "Expiration", "Lower", "Upper", "Width",
+    "Debit", "MaxProfit", "ROI", "LowerDelta", "UpperDelta",
+    "LowerOI", "UpperOI", "Liquidity", "Tightness", "Fitness", "OptionStrat"
+  ];
+  sheet.getRange(RESULTS_START_ROW, 1, 1, headers.length).setValues([headers]).setFontWeight("bold");
+
+  if (spreads.length === 0) return;
+
+  const dataStartRow = RESULTS_START_ROW + 1;
+
+  // Data columns A-F (values), I-N (values)
+  // G, H, O, P will be formulas
+  const dataRows = spreads.map(s => [
+    s.symbol, s.expiration, s.lowerStrike, s.upperStrike, s.width,
+    s.debit, "", "", // G=MaxProfit, H=ROI (formulas)
+    s.lowerDelta, s.upperDelta, s.lowerOI, s.upperOI,
+    s.liquidityScore, s.tightness, "", "" // O=Fitness, P=OptionStrat (formulas)
+  ]);
+  sheet.getRange(dataStartRow, 1, dataRows.length, headers.length).setValues(dataRows);
+
+  // Build formula arrays for columns G, H, O, P
+  const maxProfitFormulas = [];
+  const roiFormulas = [];
+  const fitnessFormulas = [];
+  const optionStratFormulas = [];
+
+  for (let i = 0; i < spreads.length; i++) {
+    const row = dataStartRow + i;
+    // MaxProfit = Width - Debit (E - F)
+    maxProfitFormulas.push([`=E${row}-F${row}`]);
+    // ROI = MaxProfit / Debit (G / F)
+    roiFormulas.push([`=IF(F${row}>0,G${row}/F${row},0)`]);
+    // Fitness = ROI * SQRT(Liquidity) * SQRT(Tightness)
+    fitnessFormulas.push([`=ROUND(H${row}*SQRT(M${row})*SQRT(N${row}),2)`]);
+    // OptionStrat URL
+    optionStratFormulas.push([`=buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row})`]);
+  }
+
+  // Set formulas
+  sheet.getRange(dataStartRow, 7, spreads.length, 1).setFormulas(maxProfitFormulas); // G
+  sheet.getRange(dataStartRow, 8, spreads.length, 1).setFormulas(roiFormulas); // H
+  sheet.getRange(dataStartRow, 15, spreads.length, 1).setFormulas(fitnessFormulas); // O
+  sheet.getRange(dataStartRow, 16, spreads.length, 1).setFormulas(optionStratFormulas); // P
+
+  // Format
+  sheet.getRange(dataStartRow, 6, spreads.length, 1).setNumberFormat("$#,##0.00"); // Debit
+  sheet.getRange(dataStartRow, 7, spreads.length, 1).setNumberFormat("$#,##0.00"); // MaxProfit
+  sheet.getRange(dataStartRow, 8, spreads.length, 1).setNumberFormat("0.00"); // ROI
+  sheet.getRange(dataStartRow, 9, spreads.length, 2).setNumberFormat("0.00"); // Deltas
+  sheet.getRange(dataStartRow, 15, spreads.length, 1).setNumberFormat("0.00"); // Fitness
+
+  // Add filter
+  const range = sheet.getRange(RESULTS_START_ROW, 1, spreads.length + 1, headers.length);
+  range.createFilter();
+
+  // Auto-resize columns
+  for (let i = 1; i <= headers.length; i++) {
+    sheet.autoResizeColumn(i);
+  }
+}
