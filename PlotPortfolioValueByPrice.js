@@ -12,7 +12,7 @@
  *   - Default tableStartRow = 50
  *   - Generated data table starts at row tableStartRow (headers) / tableStartRow+1 (data)
  *   - TWO charts:
- *       Chart 1: Portfolio Value vs Price (Shares $, Options $, Total $) + vertical dashed line at current price (if available)
+ *       Chart 1: Portfolio Value vs Price (Shares $, Options $, Total $)
  *       Chart 2: % Return vs Price (Shares %, Options %) (ROI style, not contribution)
  *   - Chart series labels come from the first row of the data table (headers)
  *
@@ -182,7 +182,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
 
   // ── Build data table ────────────────────────────────────────────────
   // Changed headers: Portfolio VALUE not P/L
-  const headerRow = ["Price ($)", "Shares $", "Options $", "Total $", "Shares % ROI", "Options % ROI", "Current Price"];
+  const headerRow = ["Price ($)", "Shares $", "Options $", "Total $", "Shares % ROI", "Options % ROI"];
   const table = [headerRow];
 
   for (let S = cfg.minPrice; S <= cfg.maxPrice + 1e-9; S += cfg.step) {
@@ -221,7 +221,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     const sharesPL = sharesValue - sharesCost;
     const optionsPL = optionsValue - callInvest - putRisk; // P/L relative to capital at risk
 
-const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
+    const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
     const optionsROI = optionsDenom > 0 ? (optionsPL / optionsDenom) : 0;
 
     table.push([
@@ -231,29 +231,9 @@ const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
       round2_(totalValue),
       round4_(sharesROI),
       round4_(optionsROI),
-      "", // Will fill in current price marker in post-processing
     ]);
   }
 
-  // Post-process: find the row closest to current price and mark it
-  if (meta.currentPrice != null && Number.isFinite(meta.currentPrice) && table.length > 1) {
-    let closestIdx = -1;
-    let closestDiff = Infinity;
-
-    for (let i = 1; i < table.length; i++) {
-      const priceInRow = table[i][0];
-      const diff = Math.abs(priceInRow - meta.currentPrice);
-      if (diff < closestDiff) {
-        closestDiff = diff;
-        closestIdx = i;
-      }
-    }
-
-    if (closestIdx >= 0) {
-      const totalValueAtPrice = table[closestIdx][3];
-      table[closestIdx][6] = totalValueAtPrice; // Set marker in column 7
-    }
-  }
   // For vline series bounds on $ chart (use Total $)
   const totalYs = table.slice(1).map(r => toNum_(r[3])).filter(n => Number.isFinite(n));
   const minY = totalYs.length ? Math.min(...totalYs) : 0;
@@ -276,30 +256,11 @@ const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
     sheet.getRange(startRow + 1, startCol + 4, table.length - 1, 2).setNumberFormat("0.00%");
   }
 
-  // Vertical line helper table to the right of data table
-  const vlineCol = startCol + table[0].length + 2;
-  const vlineRow = startRow;
-
-  sheet.getRange(vlineRow, vlineCol, 3, 2).clearContent();
-
-  const hasCurrentPrice = Number.isFinite(meta.currentPrice);
-  Logger.log(`Current Price Detection: hasCurrentPrice=${hasCurrentPrice}, meta.currentPrice=${meta.currentPrice}`);
-  if (hasCurrentPrice) {
-    sheet.getRange(vlineRow, vlineCol, 3, 2).setValues([
-      ["CurrentPrice", "Y"],
-      [meta.currentPrice, minY],
-      [meta.currentPrice, maxY],
-    ]);
-  }
-
   // ── Charts: ensure TWO charts exist (create missing; refresh existing preserving box) ──────────────────
   ensureTwoCharts_(sheet, symbol, cfg, {
     startRow,
     startCol,
     tableRows: table.length,
-    hasCurrentPrice,
-    vlineRow,
-    vlineCol,
     headerRow,
   });
 }
@@ -309,7 +270,7 @@ const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
    ========================================================= */
 
 function ensureTwoCharts_(sheet, symbol, cfg, args) {
-  const { startRow, startCol, tableRows, hasCurrentPrice, vlineRow, vlineCol, headerRow } = args;
+  const { startRow, startCol, tableRows, headerRow } = args;
 
   const dollarTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " ($)";
   const pctTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " (%)";
@@ -335,8 +296,6 @@ function ensureTwoCharts_(sheet, symbol, cfg, args) {
   const priceColRange = sheet.getRange(startRow, startCol, tableRows, 1);
   const sharesPctRange = sheet.getRange(startRow, startCol + 4, tableRows, 1);
   const optionsPctRange = sheet.getRange(startRow, startCol + 5, tableRows, 1);
-
-  const vlineRange = hasCurrentPrice ? sheet.getRange(vlineRow + 1, vlineCol, 2, 2) : null;
 
   function rebuildChartPreserveBox_(oldChart, newBuilder, defaultRow, defaultCol) {
     if (!oldChart) {
@@ -370,12 +329,6 @@ function ensureTwoCharts_(sheet, symbol, cfg, args) {
     1: { labelInLegend: headerRow[2] },
     2: { labelInLegend: headerRow[3] },
   };
-
-  if (vlineRange) {
-    Logger.log(`Adding vline range: ${vlineRange.getA1Notation()}`);
-    dollarBuilder = dollarBuilder.addRange(vlineRange);
-    dollarSeries[3] = { labelInLegend: "Current Price", lineDashStyle: [6, 4], lineWidth: 2 };
-  }
 
   dollarBuilder = dollarBuilder.setOption("series", dollarSeries);
 
@@ -419,7 +372,6 @@ function extractChartTitle_(chart) {
     return "";
   }
 }
-
 /* =========================================================
    Config table – now in K:L, default tableStartRow = 50
    Includes descriptions/labels in-column K.
@@ -714,28 +666,13 @@ function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
     "cost",
     "purchaseprice",
   ]);
-  const idxCurrentPrice = findCol_(headerNorm, ["currentprice", "marketprice"]);
-  
-  // Debug: log what we're looking for
-  Logger.log(`parseSharesFromTableForSymbol: symbol=${symbol}`);
-  Logger.log(`Headers (normalized): ${JSON.stringify(headerNorm)}`);
-  Logger.log(`idxCurrentPrice=${idxCurrentPrice} (looking for: currentprice, marketprice, mark, last, price)`);
-  if (idxCurrentPrice >= 0) Logger.log(`Found column: "${rows[0][idxCurrentPrice]}"`);
+
   const out = [];
 
   for (let r = 1; r < rows.length; r++) {
     if (idxSym >= 0) {
       const rowSym = String(rows[r][idxSym] ?? "").trim().toUpperCase();
       if (rowSym && rowSym !== symbol) continue;
-    }
-
-    if (idxCurrentPrice >= 0 && outMeta && !Number.isFinite(outMeta.currentPrice)) {
-      const cp = toNum_(rows[r][idxCurrentPrice]);
-      Logger.log(`Row ${r}: raw value="${rows[r][idxCurrentPrice]}", parsed cp=${cp}, isFinite=${Number.isFinite(cp)}`);
-      if (Number.isFinite(cp)) {
-        outMeta.currentPrice = cp;
-        Logger.log(`  -> Set meta.currentPrice = ${cp}`);
-      }
     }
 
     if (idxQty < 0 || idxBasis < 0) continue;
@@ -766,15 +703,7 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
   if (!rows || rows.length < 2) return [];
 
   const headerNorm = rows[0].map(normKey_);
-  
-  // DEBUG: Log what we're parsing
-  if (false) {
-      Logger.log(`\n=== parseSpreadsFromTableForSymbol_ DEBUG ===`);
-      Logger.log(`Symbol: ${symbol}, Flavor: ${flavor}, Rows: ${rows.length}`);
-      Logger.log(`Headers (raw): ${JSON.stringify(rows[0])}`);
-      Logger.log(`Headers (normalized): ${JSON.stringify(headerNorm)}`);
-  }
-  
+
   const idxSym = findCol_(headerNorm, ["symbol", "ticker"]);
 
   const idxQty = findCol_(headerNorm, [
@@ -810,8 +739,6 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
   const idxAveDebit = findCol_(headerNorm, ["avedebit", "avgdebit", "averagedebit"]);
   const idxRecDebit = findCol_(headerNorm, ["recdebit", "recommendeddebit"]);
   const idxDebitFallback = findCol_(headerNorm, ["netdebit", "debit", "cost", "price", "entry", "premium"]);
-  
-  Logger.log(`Column indexes: idxQty=${idxQty}, idxLong=${idxLong}, idxShort=${idxShort}`);
 
   if (idxLong < 0 || idxShort < 0) return [];
 
@@ -831,11 +758,7 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
     if (!Number.isFinite(kLong) || !Number.isFinite(kShort)) continue;
 
     const qty = assumeQty ? 1 : toNum_(rows[r][idxQty]);
-    
-    if (r <= 5) { // Debug first few rows
-      Logger.log(`Row ${r}: assumeQty=${assumeQty}, raw="${rows[r][idxQty]}", parsed qty=${qty}`);
-    }
-    
+
     if (!Number.isFinite(qty) || qty === 0) continue;
 
     let debit = NaN;
