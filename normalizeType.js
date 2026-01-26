@@ -105,6 +105,16 @@ function normalizeType_(raw) {
     return "stock";
   }
 
+  // ---- CALL ----
+  if (/^(call|calls)$/.test(t)) {
+    return "Call";
+  }
+
+  // ---- PUT ----
+  if (/^(put|puts)$/.test(t)) {
+    return "Put";
+  }
+
   // ---- BULL CALL SPREAD ----
   // Matches:
   //   bcs

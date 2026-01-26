@@ -21,34 +21,26 @@
  */
 
 /**
- * recommendBullCallSpreadOpenDebit - Recommends a debit limit price to OPEN a bull call spread.
+ * Recommends debit to OPEN a bull call spread (BUY lower, SELL upper).
  *
- * Strategy: BUY call at lowerStrike (long), SELL call at upperStrike (short).
- *
- * The price is the net debit to pay, adjusted for execution patience.
- * At alpha=0: debit = lower.ask - upper.bid (aggressive).
- * As alpha increases: Moves toward lower.bid - upper.ask (patient, but may not fill).
- * Minimum debit is 0.
- *
- * Usage Examples:
- *
- * 1. Spreadsheet Formula:
- *    =recommendBullCallSpreadOpenDebit("TSLA", "2028-06-16", 450, 500, 30)
- *    // Returns e.g., 5.25 (net debit per share)
- *
- * 2. From Script:
- *    const debit = recommendBullCallSpreadOpenDebit("TSLA", new Date("2028-06-16"), 450, 500, 60);
- *    // debit is a number or error string
- *
- * @param {string} symbol - The stock symbol (e.g., "TSLA"). Case-insensitive, trimmed.
- * @param {string|Date} expiration - Expiration date as "YYYY-MM-DD" string or Date object.
- * @param {number} lowerStrike - Lower strike price for the long call.
- * @param {number} upperStrike - Upper strike price for the short call (must be > lowerStrike).
- * @param {number} avgMinutesToExecute - Minutes of patience (0+); higher improves price but delays fill.
- * @returns {number|string} Recommended debit (rounded to 2 decimals) or "#Error message".
+ * @param {string} symbol - Ticker (e.g. "TSLA")
+ * @param {Date|string} expiration - Expiration date
+ * @param {number} lowerStrike - Strike to BUY
+ * @param {number} upperStrike - Strike to SELL
+ * @param {number} avgMinutesToExecute - Patience: 0=aggressive, 60=patient
+ * @param {Array} [_labels] - Optional; ignored, for readability
+ * @return {number} Debit per share or error
+ * @customfunction
  */
-
-function recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute) {
+function recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute, _labels) {
+  /*
+   * Examples:
+   *   Spreadsheet: =recommendBullCallSpreadOpenDebit("TSLA", "2028-06-16", 450, 500, 30)
+   *   Script:      recommendBullCallSpreadOpenDebit("TSLA", new Date("2028-06-16"), 450, 500, 60)
+   *
+   * At alpha=0: debit = lower.ask - upper.bid (aggressive)
+   * As alpha increases: moves toward lower.bid - upper.ask (patient, may not fill)
+   */
   const parsed = parseSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute);
   if (!parsed) return "#Could not parse inputs";
   const { sym, exp, lo, hi, alpha } = parsed;
@@ -74,34 +66,26 @@ function recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upper
 }
 
 /**
- * recommendBullCallSpreadCloseCredit - Recommends a credit limit price to CLOSE a bull call spread.
+ * Recommends credit to CLOSE a bull call spread (SELL lower, BUY upper).
  *
- * Strategy: SELL call at lowerStrike (close long), BUY call at upperStrike (close short).
- *
- * The price is the net credit to receive, adjusted for execution patience.
- * At alpha=0: credit = lower.bid - upper.ask (aggressive).
- * As alpha increases: Moves toward lower.ask - upper.bid (patient, better credit).
- * Minimum credit is 0.
- *
- * Usage Examples:
- *
- * 1. Spreadsheet Formula:
- *    =recommendBullCallSpreadCloseCredit("TSLA", "2028-06-16", 450, 500, 30)
- *    // Returns e.g., 2.75 (net credit per share)
- *
- * 2. From Script:
- *    const credit = recommendBullCallSpreadCloseCredit("TSLA", new Date("2028-06-16"), 450, 500, 60);
- *    // credit is a number or error string
- *
- * @param {string} symbol - The stock symbol (e.g., "TSLA"). Case-insensitive, trimmed.
- * @param {string|Date} expiration - Expiration date as "YYYY-MM-DD" string or Date object.
- * @param {number} lowerStrike - Lower strike price (long call to close).
- * @param {number} upperStrike - Upper strike price (short call to close, must be > lowerStrike).
- * @param {number} avgMinutesToExecute - Minutes of patience (0+); higher improves price but delays fill.
- * @returns {number|string} Recommended credit (rounded to 2 decimals) or "#Error message".
+ * @param {string} symbol - Ticker (e.g. "TSLA")
+ * @param {Date|string} expiration - Expiration date
+ * @param {number} lowerStrike - Strike to SELL (close long)
+ * @param {number} upperStrike - Strike to BUY (close short)
+ * @param {number} avgMinutesToExecute - Patience: 0=aggressive, 60=patient
+ * @param {Array} [_labels] - Optional; ignored, for readability
+ * @return {number} Credit per share or error
+ * @customfunction
  */
-
-function recommendBullCallSpreadCloseCredit(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute) {
+function recommendBullCallSpreadCloseCredit(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute, _labels) {
+  /*
+   * Examples:
+   *   Spreadsheet: =recommendBullCallSpreadCloseCredit("TSLA", "2028-06-16", 450, 500, 30)
+   *   Script:      recommendBullCallSpreadCloseCredit("TSLA", new Date("2028-06-16"), 450, 500, 60)
+   *
+   * At alpha=0: credit = lower.bid - upper.ask (aggressive)
+   * As alpha increases: moves toward lower.ask - upper.bid (patient)
+   */
   const parsed = parseSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute);
   if (!parsed) return "#Could not parse inputs";
   const { sym, exp, lo, hi, alpha } = parsed;
@@ -233,87 +217,19 @@ function getOptionQuote_(symbol, expiration, strike, type) {
  */
 
 /**
- * BCS_OPEN_DEBIT_XX - Alias for recommendBullCallSpreadOpenDebit.
+ * Recommends credit to OPEN a short iron condor.
  *
- * For backward compatibility or shorthand in formulas.
- *
- * @param {string} symbol - Stock symbol.
- * @param {string|Date} expiration - Expiration.
- * @param {number} lowerStrike - Lower strike.
- * @param {number} upperStrike - Upper strike.
- * @param {number} avgMinutes - Patience in minutes.
- * @returns {number|string} Debit or error.
+ * @param {string} symbol - Ticker (e.g. "TSLA")
+ * @param {Date|string} expiration - Expiration date
+ * @param {number} buyPut - Lowest put (buy protective)
+ * @param {number} sellPut - Higher put (sell short)
+ * @param {number} sellCall - Lower call (sell short)
+ * @param {number} buyCall - Highest call (buy protective)
+ * @param {number} avgMinutesToExecute - Patience: 0=aggressive, 60=patient
+ * @param {Array} [_labels] - Optional; ignored, for readability
+ * @return {number} Credit per share or error
+ * @customfunction
  */
-
-function BCS_OPEN_DEBIT_XX(symbol, expiration, lowerStrike, upperStrike, avgMinutes) {
-  return recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upperStrike, avgMinutes);
-}
-
-/**
- * DEBUG_BCS_OPEN_DEBIT_XX - Debug version of open debit for bull call spread.
- *
- * Returns detailed string with alpha, quotes, and computed debit.
- * Useful for troubleshooting.
- *
- * @param {string} symbol - Stock symbol.
- * @param {string|Date} expiration - Expiration.
- * @param {number} lowerStrike - Lower strike.
- * @param {number} upperStrike - Upper strike.
- * @param {number} avgMinutesToExecute - Patience in minutes.
- * @returns {string} Debug info or error message.
- */
-
-function DEBUG_BCS_OPEN_DEBIT_XX(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute) {
-  const parsed = parseSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute);
-  if (!parsed) return "parseSpreadInputs_ failed (symbol/expiration/strikes/minutes)";
-  const { sym, exp, lo, hi, alpha } = parsed;
-  const longQ = getOptionQuote_(sym, exp, lo, "Call");
-  const shortQ = getOptionQuote_(sym, exp, hi, "Call");
-  if (!longQ) return `Missing long quote: ${sym} ${exp} ${lo} Call`;
-  if (!shortQ) return `Missing short quote: ${sym} ${exp} ${hi} Call`;
-  if (!hasBidAsk_(longQ)) return `Long missing bid/ask: bid=${longQ.bid} ask=${longQ.ask}`;
-  if (!hasBidAsk_(shortQ)) return `Short missing bid/ask: bid=${shortQ.bid} ask=${shortQ.ask}`;
-  const buyLimit = longQ.ask - alpha * (longQ.ask - longQ.bid);
-  const sellLimit = shortQ.bid + alpha * (shortQ.ask - shortQ.bid);
-  let debit = buyLimit - sellLimit;
-  if (debit < 0) debit = 0;
-  return `OK debit=${round2_(debit)} (alpha=${alpha.toFixed(2)}) long[${longQ.bid}/${longQ.ask}] short[${shortQ.bid}/${shortQ.ask}]`;
-}
-
-/**
- * recommendIronCondorOpenCredit - Recommends a credit limit price to OPEN a short iron condor.
- *
- * Strategy (short IC for credit):
- * - BUY put at buyPut (protective, lowest strike).
- * - SELL put at sellPut (short, higher put strike).
- * - SELL call at sellCall (short, lower call strike).
- * - BUY call at buyCall (protective, highest strike).
- *
- * Validates strikes: buyPut < sellPut and sellCall < buyCall.
- * Net credit = (sellPut + sellCall) - (buyPut + buyCall), adjusted for alpha.
- * At alpha=0: Smaller credit (aggressive fills).
- * Higher alpha: Larger credit (patient).
- * Minimum credit is 0.
- *
- * Usage Examples:
- *
- * 1. Spreadsheet Formula:
- *    =recommendIronCondorOpenCredit("TSLA", "2028-06-16", 400, 420, 480, 500, 30)
- *    // Returns e.g., 3.50 (net credit per share)
- *
- * 2. From Script:
- *    const credit = recommendIronCondorOpenCredit("TSLA", new Date("2028-06-16"), 400, 420, 480, 500, 60);
- *
- * @param {string} symbol - Stock symbol (e.g., "TSLA").
- * @param {string|Date} expiration - Expiration date.
- * @param {number} buyPut - Lowest put strike (buy protective).
- * @param {number} sellPut - Higher put strike (sell short).
- * @param {number} sellCall - Lower call strike (sell short).
- * @param {number} buyCall - Highest call strike (buy protective).
- * @param {number} avgMinutesToExecute - Patience in minutes (0+).
- * @returns {number|string} Recommended credit or "#Error message".
- */
-
 function recommendIronCondorOpenCredit(
   symbol,
   expiration,
@@ -321,8 +237,16 @@ function recommendIronCondorOpenCredit(
   sellPut,
   sellCall,
   buyCall,
-  avgMinutesToExecute
+  avgMinutesToExecute,
+  _labels
 ) {
+  /*
+   * Examples:
+   *   Spreadsheet: =recommendIronCondorOpenCredit("TSLA", "2028-06-16", 400, 420, 480, 500, 30)
+   *   Script:      recommendIronCondorOpenCredit("TSLA", new Date("2028-06-16"), 400, 420, 480, 500, 60)
+   *
+   * Strikes must satisfy: buyPut < sellPut and sellCall < buyCall
+   */
   const parsed = parseIronCondorInputs_(
     symbol,
     expiration,
@@ -356,35 +280,19 @@ function recommendIronCondorOpenCredit(
 }
 
 /**
- * recommendIronCondorCloseDebit - Recommends a debit limit price to CLOSE a short iron condor.
+ * Recommends debit to CLOSE a short iron condor.
  *
- * Assumes original open: BUY put@buyPut, SELL put@sellPut, SELL call@sellCall, BUY call@buyCall.
- * Close: SELL put@buyPut (close long), BUY put@sellPut (close short), BUY call@sellCall (close short), SELL call@buyCall (close long).
- *
- * Net debit = (buy shorts) - (sell longs), adjusted for alpha.
- * At alpha=0: Larger debit (aggressive).
- * Higher alpha: Smaller debit (patient).
- * Minimum debit is 0.
- *
- * Usage Examples:
- *
- * 1. Spreadsheet Formula:
- *    =recommendIronCondorCloseDebit("TSLA", "2028-06-16", 400, 420, 480, 500, 30)
- *    // Returns e.g., 1.25 (net debit per share)
- *
- * 2. From Script:
- *    const debit = recommendIronCondorCloseDebit("TSLA", new Date("2028-06-16"), 400, 420, 480, 500, 60);
- *
- * @param {string} symbol - Stock symbol.
- * @param {string|Date} expiration - Expiration date.
- * @param {number} buyPut - Original buy put strike (now sell to close).
- * @param {number} sellPut - Original sell put strike (now buy to close).
- * @param {number} buyCall - Original buy call strike (now sell to close).
- * @param {number} sellCall - Original sell call strike (now buy to close).
- * @param {number} avgMinutesToExecute - Patience in minutes (0+).
- * @returns {number|string} Recommended debit or "#Error message".
+ * @param {string} symbol - Ticker (e.g. "TSLA")
+ * @param {Date|string} expiration - Expiration date
+ * @param {number} buyPut - Original buy put (sell to close)
+ * @param {number} sellPut - Original sell put (buy to close)
+ * @param {number} buyCall - Original buy call (sell to close)
+ * @param {number} sellCall - Original sell call (buy to close)
+ * @param {number} avgMinutesToExecute - Patience: 0=aggressive, 60=patient
+ * @param {Array} [_labels] - Optional; ignored, for readability
+ * @return {number} Debit per share or error
+ * @customfunction
  */
-
 function recommendIronCondorCloseDebit(
   symbol,
   expiration,
@@ -392,8 +300,14 @@ function recommendIronCondorCloseDebit(
   sellPut,
   buyCall,
   sellCall,
-  avgMinutesToExecute
+  avgMinutesToExecute,
+  _labels
 ) {
+  /*
+   * Examples:
+   *   Spreadsheet: =recommendIronCondorCloseDebit("TSLA", "2028-06-16", 400, 420, 480, 500, 30)
+   *   Script:      recommendIronCondorCloseDebit("TSLA", new Date("2028-06-16"), 400, 420, 480, 500, 60)
+   */
   const parsed = parseIronCondorInputs_(
     symbol,
     expiration,

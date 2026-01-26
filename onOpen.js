@@ -9,7 +9,8 @@ function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('OptionTools')
     .addItem('Refresh Option Prices', 'refreshOptionPrices')
-    .addItem("PlotPortfolioValueByPrice", "PlotPortfolioValueByPrice")
+    .addItem('PlotPortfolioValueByPrice', 'PlotPortfolioValueByPrice')
+    .addItem('Run SpreadFinder', 'runSpreadFinder')
     .addToUi();
 }
 
