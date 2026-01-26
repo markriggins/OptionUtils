@@ -19,9 +19,9 @@
 
 const SPREAD_FINDER_SHEET = "SpreadFinder";
 const OPTION_PRICES_SHEET = "OptionPricesUploaded";
-const CONFIG_COL = 17; // Column Q
+const CONFIG_COL = 1; // Column A
 const CONFIG_START_ROW = 1;
-const RESULTS_START_ROW = 3;
+const RESULTS_START_ROW = 13; // After config (10 rows) + spacing
 
 // Column letters for formulas
 const COLS = "ABCDEFGHIJKLMNOP";
@@ -62,11 +62,17 @@ function runSpreadFinder() {
   }
   Logger.log("Generated " + spreads.length + " spreads");
 
+  // Load existing short strikes from BullCallSpreads to avoid conflicts
+  const heldShortStrikes = loadHeldShortStrikes_(ss);
+  Logger.log("Held short strikes: " + JSON.stringify([...heldShortStrikes]));
+
   // Filter by config constraints
   const minExpDate = config.minExpirationDate;
   const filtered = spreads.filter(s => {
     // Parse expiration date
     const expDate = new Date(s.expiration);
+    // Can't use a strike as long if we're already short it
+    const hasConflict = heldShortStrikes.has(s.lowerStrike);
     return s.debit > 0 &&
       s.debit <= config.maxDebit &&
       s.roi >= config.minROI &&
@@ -75,7 +81,8 @@ function runSpreadFinder() {
       s.lowerVol >= config.minVolume &&
       s.upperVol >= config.minVolume &&
       s.lowerStrike <= config.maxLowerStrike &&
-      expDate >= minExpDate;
+      expDate >= minExpDate &&
+      !hasConflict;
   });
   Logger.log("Filtered to " + filtered.length + " spreads meeting criteria");
 
@@ -133,8 +140,17 @@ function ensureSpreadFinderSheet_(ss) {
     const key = configData[i][0];
     if (key in existingValues) configData[i][1] = existingValues[key];
   }
-  sheet.getRange(CONFIG_START_ROW, CONFIG_COL, configData.length, 3).setValues(configData);
-  sheet.getRange(CONFIG_START_ROW, CONFIG_COL, 1, 3).setFontWeight("bold");
+  const configRange = sheet.getRange(CONFIG_START_ROW, CONFIG_COL, configData.length, 3);
+  // Remove existing banding before applying new
+  const existingBanding = configRange.getBandings();
+  existingBanding.forEach(b => b.remove());
+
+  configRange.setValues(configData);
+  // Style config as table
+  sheet.getRange(CONFIG_START_ROW, CONFIG_COL, 1, 3).setBackground("#34a853").setFontColor("white").setFontWeight("bold");
+  const configDataRange = sheet.getRange(CONFIG_START_ROW + 1, CONFIG_COL, configData.length - 1, 3);
+  configDataRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREEN, false, false);
+  configRange.setBorder(true, true, true, true, true, true, "#cccccc", SpreadsheetApp.BorderStyle.SOLID);
   sheet.autoResizeColumn(CONFIG_COL);
   sheet.autoResizeColumn(CONFIG_COL + 1);
   sheet.autoResizeColumn(CONFIG_COL + 2);
@@ -331,22 +347,81 @@ function generateSpreads_(chain, config) {
 }
 
 /**
+ * Loads existing short strikes from BullCallSpreads table on Positions sheet.
+ * Returns a Set of short strike numbers to avoid conflicts.
+ */
+function loadHeldShortStrikes_(ss) {
+  const shortStrikes = new Set();
+
+  const sheet = ss.getSheetByName("Positions");
+  if (!sheet) {
+    Logger.log("Positions sheet not found, skipping conflict check");
+    return shortStrikes;
+  }
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return shortStrikes;
+
+  // Find header row with "Long Strike" and "Short Strike"
+  let headerRow = -1;
+  let shortStrikeCol = -1;
+  let contractsCol = -1;
+
+  for (let r = 0; r < Math.min(10, data.length); r++) {
+    for (let c = 0; c < data[r].length; c++) {
+      const val = (data[r][c] || "").toString().toLowerCase().trim();
+      if (val === "short strike") {
+        headerRow = r;
+        shortStrikeCol = c;
+      }
+      if (val === "contracts") {
+        contractsCol = c;
+      }
+    }
+    if (headerRow >= 0) break;
+  }
+
+  if (headerRow < 0 || shortStrikeCol < 0) {
+    Logger.log("BullCallSpreads table not found on Positions sheet");
+    return shortStrikes;
+  }
+
+  // Read short strikes from rows below header (where contracts > 0)
+  for (let r = headerRow + 1; r < data.length; r++) {
+    const shortStrike = +data[r][shortStrikeCol];
+    const contracts = contractsCol >= 0 ? +data[r][contractsCol] : 1;
+
+    // Only count if we have contracts
+    if (Number.isFinite(shortStrike) && shortStrike > 0 && contracts > 0) {
+      shortStrikes.add(shortStrike);
+    }
+  }
+
+  return shortStrikes;
+}
+
+/**
  * Outputs spread results to SpreadFinder sheet below config.
  * Uses formulas for MaxProfit, ROI, Fitness so user can edit Debit.
  */
 function outputSpreadResults_(sheet, spreads) {
-  // Clear results area (from RESULTS_START_ROW down)
-  const lastRow = sheet.getLastRow();
-  if (lastRow >= RESULTS_START_ROW) {
-    sheet.getRange(RESULTS_START_ROW, 1, lastRow - RESULTS_START_ROW + 1, 20).clearContent();
+  // Clear results area (from RESULTS_START_ROW - 1 down for timestamp)
+  const lastRow = Math.max(sheet.getLastRow(), RESULTS_START_ROW);
+  if (lastRow >= RESULTS_START_ROW - 1) {
+    const clearRange = sheet.getRange(RESULTS_START_ROW - 1, 1, lastRow - RESULTS_START_ROW + 2, 20);
+    // Remove any existing banding
+    const bandings = clearRange.getBandings();
+    bandings.forEach(b => b.remove());
+    // Clear content, formatting, borders
+    clearRange.clear();
   }
 
   // Remove existing filter if any
   const existingFilter = sheet.getFilter();
   if (existingFilter) existingFilter.remove();
 
-  // Timestamp in row 1
-  sheet.getRange(1, 1).setValue("Results - " + new Date().toLocaleString());
+  // Timestamp above table
+  sheet.getRange(RESULTS_START_ROW - 1, 1).setValue("Results - " + new Date().toLocaleString());
 
   // Headers (A-P)
   const headers = [
@@ -354,7 +429,27 @@ function outputSpreadResults_(sheet, spreads) {
     "Debit", "MaxProfit", "ROI", "LowerDelta", "UpperDelta",
     "LowerOI", "UpperOI", "Liquidity", "Tightness", "Fitness", "OptionStrat"
   ];
-  sheet.getRange(RESULTS_START_ROW, 1, 1, headers.length).setValues([headers]).setFontWeight("bold");
+  const headerNotes = [
+    "Stock ticker symbol",
+    "Option expiration date",
+    "Lower (long) strike - you BUY this call",
+    "Upper (short) strike - you SELL this call",
+    "Spread width = Upper - Lower (max profit potential)",
+    "Net debit to open (editable - formulas recalculate)",
+    "Max profit = Width - Debit (if stock > Upper at expiry)",
+    "Return on Investment = MaxProfit / Debit",
+    "Delta of lower call (0-1). Higher = more ITM, higher prob of profit",
+    "Delta of upper call. Lower than LowerDelta since further OTM",
+    "Open Interest on lower strike. Higher = better liquidity",
+    "Open Interest on upper strike. Want both legs liquid",
+    "Liquidity score = sqrt(LowerOI × UpperOI) / 100",
+    "Bid-ask tightness. Higher = tighter spreads, better fills",
+    "Fitness = ROI × sqrt(Liquidity) × sqrt(Tightness)",
+    "Link to OptionStrat visualization"
+  ];
+  const hdrRange = sheet.getRange(RESULTS_START_ROW, 1, 1, headers.length);
+  hdrRange.setValues([headers]).setFontWeight("bold");
+  hdrRange.setNotes([headerNotes]);
 
   if (spreads.length === 0) return;
 
@@ -384,8 +479,8 @@ function outputSpreadResults_(sheet, spreads) {
     roiFormulas.push([`=IF(F${row}>0,G${row}/F${row},0)`]);
     // Fitness = ROI * SQRT(Liquidity) * SQRT(Tightness)
     fitnessFormulas.push([`=ROUND(H${row}*SQRT(M${row})*SQRT(N${row}),2)`]);
-    // OptionStrat URL
-    optionStratFormulas.push([`=buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row})`]);
+    // OptionStrat URL as hyperlink
+    optionStratFormulas.push([`=HYPERLINK(buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row}),"OptionStrat")`]);
   }
 
   // Set formulas
@@ -402,11 +497,26 @@ function outputSpreadResults_(sheet, spreads) {
   sheet.getRange(dataStartRow, 15, spreads.length, 1).setNumberFormat("0.00"); // Fitness
 
   // Add filter
-  const range = sheet.getRange(RESULTS_START_ROW, 1, spreads.length + 1, headers.length);
-  range.createFilter();
+  const tableRange = sheet.getRange(RESULTS_START_ROW, 1, spreads.length + 1, headers.length);
+  tableRange.createFilter();
 
-  // Auto-resize columns
-  for (let i = 1; i <= headers.length; i++) {
+  // Style as table: header row + banded rows
+  const headerRange = sheet.getRange(RESULTS_START_ROW, 1, 1, headers.length);
+  headerRange.setBackground("#4285f4").setFontColor("white").setFontWeight("bold");
+
+  // Banded rows
+  const dataRange = sheet.getRange(dataStartRow, 1, spreads.length, headers.length);
+  dataRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
+
+  // Borders
+  tableRange.setBorder(true, true, true, true, true, true, "#cccccc", SpreadsheetApp.BorderStyle.SOLID);
+
+  // Auto-resize columns (except OptionStrat)
+  for (let i = 1; i < headers.length; i++) {
     sheet.autoResizeColumn(i);
   }
+  // OptionStrat column: clip text, fixed width
+  const optionStratCol = sheet.getRange(RESULTS_START_ROW, 16, spreads.length + 1, 1);
+  optionStratCol.setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+  sheet.setColumnWidth(16, 100);
 }
