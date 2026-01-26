@@ -12,7 +12,7 @@
  *   - Default tableStartRow = 50
  *   - Generated data table starts at row tableStartRow (headers) / tableStartRow+1 (data)
  *   - TWO charts:
- *       Chart 1: $ P/L vs Price (Shares $, Options $, Total $) + vertical dashed line at current price (if available)
+ *       Chart 1: Portfolio Value vs Price (Shares $, Options $, Total $) + vertical dashed line at current price (if available)
  *       Chart 2: % Return vs Price (Shares %, Options %) (ROI style, not contribution)
  *   - Chart series labels come from the first row of the data table (headers)
  *
@@ -142,7 +142,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
 
   clearStatus_(sheet);
 
-  // ── Parse positions ─────────────────────────────────────
+  // ── Parse positions ────────────────────────────────────────────────
   const shares = [];
   const meta = { currentPrice: null };
 
@@ -165,7 +165,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     return;
   }
 
-  // ── ROI denominators ────────────────────────────────────
+  // ── ROI denominators ────────────────────────────────────────────────
   // Shares denominator: total cost basis
   const sharesCost = shares.reduce((sum, sh) => sum + sh.qty * sh.basis, 0);
 
@@ -180,43 +180,63 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   }, 0);
   const optionsDenom = callInvest + putRisk;
 
-  // ── Build data table ────────────────────────────────────
-  // NOTE: % columns are ROI-style: PL / capital (shares cost basis, options denom)
-  const headerRow = ["Price ($)", "Shares $ P/L", "Options $ P/L", "Total $ P/L", "Shares % ROI", "Options % ROI"];
+  // ── Build data table ────────────────────────────────────────────────
+  // Changed headers: Portfolio VALUE not P/L
+  const headerRow = ["Price ($)", "Shares $", "Options $", "Total $", "Shares % ROI", "Options % ROI"];
   const table = [headerRow];
 
   for (let S = cfg.minPrice; S <= cfg.maxPrice + 1e-9; S += cfg.step) {
-    let sharesPL = 0;
-    let spreadsPL = 0;
+    // Calculate portfolio VALUE at price S (not P/L)
 
-    // Shares P/L at scenario price S
-    for (const sh of shares) sharesPL += (S - sh.basis) * sh.qty;
+    // Shares value = current market value
+    let sharesValue = 0;
+    for (const sh of shares) {
+      sharesValue += S * sh.qty;
+    }
 
-    // Bull call (debit) spread payoff at expiration
+    // Options value = intrinsic value at expiration
+    let optionsValue = 0;
+
+    // Bull call (debit) spread value at expiration
     for (const sp of callSpreads) {
       const width = sp.kShort - sp.kLong;
       if (width <= 0) continue;
       const intrinsic = clamp_(S - sp.kLong, 0, width);
-      spreadsPL += (intrinsic - sp.debit) * 100 * sp.qty;
+      const valuePerSpread = intrinsic * 100; // intrinsic value in dollars
+      optionsValue += valuePerSpread * sp.qty;
     }
 
-    // Bull put (credit) spread payoff at expiration
+    // Bull put (credit) spread value at expiration
     for (const sp of putSpreads) {
       const width = sp.kShort - sp.kLong;
       if (width <= 0) continue;
       const loss = clamp_(sp.kShort - S, 0, width);
-      spreadsPL += (-sp.debit - loss) * 100 * sp.qty;
+      const valuePerSpread = (width - loss) * 100; // what you keep
+      optionsValue += valuePerSpread * sp.qty;
     }
 
-    const totalPL = sharesPL + spreadsPL;
+    Logger.log(`DEBUG Bull Calls: Found ${callSpreads.length} spreads`);
+    callSpreads.forEach((sp, i) => {
+      Logger.log(`  Spread ${i}: ${sp.kLong}/${sp.kShort}, qty=${sp.qty}, debit=${sp.debit}`);
+      const width = sp.kShort - sp.kLong;
+      const maxValue = width * 100 * sp.qty;
+      Logger.log(`    Max value at expiration: $${maxValue.toFixed(2)}`);
+    });
+
+    const totalValue = sharesValue + optionsValue;
+
+    // ROI still based on P/L
+    const sharesPL = sharesValue - sharesCost;
+    const optionsPL = optionsValue - callInvest - putRisk; // P/L relative to capital at risk
+
     const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
-    const optionsROI = optionsDenom > 0 ? (spreadsPL / optionsDenom) : 0;
+    const optionsROI = optionsDenom > 0 ? (optionsPL / optionsDenom) : 0;
 
     table.push([
       round2_(S),
-      round2_(sharesPL),
-      round2_(spreadsPL),
-      round2_(totalPL),
+      round2_(sharesValue),
+      round2_(optionsValue),
+      round2_(totalValue),
       round4_(sharesROI),
       round4_(optionsROI),
     ]);
@@ -227,7 +247,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   const minY = totalYs.length ? Math.min(...totalYs) : 0;
   const maxY = totalYs.length ? Math.max(...totalYs) : 0;
 
-  // ── Write to sheet ──────────────────────────────────────
+  // ── Write to sheet ──────────────────────────────────────────────────
   const startRow = cfg.tableStartRow; // default 50
   const startCol = cfg.tableStartCol;
 
@@ -251,6 +271,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
   sheet.getRange(vlineRow, vlineCol, 3, 2).clearContent();
 
   const hasCurrentPrice = isFinite(meta.currentPrice);
+  Logger.log(`Current Price Detection: hasCurrentPrice=${hasCurrentPrice}, meta.currentPrice=${meta.currentPrice}`);
   if (hasCurrentPrice) {
     sheet.getRange(vlineRow, vlineCol, 3, 2).setValues([
       ["CurrentPrice", "Y"],
@@ -259,7 +280,7 @@ function plotForSymbol_(ss, symbolRaw, entries) {
     ]);
   }
 
-  // ── Charts: ensure TWO charts exist (create missing; refresh existing preserving box) ───────────────
+  // ── Charts: ensure TWO charts exist (create missing; refresh existing preserving box) ──────────────────
   ensureTwoCharts_(sheet, symbol, cfg, {
     startRow,
     startCol,
@@ -327,13 +348,11 @@ function ensureTwoCharts_(sheet, symbol, cfg, args) {
     .addRange(dollarRange)
     .setOption("title", dollarTitle)
     .setOption("hAxis", { title: `${symbol} Price ($)` })
-    .setOption("vAxis", { title: "P/L ($)" })
+    .setOption("vAxis", { title: "Portfolio Value ($)" })
     .setOption("legend", { position: "right" })
     .setOption("curveType", "none");
 
   // Ensure series labels come from header row:
-  // With addRange(contiguous), Sheets uses the first row as headers automatically if present.
-  // We additionally set labelInLegend explicitly to headerRow names (best-effort).
   const dollarSeries = {
     0: { labelInLegend: headerRow[1] },
     1: { labelInLegend: headerRow[2] },
@@ -341,6 +360,7 @@ function ensureTwoCharts_(sheet, symbol, cfg, args) {
   };
 
   if (vlineRange) {
+    Logger.log(`Adding vline range: ${vlineRange.getA1Notation()}`);
     dollarBuilder = dollarBuilder.addRange(vlineRange);
     dollarSeries[3] = { labelInLegend: "Current Price", lineDashStyle: [6, 4], lineWidth: 2 };
   }
@@ -624,8 +644,8 @@ function buildMissingRangeMessage_(ss, symbol, missingItems, stockCount, spreadC
   if (tableHints.length > 0) {
     lines.push("");
     for (const t of tableHints) {
-      lines.push(`I can see a Sheets TABLE named "${t}", but Apps Script can’t read tables directly.`);
-      lines.push(`Please create a named range "${t}Table" that contains the table’s data.`);
+      lines.push(`I can see a Sheets TABLE named "${t}", but Apps Script can't read tables directly.`);
+      lines.push(`Please create a named range "${t}Table" that contains the table's data.`);
       lines.push("");
     }
   }
@@ -683,7 +703,12 @@ function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
     "purchaseprice",
   ]);
   const idxCurrentPrice = findCol_(headerNorm, ["currentprice", "marketprice", "mark", "last", "price"]);
-
+  
+  // Debug: log what we're looking for
+  Logger.log(`parseSharesFromTableForSymbol: symbol=${symbol}`);
+  Logger.log(`Headers (normalized): ${JSON.stringify(headerNorm)}`);
+  Logger.log(`idxCurrentPrice=${idxCurrentPrice} (looking for: currentprice, marketprice, mark, last, price)`);
+  if (idxCurrentPrice >= 0) Logger.log(`Found column: "${rows[0][idxCurrentPrice]}"`);
   const out = [];
 
   for (let r = 1; r < rows.length; r++) {
@@ -695,6 +720,7 @@ function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
     if (idxCurrentPrice >= 0 && outMeta && !isFinite(outMeta.currentPrice)) {
       const cp = toNum_(rows[r][idxCurrentPrice]);
       if (isFinite(cp)) outMeta.currentPrice = cp;
+      Logger.log(`Row ${r}: Found current price = ${cp}`);
     }
 
     if (idxQty < 0 || idxBasis < 0) continue;
@@ -713,7 +739,7 @@ function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
 
 /**
  * Spread parsing:
- * - Counts ONLY “definition rows” that contain BOTH Long Strike and Short Strike
+ * - Counts ONLY "definition rows" that contain BOTH Long Strike and Short Strike
  * - Ignores fill-detail rows automatically
  * - Uses debit cost preference:
  *     Ave Debit / Avg Debit / Average Debit
@@ -725,6 +751,15 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
   if (!rows || rows.length < 2) return [];
 
   const headerNorm = rows[0].map(normKey_);
+  
+  // DEBUG: Log what we're parsing
+  if (false) {
+      Logger.log(`\n=== parseSpreadsFromTableForSymbol_ DEBUG ===`);
+      Logger.log(`Symbol: ${symbol}, Flavor: ${flavor}, Rows: ${rows.length}`);
+      Logger.log(`Headers (raw): ${JSON.stringify(rows[0])}`);
+      Logger.log(`Headers (normalized): ${JSON.stringify(headerNorm)}`);
+  }
+  
   const idxSym = findCol_(headerNorm, ["symbol", "ticker"]);
 
   const idxQty = findCol_(headerNorm, [
@@ -760,6 +795,8 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
   const idxAveDebit = findCol_(headerNorm, ["avedebit", "avgdebit", "averagedebit"]);
   const idxRecDebit = findCol_(headerNorm, ["recdebit", "recommendeddebit"]);
   const idxDebitFallback = findCol_(headerNorm, ["netdebit", "debit", "cost", "price", "entry", "premium"]);
+  
+  Logger.log(`Column indexes: idxQty=${idxQty}, idxLong=${idxLong}, idxShort=${idxShort}`);
 
   if (idxLong < 0 || idxShort < 0) return [];
 
@@ -779,6 +816,11 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
     if (!isFinite(kLong) || !isFinite(kShort)) continue;
 
     const qty = assumeQty ? 1 : toNum_(rows[r][idxQty]);
+    
+    if (r <= 5) { // Debug first few rows
+      Logger.log(`Row ${r}: assumeQty=${assumeQty}, raw="${rows[r][idxQty]}", parsed qty=${qty}`);
+    }
+    
     if (!isFinite(qty) || qty === 0) continue;
 
     let debit = NaN;
