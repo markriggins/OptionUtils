@@ -4,20 +4,26 @@
  * These functions provide recommended limit prices for opening and closing bull call spreads using option quotes from the "OptionPricesUploaded" sheet.
  * They leverage cached lookups via XLookupByKeys for efficiency.
  *
- * Expected sheet headers (case-insensitive): symbol, expiration, strike, type, bid, mid, ask.
+ * Expected sheet headers (case-insensitive): symbol, expiration, strike, type, bid, mid, ask, volume, openint.
  *
  * Expiration inputs are normalized to "YYYY-MM-DD" format (accepts strings or Date objects).
  * Strikes are converted to numbers.
  *
  * The avgMinutesToExecute parameter models execution time/patience:
  * - 0: Aggressive (worst-case fills at current ask/bid).
- * - Higher values: More patient, improving toward better prices using an exponential decay curve (half-life 60 minutes).
+ * - Higher values: More patient, improving toward mid price.
+ *
+ * Liquidity-aware pricing:
+ * - Uses volume and open interest to calculate a liquidity score (0-1).
+ * - High liquidity (volume+OI ~1000+): patient orders can approach mid price.
+ * - Low liquidity: stuck near aggressive prices even with patience.
+ * - This prevents unrealistically optimistic prices for illiquid options.
  *
  * Returns a single rounded number (to 2 decimals) or an error string starting with "#".
  *
  * Dependencies: Requires XLookupByKeys and its cache setup.
  *
- * Version: 1.0
+ * Version: 2.0 - Added liquidity-aware pricing
  */
 
 /**
@@ -51,15 +57,11 @@ function recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upper
   const upper = getOptionQuote_(sym, exp, hi, "Call"); // you SELL this to open
   if (!hasBidAsk_(lower)) return "#No Data for Lower:" + lowerStrike;
   if (!hasBidAsk_(upper)) return "#No Data for Upper:" + upperStrike;
-  // At alpha=0:
-  // buyLimit = lower.ask
-  // sellLimit = upper.bid
-  //
-  // As alpha increases (more patience):
-  // buyLimit moves Ask -> Bid (you try to pay less)
-  // sellLimit moves Bid -> Ask (you try to receive more)
-  const buyLimit = lower.ask - alpha * (lower.ask - lower.bid); // Ask -> Bid
-  const sellLimit = upper.bid + alpha * (upper.ask - upper.bid); // Bid -> Ask
+  // Use liquidity-aware pricing:
+  // - High liquidity + patience → can approach mid
+  // - Low liquidity → stuck near aggressive prices
+  const buyLimit = getRealisticBuyPrice_(lower, alpha);
+  const sellLimit = getRealisticSellPrice_(upper, alpha);
   let debit = buyLimit - sellLimit;
   if (debit < 0) debit = 0;
   return round2_(debit);
@@ -93,11 +95,9 @@ function recommendBullCallSpreadCloseCredit(symbol, expiration, lowerStrike, upp
   const upper = getOptionQuote_(sym, exp, hi, "Call"); // you BUY this to close
   if (!hasBidAsk_(lower)) return "#No Data for Lower:" + lowerStrike;
   if (!hasBidAsk_(upper)) return "#No Data for Upper:" + upperStrike;
-  // At alpha=0:
-  // sellLimit = lower.bid
-  // buyLimit = upper.ask
-  const sellLimit = lower.bid + alpha * (lower.ask - lower.bid); // Bid -> Ask
-  const buyLimit = upper.ask - alpha * (upper.ask - upper.bid); // Ask -> Bid
+  // Use liquidity-aware pricing
+  const sellLimit = getRealisticSellPrice_(lower, alpha);
+  const buyLimit = getRealisticBuyPrice_(upper, alpha);
   let credit = sellLimit - buyLimit;
   if (credit < 0) credit = 0;
   return round2_(credit);
@@ -193,18 +193,73 @@ function getOptionQuote_(symbol, expiration, strike, type) {
   const res = XLookupByKeys(
     [symbol, expiration, +strike, type],
     ["symbol", "expiration", "strike", "type"],
-    ["bid", "mid", "ask"],
+    ["bid", "mid", "ask", "volume", "openint"],
     SHEET_NAME
   );
   const row = res && res[0];
   if (!row) return null;
   const quote = {
-    bid: row[0] === "" ? null : row[0],
-    mid: row[1] === "" ? null : row[1],
-    ask: row[2] === "" ? null : row[2]
+    bid: row[0] === "" ? null : +row[0],
+    mid: row[1] === "" ? null : +row[1],
+    ask: row[2] === "" ? null : +row[2],
+    volume: row[3] === "" ? 0 : +row[3],
+    openint: row[4] === "" ? 0 : +row[4]
   };
   cache.put(cacheKey, JSON.stringify(quote), 300); // Cache for 5 min
   return quote;
+}
+
+/**
+ * Calculate liquidity score from volume and open interest.
+ * Returns 0 (illiquid) to 1 (very liquid).
+ *
+ * @param {Object} quote - Quote with volume and openint
+ * @returns {number} Liquidity score 0-1
+ */
+function getLiquidityScore_(quote) {
+  const volume = quote.volume || 0;
+  const openint = quote.openint || 0;
+  // Log scale: need ~1000 combined activity for full liquidity
+  // volume counts more than OI (OI/10)
+  return Math.min(1, Math.log10(1 + volume + openint / 10) / 3);
+}
+
+/**
+ * Get realistic buy price accounting for liquidity.
+ *
+ * - alpha=0: pay ask (aggressive)
+ * - alpha=1, high liquidity: can approach mid
+ * - alpha=1, low liquidity: stuck near ask
+ *
+ * @param {Object} quote - Quote with bid, mid, ask, volume, openint
+ * @param {number} alpha - Patience factor 0-1
+ * @returns {number} Realistic buy limit price
+ */
+function getRealisticBuyPrice_(quote, alpha) {
+  const liquidity = getLiquidityScore_(quote);
+  // Best achievable: high liquidity → mid, low liquidity → ask
+  const bestAchievable = quote.ask - liquidity * (quote.ask - quote.mid);
+  // Interpolate from ask toward best achievable based on patience
+  return quote.ask - alpha * (quote.ask - bestAchievable);
+}
+
+/**
+ * Get realistic sell price accounting for liquidity.
+ *
+ * - alpha=0: receive bid (aggressive)
+ * - alpha=1, high liquidity: can approach mid
+ * - alpha=1, low liquidity: stuck near bid
+ *
+ * @param {Object} quote - Quote with bid, mid, ask, volume, openint
+ * @param {number} alpha - Patience factor 0-1
+ * @returns {number} Realistic sell limit price
+ */
+function getRealisticSellPrice_(quote, alpha) {
+  const liquidity = getLiquidityScore_(quote);
+  // Best achievable: high liquidity → mid, low liquidity → bid
+  const bestAchievable = quote.bid + liquidity * (quote.mid - quote.bid);
+  // Interpolate from bid toward best achievable based on patience
+  return quote.bid + alpha * (bestAchievable - quote.bid);
 }
 
 /**
@@ -267,12 +322,11 @@ function recommendIronCondorOpenCredit(
   if (!hasBidAsk_(qSellPut)) return "#No Data for Sell Put:" + sym + " " + exp + " @" + sellPut;
   if (!hasBidAsk_(qSellCall)) return "#No Data for Sell Call:" + sym + " " + exp + " @" + sellCall;
   if (!hasBidAsk_(qBuyCall)) return "#No Data for Buy Call:" + sym + " " + exp + " @" + buyCall;
-  // BUY legs: Ask -> Bid as alpha increases (try to pay less)
-  const buyPutLimit = qBuyPut.ask - alpha * (qBuyPut.ask - qBuyPut.bid);
-  const buyCallLimit = qBuyCall.ask - alpha * (qBuyCall.ask - qBuyCall.bid);
-  // SELL legs: Bid -> Ask as alpha increases (try to receive more)
-  const sellPutLimit = qSellPut.bid + alpha * (qSellPut.ask - qSellPut.bid);
-  const sellCallLimit = qSellCall.bid + alpha * (qSellCall.ask - qSellCall.bid);
+  // Use liquidity-aware pricing
+  const buyPutLimit = getRealisticBuyPrice_(qBuyPut, alpha);
+  const buyCallLimit = getRealisticBuyPrice_(qBuyCall, alpha);
+  const sellPutLimit = getRealisticSellPrice_(qSellPut, alpha);
+  const sellCallLimit = getRealisticSellPrice_(qSellCall, alpha);
   // Net credit to open
   let credit = (sellPutLimit + sellCallLimit) - (buyPutLimit + buyCallLimit);
   if (credit < 0) credit = 0;
@@ -328,12 +382,11 @@ function recommendIronCondorCloseDebit(
   if (!hasBidAsk_(qShortPut)) return "#No Data for Sell Put:" + sellPut;
   if (!hasBidAsk_(qLongCall)) return "#No Data for Buy Call:" + buyCall;
   if (!hasBidAsk_(qShortCall)) return "#No Data for Sell Call:" + sellCall;
-  // SELL-to-close legs: Bid -> Ask as alpha increases (try to receive more)
-  const sellLongPutLimit = qLongPut.bid + alpha * (qLongPut.ask - qLongPut.bid);
-  const sellLongCallLimit = qLongCall.bid + alpha * (qLongCall.ask - qLongCall.bid);
-  // BUY-to-close legs: Ask -> Bid as alpha increases (try to pay less)
-  const buyShortPutLimit = qShortPut.ask - alpha * (qShortPut.ask - qShortPut.bid);
-  const buyShortCallLimit = qShortCall.ask - alpha * (qShortCall.ask - qShortCall.bid);
+  // Use liquidity-aware pricing
+  const sellLongPutLimit = getRealisticSellPrice_(qLongPut, alpha);
+  const sellLongCallLimit = getRealisticSellPrice_(qLongCall, alpha);
+  const buyShortPutLimit = getRealisticBuyPrice_(qShortPut, alpha);
+  const buyShortCallLimit = getRealisticBuyPrice_(qShortCall, alpha);
   // Net debit to close
   let debit = (buyShortPutLimit + buyShortCallLimit) - (sellLongPutLimit + sellLongCallLimit);
   if (debit < 0) debit = 0;
