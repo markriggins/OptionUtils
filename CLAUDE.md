@@ -27,7 +27,7 @@ clasp pull
 
 **Key Components**:
 
-- `PlotPortfolioValueByPrice.js` - Main entry point. Reads a "Portfolios" table defining which named ranges belong to which symbol, then generates per-symbol tabs with config tables, data tables, and charts ($ value and % ROI).
+- `PlotPortfolioValueByPrice.js` - Main entry point. Reads positions from named ranges (Stocks, BullCallSpreads, IronCondors), extracts unique symbols, then generates per-symbol `<SYMBOL>PortfolioValueByPrice` tabs with config tables, data tables, and charts ($ value and % ROI).
 
 - `XLookupByKeys.js` - Multi-key lookup function with three-tier caching (in-memory memo → chunked/gzipped DocumentCache → sheet rebuild). Exposes `XLookupByKeys()` as a custom spreadsheet function.
 
@@ -36,13 +36,13 @@ clasp pull
 - `onOpen.js` - Registers the "OptionTools" menu with available actions.
 
 **Data Flow**:
-1. User defines positions in named ranges (stocks table, spreads table)
-2. User creates "Portfolios" table mapping: Symbol | Type | RangeName
-3. `PlotPortfolioValueByPrice` reads portfolios, parses positions, generates price-vs-value data and charts
+1. User defines positions in named ranges on the Positions sheet (Stocks, BullCallSpreads, IronCondors)
+2. Each table has a Symbol column to identify which ticker the position belongs to
+3. `PlotPortfolioValueByPrice` extracts unique symbols from position tables, parses positions by symbol, generates price-vs-value data and charts per symbol
 
 **Named Range Convention**: Google Sheets Tables are not readable by Apps Script. The convention is:
-- Table name: `TslaBullCallSpreads`
-- Named range: `TslaBullCallSpreadsTable`
+- Table name: `BullCallSpreads`
+- Named range: `BullCallSpreadsTable`
 
 The script tries the base name first, then appends "Table" as fallback.
 

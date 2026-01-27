@@ -3,8 +3,13 @@
  * ------------------------------------------------------------
  * PlotPortfolioValueByPrice
  *
- * Reads a "Portfolios" table describing which inputs belong to which symbol,
+ * Reads positions from named ranges on the Positions sheet, extracts unique symbols,
  * then creates/refreshes a "<SYMBOL>PortfolioValueByPrice" tab for EACH symbol.
+ *
+ * Position tables (on Positions sheet):
+ *   - Stocks or StocksTable
+ *   - BullCallSpreads or BullCallSpreadsTable
+ *   - IronCondors or IronCondorsTable
  *
  * For each symbol tab:
  *   - Config table at K1:L10 (column K = 11) with labels/descriptions
@@ -18,13 +23,6 @@
  *       Chart 4: Individual Spreads ROI by Price (% return for each spread)
  *   - Chart series labels come from the first row of the data table (headers)
  *
- * Portfolios table columns: Symbol | Type | RangeName
- * Supported types (canonical singular): stock, bull-call-spread, bull-put-spread
- * Accepted aliases:
- *   - shares, share, stocks -> stock
- *   - bull-call-spreads, BCS -> bull-call-spread
- *   - bull-put-spreads,  BPS -> bull-put-spread
- *
  * Named range resolution:
  *   - RangeName must be a Named Range; if not found, script tries RangeName + "Table"
  */
@@ -37,24 +35,23 @@ function PlotPortfolioValueByPrice() {
   Logger.log("PlotPortfolioValueByPrice Started");
 
   const ss = SpreadsheetApp.getActive();
-  const portfoliosBySymbol = ensureAndReadPortfolios_(ss);
 
-  const symbols = Object.keys(portfoliosBySymbol);
+  // Get unique symbols from position tables
+  const symbols = getUniqueSymbolsFromPositions_(ss);
+
   if (symbols.length === 0) {
     SpreadsheetApp.getUi().alert(
-      "No symbols found in Portfolios.\n\n" +
-        "Add rows to the 'Portfolios' sheet with columns:\n" +
-        "  Symbol | Type | RangeName\n\n" +
-        "Type must be one of:\n" +
-        "  stock\n" +
-        "  bull-call-spread\n" +
-        "  bull-put-spread\n"
+      "No symbols found in position tables.\n\n" +
+        "Add positions to tables on the Positions sheet:\n" +
+        "  - BullCallSpreadsTable (with Symbol column)\n" +
+        "  - Stocks (with Symbol column)\n" +
+        "  - IronCondorsTable (with Symbol column)\n"
     );
     return;
   }
 
   for (const symbol of symbols) {
-    plotForSymbol_(ss, symbol, portfoliosBySymbol[symbol]);
+    plotForSymbol_(ss, symbol);
   }
 }
 
@@ -74,9 +71,7 @@ function onEdit(e) {
       const cfgRange = nr.getRange();
       if (rangesIntersect_(e.range, cfgRange)) {
         const symbol = nr.getName().slice("Config_".length);
-        const portfoliosBySymbol = ensureAndReadPortfolios_(ss);
-        const entries = portfoliosBySymbol[String(symbol || "").trim().toUpperCase()] || [];
-        plotForSymbol_(ss, symbol, entries);
+        plotForSymbol_(ss, symbol);
         return;
       }
     }
@@ -86,10 +81,39 @@ function onEdit(e) {
 }
 
 /* =========================================================
+   Get unique symbols from position tables
+   ========================================================= */
+
+function getUniqueSymbolsFromPositions_(ss) {
+  const symbols = new Set();
+
+  const tableNames = ["Stocks", "BullCallSpreads", "IronCondors"];
+
+  for (const tableName of tableNames) {
+    const range = getNamedRangeWithTableFallback_(ss, tableName);
+    if (!range) continue;
+
+    const rows = range.getValues();
+    if (rows.length < 2) continue;
+
+    const headerNorm = rows[0].map(normKey_);
+    const idxSym = findCol_(headerNorm, ["symbol", "ticker"]);
+    if (idxSym < 0) continue;
+
+    for (let r = 1; r < rows.length; r++) {
+      const sym = String(rows[r][idxSym] ?? "").trim().toUpperCase();
+      if (sym) symbols.add(sym);
+    }
+  }
+
+  return Array.from(symbols).sort();
+}
+
+/* =========================================================
    Main per-symbol logic
    ========================================================= */
 
-function plotForSymbol_(ss, symbolRaw, entries) {
+function plotForSymbol_(ss, symbolRaw) {
   const symbol = String(symbolRaw || "").trim().toUpperCase();
   if (!symbol) return;
 
@@ -100,45 +124,22 @@ function plotForSymbol_(ss, symbolRaw, entries) {
 
   const cfg = ensureAndReadConfig_(ss, sheet, symbol);
 
-  if (!entries || entries.length === 0) {
-    writeStatus_(sheet, `No portfolio inputs found for ${symbol} in the Portfolios table.`);
-    return;
-  }
-
+  // Get ranges from known position tables
   const stockRanges = [];
   const callSpreadRanges = [];
   const putSpreadRanges = [];
-  const missingItems = [];
 
-  for (const e of entries) {
-    const rangeNameRaw = String(e.rangeName ?? "").trim();
-    const type = String(e.type ?? "").trim();
+  const stocksRange = getNamedRangeWithTableFallback_(ss, "Stocks");
+  if (stocksRange) stockRanges.push(stocksRange);
 
-    if (!rangeNameRaw || !type) continue;
+  const bcsRange = getNamedRangeWithTableFallback_(ss, "BullCallSpreads");
+  if (bcsRange) callSpreadRanges.push(bcsRange);
 
-    const rng = getNamedRangeWithTableFallback_(ss, rangeNameRaw);
-    if (!rng) {
-      missingItems.push({ type, rangeName: rangeNameRaw });
-      continue;
-    }
+  const icRange = getNamedRangeWithTableFallback_(ss, "IronCondors");
+  // Iron condors have both put and call spreads - handle separately if needed
 
-    if (type === "stock") stockRanges.push(rng);
-    else if (type === "bull-call-spread") callSpreadRanges.push(rng);
-    else if (type === "bull-put-spread") putSpreadRanges.push(rng);
-  }
-
-  if (
-    missingItems.length > 0 ||
-    (stockRanges.length === 0 && callSpreadRanges.length === 0 && putSpreadRanges.length === 0)
-  ) {
-    const msg = buildMissingRangeMessage_(
-      ss,
-      symbol,
-      missingItems,
-      stockRanges.length,
-      callSpreadRanges.length + putSpreadRanges.length
-    );
-    writeStatus_(sheet, msg);
+  if (stockRanges.length === 0 && callSpreadRanges.length === 0) {
+    writeStatus_(sheet, `No position tables found. Create named ranges:\n  - Stocks or StocksTable\n  - BullCallSpreads or BullCallSpreadsTable`);
     return;
   }
 
@@ -573,131 +574,7 @@ function ensureAndReadConfig_(ss, sheet, symbol) {
 }
 
 /* =========================================================
-   Portfolios sheet & validation
-   ========================================================= */
-
-function ensureAndReadPortfolios_(ss) {
-  let sh = ss.getSheetByName("Portfolios");
-  if (!sh) sh = ss.insertSheet("Portfolios");
-
-  const want = ["Symbol", "Type", "RangeName"];
-  const existingHeader = sh.getRange(1, 1, 1, 3).getValues()[0];
-  const headerOk = want.every((h, i) => normKey_(existingHeader[i]) === normKey_(h));
-  if (!headerOk) {
-    sh.getRange(1, 1, 1, 3).setValues([want]).setFontWeight("bold");
-    sh.autoResizeColumns(1, 3);
-  }
-
-  const lastRow = Math.max(1, sh.getLastRow());
-  const rng = sh.getRange(1, 1, lastRow, 3);
-  const nr = ss.getNamedRanges().find(x => x.getName() === "Portfolios");
-  if (!nr) {
-    ss.setNamedRange("Portfolios", rng);
-  } else if (!rangesEqual_(nr.getRange(), rng)) {
-    nr.remove();
-    ss.setNamedRange("Portfolios", rng);
-  }
-
-  const values = rng.getValues();
-  if (values.length < 2) return {};
-
-  validatePortfoliosTableOrThrow_(values);
-
-  const h = values[0].map(normKey_);
-  const iSym = findCol_(h, ["symbol"]);
-  const iType = findCol_(h, ["type"]);
-  const iRange = findCol_(h, ["rangename"]);
-  if ([iSym, iType, iRange].some(i => i < 0)) return {};
-
-  const out = {};
-  for (let r = 1; r < values.length; r++) {
-    const sym = String(values[r][iSym] ?? "").trim().toUpperCase();
-    const typ = normalizePortfolioType_(values[r][iType]);
-    const rangeName = String(values[r][iRange] ?? "").trim();
-
-    if (!sym || !typ || !rangeName) continue;
-
-    out[sym] = out[sym] || [];
-    out[sym].push({ type: typ, rangeName });
-  }
-
-  return out;
-}
-
-function normalizePortfolioType_(raw) {
-  if (raw == null) return null;
-  const t = String(raw)
-    .normalize("NFKD")
-    .toLowerCase()
-    .replace(/[\u2010-\u2015\u2212]/g, "-")
-    .replace(/\u00a0/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (/^(stock|stocks|share|shares)$/.test(t)) return "stock";
-  if (/^(bcs|bull[\s.\-]?call[\s.\-]?spread(s)?)$/.test(t)) return "bull-call-spread";
-  if (/^(bps|bull[\s.\-]?put[\s.\-]?spread(s)?)$/.test(t)) return "bull-put-spread";
-  return null;
-}
-
-function validatePortfoliosTableOrThrow_(rows) {
-  if (!rows || rows.length < 2) return;
-
-  const header = rows[0].map(normKey_);
-  const iSym = findCol_(header, ["symbol"]);
-  const iType = findCol_(header, ["type"]);
-  const iRange = findCol_(header, ["rangename"]);
-  if (iSym < 0 || iType < 0 || iRange < 0) return;
-
-  const errors = [];
-  for (let r = 1; r < rows.length; r++) {
-    const rowNum = r + 1;
-    const sym = String(rows[r][iSym] || "").trim().toUpperCase();
-    const typ = normalizePortfolioType_(rows[r][iType]);
-    const rangeName = String(rows[r][iRange] || "").trim();
-
-    if (!sym) errors.push(`Row ${rowNum}: Symbol is blank`);
-    else if (!/^[A-Z0-9.-]+$/.test(sym)) errors.push(`Row ${rowNum}: Invalid symbol "${rows[r][iSym]}"`);
-
-    if (!typ) errors.push(`Row ${rowNum}: Invalid Type "${rows[r][iType]}"`);
-
-    if (!rangeName) errors.push(`Row ${rowNum}: RangeName is blank`);
-  }
-
-  if (errors.length > 0) {
-    showPortfolioValidationDialog_(errors);
-    throw new Error("Invalid Portfolios table");
-  }
-}
-
-function showPortfolioValidationDialog_(errors) {
-  const html = HtmlService.createHtmlOutput(
-    `<div style="font-family:Arial; font-size:13px">
-       <h3>Invalid Portfolios Table</h3>
-       <p>Please fix the following issues:</p>
-       <ul>${errors.map(e => `<li><pre style="margin:0;white-space:pre-wrap">${escapeHtml_(e)}</pre></li>`).join("")}</ul>
-       <p><b>Allowed Types:</b><br>
-          stock (or shares/stocks)<br>
-          bull-call-spread (or bull-call-spreads / BCS)<br>
-          bull-put-spread (or bull-put-spreads / BPS)
-       </p>
-     </div>`
-  )
-    .setWidth(680)
-    .setHeight(520);
-
-  SpreadsheetApp.getUi().showModalDialog(html, "Portfolio Validation Error");
-}
-
-function escapeHtml_(s) {
-  return String(s == null ? "" : s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-/* =========================================================
-   Named range resolution + UX messaging
+   Named range resolution
    ========================================================= */
 
 function getNamedRangeWithTableFallback_(ss, rangeNameRaw) {
@@ -711,54 +588,6 @@ function getNamedRangeWithTableFallback_(ss, rangeNameRaw) {
   if (r) return r;
 
   return null;
-}
-
-function buildMissingRangeMessage_(ss, symbol, missingItems, stockCount, spreadCount) {
-  const lines = [`Missing inputs for ${symbol}:`, `- Missing named ranges:`];
-  const tableHints = [];
-
-  for (const item of missingItems || []) {
-    lines.push(`  • ${item.type} -> ${item.rangeName}`);
-    if (tableExistsByStructuredRefProbe_(ss, item.rangeName)) tableHints.push(item.rangeName);
-  }
-
-  if (stockCount === 0 && spreadCount === 0) lines.push(`- No valid input ranges found.`);
-  lines.push("");
-  lines.push("Fix Portfolios sheet and create named ranges, then rerun PlotPortfolioValueByPrice.");
-
-  if (tableHints.length > 0) {
-    lines.push("");
-    for (const t of tableHints) {
-      lines.push(`I can see a Sheets TABLE named "${t}", but Apps Script can't read tables directly.`);
-      lines.push(`Please create a named range "${t}Table" that contains the table's data.`);
-      lines.push("");
-    }
-  }
-
-  return lines.join("\n");
-}
-
-function tableExistsByStructuredRefProbe_(ss, tableNameRaw) {
-  const name = String(tableNameRaw || "").trim();
-  if (!name) return false;
-
-  const scratch = ss.getSheetByName("Portfolios") || ss.getActiveSheet();
-  const cell = scratch.getRange("ZZ1");
-
-  const ref = tableRefName_(name);
-  cell.setFormula(`=IFERROR(ROWS(${ref}[#ALL]),"")`);
-  SpreadsheetApp.flush();
-
-  const v = String(cell.getDisplayValue() || "").trim();
-  cell.clearContent();
-
-  return v !== "";
-}
-
-function tableRefName_(name) {
-  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return name;
-  const escaped = name.replace(/'/g, "''");
-  return `'${escaped}'`;
 }
 
 /* =========================================================

@@ -13,12 +13,12 @@ That tab contains:
 Google Sheets **Tables** are not readable by Apps Script.
 
 **Convention used:**
-- Table name: `TslaBullCallSpreads`
-- Named range: `TslaBullCallSpreadsTable`
+- Table name: `BullCallSpreads`
+- Named range: `BullCallSpreadsTable`
 
 The script:
-1. Tries `TslaBullCallSpreads`
-2. Falls back to `TslaBullCallSpreadsTable`
+1. Tries `BullCallSpreads`
+2. Falls back to `BullCallSpreadsTable`
 
 If a Table exists but the Named Range does not, the script tells you exactly what to create.
 
