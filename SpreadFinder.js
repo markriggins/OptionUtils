@@ -21,7 +21,6 @@ const SPREAD_FINDER_SHEET = "SpreadFinder";
 const OPTION_PRICES_SHEET = "OptionPricesUploaded";
 const CONFIG_COL = 1; // Column A
 const CONFIG_START_ROW = 1;
-const RESULTS_START_ROW = 13; // After config (10 rows) + spacing
 
 // Column letters for formulas
 const COLS = "ABCDEFGHIJKLMNOP";
@@ -62,17 +61,20 @@ function runSpreadFinder() {
   }
   Logger.log("Generated " + spreads.length + " spreads");
 
-  // Load existing short strikes from BullCallSpreads to avoid conflicts
-  const heldShortStrikes = loadHeldShortStrikes_(ss);
-  Logger.log("Held short strikes: " + JSON.stringify([...heldShortStrikes]));
+  // Load existing short strikes from BullCallSpreads to avoid conflicts (by symbol)
+  const heldShortStrikesBySymbol = loadHeldShortStrikes_(ss);
+  for (const [sym, strikes] of heldShortStrikesBySymbol) {
+    Logger.log(`Held short strikes for ${sym}: ${JSON.stringify([...strikes])}`);
+  }
 
   // Filter by config constraints
   const minExpDate = config.minExpirationDate;
   const filtered = spreads.filter(s => {
     // Parse expiration date
     const expDate = new Date(s.expiration);
-    // Can't use a strike as long if we're already short it
-    const hasConflict = heldShortStrikes.has(s.lowerStrike);
+    // Can't use a strike as long if we're already short it (for same symbol)
+    const symbolShorts = heldShortStrikesBySymbol.get(s.symbol);
+    const hasConflict = symbolShorts ? symbolShorts.has(s.lowerStrike) : false;
     return s.debit > 0 &&
       s.debit <= config.maxDebit &&
       s.roi >= config.minROI &&
@@ -90,7 +92,7 @@ function runSpreadFinder() {
   filtered.sort((a, b) => b.fitness - a.fitness);
 
   // Output results to same sheet below config
-  outputSpreadResults_(sheet, filtered);
+  outputSpreadResults_(sheet, filtered, config);
 
   // Debug info
   const debugMsg = `Options loaded: ${options.length}\n` +
@@ -125,7 +127,8 @@ function ensureSpreadFinderSheet_(ss) {
     ["maxDebit", 50, "Maximum debit per share"],
     ["minROI", 0.5, "Minimum ROI (0.5 = 50% return)"],
     ["maxLowerStrike", 9999, "Maximum lower strike price"],
-    ["minExpirationMonths", 6, "Minimum months until expiration"]
+    ["minExpirationMonths", 6, "Minimum months until expiration"],
+    ["startTableOnRow", 20, "Row number where results table starts"]
   ];
   // Read existing values to preserve user edits
   const existingValues = {};
@@ -171,13 +174,14 @@ function loadSpreadFinderConfig_(sheet) {
     maxDebit: 50,
     minROI: 0.5,
     maxLowerStrike: 9999,
-    minExpirationMonths: 6
+    minExpirationMonths: 6,
+    startTableOnRow: 20
   };
 
   const config = { ...defaults };
 
-  // Read config rows (rows 2-10, columns Q-R)
-  const data = sheet.getRange(CONFIG_START_ROW + 1, CONFIG_COL, 9, 2).getValues();
+  // Read config rows (rows 2-11, columns A-B)
+  const data = sheet.getRange(CONFIG_START_ROW + 1, CONFIG_COL, 10, 2).getValues();
   for (const row of data) {
     const setting = (row[0] || "").toString().trim();
     const value = row[1];
@@ -348,63 +352,69 @@ function generateSpreads_(chain, config) {
 
 /**
  * Loads existing short strikes from BullCallSpreads table on Positions sheet.
- * Returns a Set of short strike numbers to avoid conflicts.
+ * Returns a Map of symbol -> Set of short strike numbers to avoid conflicts.
  */
 function loadHeldShortStrikes_(ss) {
-  const shortStrikes = new Set();
+  const shortStrikesBySymbol = new Map();
 
   const sheet = ss.getSheetByName("Positions");
   if (!sheet) {
     Logger.log("Positions sheet not found, skipping conflict check");
-    return shortStrikes;
+    return shortStrikesBySymbol;
   }
 
   const data = sheet.getDataRange().getValues();
-  if (data.length < 2) return shortStrikes;
+  if (data.length < 2) return shortStrikesBySymbol;
 
-  // Find header row with "Long Strike" and "Short Strike"
+  // Find header row with "Symbol", "Short Strike", "Contracts"
   let headerRow = -1;
+  let symbolCol = -1;
   let shortStrikeCol = -1;
   let contractsCol = -1;
 
   for (let r = 0; r < Math.min(10, data.length); r++) {
     for (let c = 0; c < data[r].length; c++) {
       const val = (data[r][c] || "").toString().toLowerCase().trim();
+      if (val === "symbol") symbolCol = c;
       if (val === "short strike") {
         headerRow = r;
         shortStrikeCol = c;
       }
-      if (val === "contracts") {
-        contractsCol = c;
-      }
+      if (val === "contracts") contractsCol = c;
     }
     if (headerRow >= 0) break;
   }
 
   if (headerRow < 0 || shortStrikeCol < 0) {
     Logger.log("BullCallSpreads table not found on Positions sheet");
-    return shortStrikes;
+    return shortStrikesBySymbol;
   }
 
   // Read short strikes from rows below header (where contracts > 0)
   for (let r = headerRow + 1; r < data.length; r++) {
+    const symbol = symbolCol >= 0 ? (data[r][symbolCol] || "").toString().trim().toUpperCase() : "";
     const shortStrike = +data[r][shortStrikeCol];
     const contracts = contractsCol >= 0 ? +data[r][contractsCol] : 1;
 
     // Only count if we have contracts
-    if (Number.isFinite(shortStrike) && shortStrike > 0 && contracts > 0) {
-      shortStrikes.add(shortStrike);
+    if (symbol && Number.isFinite(shortStrike) && shortStrike > 0 && contracts > 0) {
+      if (!shortStrikesBySymbol.has(symbol)) {
+        shortStrikesBySymbol.set(symbol, new Set());
+      }
+      shortStrikesBySymbol.get(symbol).add(shortStrike);
     }
   }
 
-  return shortStrikes;
+  return shortStrikesBySymbol;
 }
 
 /**
  * Outputs spread results to SpreadFinder sheet below config.
  * Uses formulas for MaxProfit, ROI, Fitness so user can edit Debit.
  */
-function outputSpreadResults_(sheet, spreads) {
+function outputSpreadResults_(sheet, spreads, config) {
+  const RESULTS_START_ROW = config.startTableOnRow;
+
   // Clear results area (from RESULTS_START_ROW - 1 down for timestamp)
   const lastRow = Math.max(sheet.getLastRow(), RESULTS_START_ROW);
   if (lastRow >= RESULTS_START_ROW - 1) {
@@ -423,11 +433,11 @@ function outputSpreadResults_(sheet, spreads) {
   // Timestamp above table
   sheet.getRange(RESULTS_START_ROW - 1, 1).setValue("Results - " + new Date().toLocaleString());
 
-  // Headers (A-P)
+  // Headers (A-Q)
   const headers = [
     "Symbol", "Expiration", "Lower", "Upper", "Width",
     "Debit", "MaxProfit", "ROI", "LowerDelta", "UpperDelta",
-    "LowerOI", "UpperOI", "Liquidity", "Tightness", "Fitness", "OptionStrat"
+    "LowerOI", "UpperOI", "Liquidity", "Tightness", "Fitness", "OptionStrat", "Label"
   ];
   const headerNotes = [
     "Stock ticker symbol",
@@ -445,7 +455,8 @@ function outputSpreadResults_(sheet, spreads) {
     "Liquidity score = sqrt(LowerOI × UpperOI) / 100",
     "Bid-ask tightness. Higher = tighter spreads, better fills",
     "Fitness = ROI × sqrt(Liquidity) × sqrt(Tightness)",
-    "Link to OptionStrat visualization"
+    "Link to OptionStrat visualization",
+    "Label for chart identification"
   ];
   const hdrRange = sheet.getRange(RESULTS_START_ROW, 1, 1, headers.length);
   hdrRange.setValues([headers]).setFontWeight("bold");
@@ -456,20 +467,21 @@ function outputSpreadResults_(sheet, spreads) {
   const dataStartRow = RESULTS_START_ROW + 1;
 
   // Data columns A-F (values), I-N (values)
-  // G, H, O, P will be formulas
+  // G, H, O, P, Q will be formulas
   const dataRows = spreads.map(s => [
     s.symbol, s.expiration, s.lowerStrike, s.upperStrike, s.width,
     s.debit, "", "", // G=MaxProfit, H=ROI (formulas)
     s.lowerDelta, s.upperDelta, s.lowerOI, s.upperOI,
-    s.liquidityScore, s.tightness, "", "" // O=Fitness, P=OptionStrat (formulas)
+    s.liquidityScore, s.tightness, "", "", "" // O=Fitness, P=OptionStrat, Q=Label (formulas)
   ]);
   sheet.getRange(dataStartRow, 1, dataRows.length, headers.length).setValues(dataRows);
 
-  // Build formula arrays for columns G, H, O, P
+  // Build formula arrays for columns G, H, O, P, Q
   const maxProfitFormulas = [];
   const roiFormulas = [];
   const fitnessFormulas = [];
   const optionStratFormulas = [];
+  const labelFormulas = [];
 
   for (let i = 0; i < spreads.length; i++) {
     const row = dataStartRow + i;
@@ -481,6 +493,8 @@ function outputSpreadResults_(sheet, spreads) {
     fitnessFormulas.push([`=ROUND(H${row}*SQRT(M${row})*SQRT(N${row}),2)`]);
     // OptionStrat URL as hyperlink
     optionStratFormulas.push([`=HYPERLINK(buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row}),"OptionStrat")`]);
+    // Label: "TSLA 350/450 Dec28"
+    labelFormulas.push([`=A${row}&" "&C${row}&"/"&D${row}&" "&TEXT(B${row},"MMMYY")`]);
   }
 
   // Set formulas
@@ -488,6 +502,7 @@ function outputSpreadResults_(sheet, spreads) {
   sheet.getRange(dataStartRow, 8, spreads.length, 1).setFormulas(roiFormulas); // H
   sheet.getRange(dataStartRow, 15, spreads.length, 1).setFormulas(fitnessFormulas); // O
   sheet.getRange(dataStartRow, 16, spreads.length, 1).setFormulas(optionStratFormulas); // P
+  sheet.getRange(dataStartRow, 17, spreads.length, 1).setFormulas(labelFormulas); // Q
 
   // Format
   sheet.getRange(dataStartRow, 6, spreads.length, 1).setNumberFormat("$#,##0.00"); // Debit
@@ -519,4 +534,63 @@ function outputSpreadResults_(sheet, spreads) {
   const optionStratCol = sheet.getRange(RESULTS_START_ROW, 16, spreads.length + 1, 1);
   optionStratCol.setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
   sheet.setColumnWidth(16, 100);
+
+  // Create scatter chart: LowerDelta (X) vs ROI (Y)
+  createDeltaVsRoiChart_(sheet, spreads.length, RESULTS_START_ROW);
+}
+
+/**
+ * Creates/updates scatter chart of LowerDelta vs ROI on SpreadFinderGraphs sheet.
+ * Preserves existing charts if they exist (user adjustments persist).
+ */
+function createDeltaVsRoiChart_(dataSheet, numRows, resultsStartRow) {
+  if (numRows < 2) return;
+
+  const ss = dataSheet.getParent();
+  const GRAPHS_SHEET = "SpreadFinderGraphs";
+
+  // Get or create graphs sheet
+  let graphSheet = ss.getSheetByName(GRAPHS_SHEET);
+  if (!graphSheet) {
+    graphSheet = ss.insertSheet(GRAPHS_SHEET);
+  }
+
+  // Check if chart already exists - if so, leave it alone (preserves user adjustments)
+  const existingCharts = graphSheet.getCharts();
+  if (existingCharts.length > 0) {
+    // Chart exists - it will auto-update from the data ranges
+    // Just update the data note
+    graphSheet.getRange(1, 1).setValue("Data from SpreadFinder - " + new Date().toLocaleString());
+    return;
+  }
+
+  // No chart exists - create one
+  const dataStartRow = resultsStartRow + 1;
+  const dataSheetName = dataSheet.getName();
+
+  // Label (Q=17), LowerDelta (I=9), ROI (H=8) - reference SpreadFinder sheet
+  const labelRange = dataSheet.getRange(dataStartRow, 17, numRows, 1); // Q = Label
+  const deltaRange = dataSheet.getRange(dataStartRow, 9, numRows, 1);  // I = LowerDelta
+  const roiRange = dataSheet.getRange(dataStartRow, 8, numRows, 1);    // H = ROI
+
+  const chart = graphSheet.newChart()
+    .setChartType(Charts.ChartType.SCATTER)
+    .addRange(labelRange)
+    .addRange(deltaRange)
+    .addRange(roiRange)
+    .setMergeStrategy(Charts.ChartMergeStrategy.MERGE_COLUMNS)
+    .setPosition(3, 1, 0, 0) // Row 3, Column A
+    .setOption('title', 'LowerDelta vs ROI (outliers above = good deals)')
+    .setOption('hAxis', { title: 'LowerDelta (probability)', minValue: 0, maxValue: 1 })
+    .setOption('vAxis', { title: 'ROI', minValue: 0 })
+    .setOption('legend', { position: 'none' })
+    .setOption('pointSize', 5)
+    .setOption('width', 700)
+    .setOption('height', 500)
+    .setOption('tooltip', { trigger: 'focus' })
+    .build();
+
+  graphSheet.insertChart(chart);
+  graphSheet.getRange(1, 1).setValue("Data from SpreadFinder - " + new Date().toLocaleString());
+  graphSheet.getRange(2, 1).setValue("Delete this sheet to reset chart to defaults");
 }

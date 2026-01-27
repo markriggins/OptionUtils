@@ -51,7 +51,10 @@ function refreshOptionPrices() {
 
       // Parse expStr into a Date (midnight) for sheet storage
       const expDate = parseYyyyMmDdToDate_(expStr);
-      if (!expDate) continue;
+      if (!expDate) {
+        Logger.log(`Warning: Could not parse expiration '${expStr}' for ${symbol}`);
+        continue;
+      }
 
       const csvContent = file.getBlob().getDataAsString();
       const csvData = Utilities.parseCsv(csvContent);
@@ -79,6 +82,7 @@ function refreshOptionPrices() {
   const headersOut = ["symbol", "expiration", "strike", "type", "bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness"];
   targetSheet.getRange(1, 1, 1, headersOut.length).setValues([headersOut]);
   targetSheet.getRange(2, 1, allRows.length, headersOut.length).setValues(allRows);
+  SpreadsheetApp.flush(); // Force commit to avoid timing issues
 
   targetSheet.setFrozenRows(1);
 
@@ -104,12 +108,21 @@ function refreshOptionPrices() {
   fullRange.createFilter();
   try { fullRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY); } catch (e) {}
 
+  // Clear memo cache so lookups get fresh data
+  try {
+    XLookupByKeys_clearMemo();
+  } catch (e) {}
+
   // Warm caches (optional but recommended)
-  // (Assumes XLookupByKeys_WarmCache exists; comment out if you don't have it.)
   try {
     XLookupByKeys_WarmCache(SHEET_NAME, ["symbol", "expiration", "strike", "type"], ["bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness"]);
+  } catch (e) {}
+
+  // Force recalculation of BullCallSpreads formulas
+  try {
+    forceRecalcBullCallSpreads_(ss);
   } catch (e) {
-    // ignore if warm function not present
+    Logger.log("Could not force recalc BullCallSpreads: " + e);
   }
 
   ss.toast(
@@ -123,8 +136,9 @@ function refreshOptionPrices() {
 /**
  * Finds and organizes input CSV files from the OptionPrices folder.
  *
- * Iterates through symbol subfolders, scans CSV files, extracts expiration from filename,
- * and selects the most recent file per symbol/expiration based on last updated time.
+ * Scans CSV files directly in the folder (no subfolders needed).
+ * Extracts symbol and expiration from filename pattern: <symbol>-options-exp-<YYYY-MM-DD>-...csv
+ * Selects the most recent file per symbol/expiration based on last updated time.
  *
  * @param {string} [path="Investing/Data/OptionPrices"] - The path to the OptionPrices folder (from root).
  * @returns {Object} {
@@ -134,47 +148,58 @@ function refreshOptionPrices() {
  * }
  */
 function findInputFiles_(path = "Investing/Data/OptionPrices") {
-  // ---- Locate folders ----
+  // ---- Locate folder ----
   const root = DriveApp.getRootFolder();
-  let opParent = root;
+  let opFolder = root;
   const parts = path.split('/').filter(p => p.trim());
   for (const part of parts) {
-    opParent = getFolder_(opParent, part);
+    opFolder = getFolder_(opFolder, part);
   }
 
   const bestBySymbol = Object.create(null);
   let filesScanned = 0;
   let filesSkippedNoExp = 0;
 
-  const symbolFolders = opParent.getFolders();
-  while (symbolFolders.hasNext()) {
-    const symFolder = symbolFolders.next();
-    const symbol = symFolder.getName().trim().toUpperCase();
-    if (!symbol) continue;
+  // Scan all CSV files directly in the folder
+  // Force fresh query by accessing folder properties first (workaround for Drive API caching)
+  opFolder.getName();
+  Utilities.sleep(100);
 
-    const bestByExp = Object.create(null);
-    bestBySymbol[symbol] = bestByExp;
+  const files = opFolder.getFilesByType(MimeType.CSV);
+  while (files.hasNext()) {
+    const file = files.next();
+    filesScanned++;
 
-    const files = symFolder.getFilesByType(MimeType.CSV);
-    while (files.hasNext()) {
-      const file = files.next();
-      filesScanned++;
+    const fname = String(file.getName()).toLowerCase();
 
-      const fname = String(file.getName()).toLowerCase();
-      const m = fname.match(/exp-(\d{4}-\d{2}-\d{2})(?:\D|$)/i);
-      if (!m || !m[1]) {
-        filesSkippedNoExp++;
-        continue;
-      }
-
-      const expStr = m[1];
-      const updated = file.getLastUpdated().getTime();
-
-      const prev = bestByExp[expStr];
-      if (!prev || updated > prev.updated) {
-        bestByExp[expStr] = { file, updated };
-      }
+    // Extract symbol and expiration from filename
+    // Pattern: <symbol>-options-exp-<YYYY-MM-DD>-...csv
+    // Examples: amzn-options-exp-2028-12-15-monthly-show-all-stacked-01-15-2026.csv
+    //           tsla-options-exp-2028-06-16-monthly-show-all-stacked-01-15-2026.csv
+    const m = fname.match(/^([a-z]+)-.*exp-(\d{4}-\d{2}-\d{2})(?:\D|$)/i);
+    if (!m || !m[1] || !m[2]) {
+      filesSkippedNoExp++;
+      continue;
     }
+
+    const symbol = m[1].toUpperCase();
+    const expStr = m[2];
+    const updated = file.getLastUpdated().getTime();
+
+    // Initialize symbol entry if needed
+    if (!bestBySymbol[symbol]) {
+      bestBySymbol[symbol] = Object.create(null);
+    }
+
+    const prev = bestBySymbol[symbol][expStr];
+    if (!prev || updated > prev.updated) {
+      bestBySymbol[symbol][expStr] = { file, updated };
+    }
+  }
+
+  Logger.log(`findInputFiles_: scanned ${filesScanned} files, skipped ${filesSkippedNoExp}, found ${Object.keys(bestBySymbol).length} symbols`);
+  for (const sym in bestBySymbol) {
+    Logger.log(`  ${sym}: ${Object.keys(bestBySymbol[sym]).length} expirations`);
   }
 
   return { bestBySymbol, filesScanned, filesSkippedNoExp };
@@ -315,6 +340,39 @@ function getFolder_(parent, name) {
   const it = parent.getFoldersByName(name);
   if (!it.hasNext()) throw new Error(`Required folder not found: ${name}`);
   return it.next();
+}
+
+/**
+ * Forces recalculation of a named table by adding then deleting a column on the left.
+ */
+function forceRecalcTable_(ss, tableName) {
+  const range = ss.getRangeByName(tableName);
+  if (!range) {
+    Logger.log(tableName + " not found");
+    return;
+  }
+
+  const sheet = range.getSheet();
+  const firstCol = range.getColumn();
+
+  // Insert column before table
+  sheet.insertColumnBefore(firstCol);
+  sheet.getRange(range.getRow(), firstCol).setValue("Recalc");
+  SpreadsheetApp.flush();
+
+  // Delete it
+  sheet.deleteColumn(firstCol);
+  SpreadsheetApp.flush();
+
+  Logger.log("Forced recalc of " + tableName + " via column add/delete");
+}
+
+/**
+ * Forces recalculation of position tables.
+ */
+function forceRecalcBullCallSpreads_(ss) {
+  forceRecalcTable_(ss, "BullCallSpreadsTable");
+  forceRecalcTable_(ss, "IronCondorsTable");
 }
 
 function parseYyyyMmDdToDate_(s) {
