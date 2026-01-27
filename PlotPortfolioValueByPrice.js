@@ -100,7 +100,16 @@ function getUniqueSymbolsFromPositions_(ss) {
     const idxSym = findCol_(headerNorm, ["symbol", "ticker"]);
     if (idxSym < 0) continue;
 
+    // Check for Status column (used by IronCondors to mark closed positions)
+    const idxStatus = findCol_(headerNorm, ["status"]);
+
     for (let r = 1; r < rows.length; r++) {
+      // Skip closed positions
+      if (idxStatus >= 0) {
+        const status = String(rows[r][idxStatus] ?? "").trim().toLowerCase();
+        if (status === "closed") continue;
+      }
+
       const sym = String(rows[r][idxSym] ?? "").trim().toUpperCase();
       if (sym) symbols.add(sym);
     }
@@ -136,10 +145,9 @@ function plotForSymbol_(ss, symbolRaw) {
   if (bcsRange) callSpreadRanges.push(bcsRange);
 
   const icRange = getNamedRangeWithTableFallback_(ss, "IronCondors");
-  // Iron condors have both put and call spreads - handle separately if needed
 
-  if (stockRanges.length === 0 && callSpreadRanges.length === 0) {
-    writeStatus_(sheet, `No position tables found. Create named ranges:\n  - Stocks or StocksTable\n  - BullCallSpreads or BullCallSpreadsTable`);
+  if (stockRanges.length === 0 && callSpreadRanges.length === 0 && !icRange) {
+    writeStatus_(sheet, `No position tables found. Create named ranges:\n  - Stocks or StocksTable\n  - BullCallSpreads or BullCallSpreadsTable\n  - IronCondors or IronCondorsTable`);
     return;
   }
 
@@ -153,17 +161,28 @@ function plotForSymbol_(ss, symbolRaw) {
     shares.push(...parseSharesFromTableForSymbol_(rng.getValues(), symbol, meta));
   }
 
-  const callSpreads = [];
+  const bullCallSpreads = [];
   for (const rng of callSpreadRanges) {
-    callSpreads.push(...parseSpreadsFromTableForSymbol_(rng.getValues(), symbol, "CALL"));
+    bullCallSpreads.push(...parseSpreadsFromTableForSymbol_(rng.getValues(), symbol, "CALL"));
   }
 
-  const putSpreads = [];
+  const bullPutSpreads = [];
   for (const rng of putSpreadRanges) {
-    putSpreads.push(...parseSpreadsFromTableForSymbol_(rng.getValues(), symbol, "PUT"));
+    bullPutSpreads.push(...parseSpreadsFromTableForSymbol_(rng.getValues(), symbol, "PUT"));
   }
 
-  if (shares.length === 0 && callSpreads.length === 0 && putSpreads.length === 0) {
+  // Bear call spreads (from iron condors)
+  const bearCallSpreads = [];
+
+  // Parse iron condors
+  if (icRange) {
+    const icPositions = parseIronCondorsFromTableForSymbol_(icRange.getValues(), symbol);
+    bearCallSpreads.push(...icPositions.bearCallSpreads);
+    bullPutSpreads.push(...icPositions.bullPutSpreads);
+  }
+
+  const totalSpreads = bullCallSpreads.length + bullPutSpreads.length + bearCallSpreads.length;
+  if (shares.length === 0 && totalSpreads === 0) {
     writeStatus_(sheet, `Parsed 0 valid rows for ${symbol}.\nCheck headers and numeric values.`);
     return;
   }
@@ -172,27 +191,39 @@ function plotForSymbol_(ss, symbolRaw) {
   // Shares denominator: total cost basis
   const sharesCost = shares.reduce((sum, sh) => sum + sh.qty * sh.basis, 0);
 
-  // Options denominator: debit paid for call spreads + max-risk for put spreads
-  const callInvest = callSpreads.reduce((sum, sp) => sum + (sp.debit * 100 * sp.qty), 0);
-  const putRisk = putSpreads.reduce((sum, sp) => {
+  // Bull call spread: investment = debit paid
+  const bullCallInvest = bullCallSpreads.reduce((sum, sp) => sum + (sp.debit * 100 * sp.qty), 0);
+
+  // Bull put spread (credit): max risk = width - credit
+  const bullPutRisk = bullPutSpreads.reduce((sum, sp) => {
     const width = sp.kShort - sp.kLong;
     if (width <= 0) return sum;
     const credit = -sp.debit; // debit stored negative for credit spreads
     const maxLossPer = (width - credit) * 100;
     return sum + maxLossPer * sp.qty;
   }, 0);
-  const optionsDenom = callInvest + putRisk;
+
+  // Bear call spread (credit): max risk = width - credit
+  const bearCallRisk = bearCallSpreads.reduce((sum, sp) => {
+    const width = sp.kShort - sp.kLong;
+    if (width <= 0) return sum;
+    const credit = -sp.debit; // debit stored negative for credit spreads
+    const maxLossPer = (width - credit) * 100;
+    return sum + maxLossPer * sp.qty;
+  }, 0);
+
+  const optionsDenom = bullCallInvest + bullPutRisk + bearCallRisk;
 
   // ── Collect all spreads with labels for individual charting ────────────────
-  const allSpreads = [...callSpreads, ...putSpreads];
+  const allSpreads = [...bullCallSpreads, ...bullPutSpreads, ...bearCallSpreads];
 
   // ── Calculate individual spread investments (for ROI) ────────────────
-  const spreadInvestments = allSpreads.map((sp, idx) => {
-    if (idx < callSpreads.length) {
+  const spreadInvestments = allSpreads.map((sp) => {
+    if (sp.flavor === "CALL") {
       // Bull call spread: investment = debit * 100 * qty
       return sp.debit * 100 * sp.qty;
     } else {
-      // Bull put spread: investment = max risk = (width - credit) * 100 * qty
+      // Credit spreads (PUT or BEAR_CALL): investment = max risk = (width - credit) * 100 * qty
       const width = sp.kShort - sp.kLong;
       const credit = -sp.debit;
       return (width - credit) * 100 * sp.qty;
@@ -223,7 +254,7 @@ function plotForSymbol_(ss, symbolRaw) {
     const individualSpreadValues = [];
 
     // Bull call (debit) spread value at expiration
-    for (const sp of callSpreads) {
+    for (const sp of bullCallSpreads) {
       const width = sp.kShort - sp.kLong;
       if (width <= 0) {
         individualSpreadValues.push(0);
@@ -237,7 +268,7 @@ function plotForSymbol_(ss, symbolRaw) {
     }
 
     // Bull put (credit) spread value at expiration
-    for (const sp of putSpreads) {
+    for (const sp of bullPutSpreads) {
       const width = sp.kShort - sp.kLong;
       if (width <= 0) {
         individualSpreadValues.push(0);
@@ -250,11 +281,26 @@ function plotForSymbol_(ss, symbolRaw) {
       individualSpreadValues.push(round2_(totalValue));
     }
 
+    // Bear call (credit) spread value at expiration
+    for (const sp of bearCallSpreads) {
+      const width = sp.kShort - sp.kLong;
+      if (width <= 0) {
+        individualSpreadValues.push(0);
+        continue;
+      }
+      // Loss is how much ITM the short call is
+      const loss = clamp_(S - sp.kLong, 0, width);
+      const valuePerSpread = (width - loss) * 100; // what you keep
+      const totalValue = valuePerSpread * sp.qty;
+      optionsValue += totalValue;
+      individualSpreadValues.push(round2_(totalValue));
+    }
+
     const totalValue = sharesValue + optionsValue;
 
     // ROI still based on P/L
     const sharesPL = sharesValue - sharesCost;
-    const optionsPL = optionsValue - callInvest - putRisk; // P/L relative to capital at risk
+    const optionsPL = optionsValue - bullCallInvest - bullPutRisk - bearCallRisk;
 
     const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
     const optionsROI = optionsDenom > 0 ? (optionsPL / optionsDenom) : 0;
@@ -756,6 +802,112 @@ function formatExpLabel_(exp) {
   const mon = months[d.getMonth()];
   const yr = String(d.getFullYear()).slice(-2);
   return `${mon} ${yr}`;
+}
+
+/**
+ * Parse iron condors from table for a specific symbol.
+ * Iron condor = bull put spread + bear call spread
+ *
+ * Expected columns:
+ *   Symbol, Expiration, Buy Put, Sell Put, Sell Call, Buy Call, Credit, Qty
+ *
+ * Returns { bullPutSpreads: [...], bearCallSpreads: [...] }
+ */
+function parseIronCondorsFromTableForSymbol_(rows, symbol) {
+  const result = { bullPutSpreads: [], bearCallSpreads: [] };
+
+  if (!rows || rows.length < 2) return result;
+
+  const headerNorm = rows[0].map(normKey_);
+
+  const idxSym = findCol_(headerNorm, ["symbol", "ticker"]);
+  const idxExp = findCol_(headerNorm, ["expiration", "exp", "expiry", "expirationdate", "expdate"]);
+  const idxStatus = findCol_(headerNorm, ["status"]);
+  const idxBuyPut = findCol_(headerNorm, ["buyput", "longput", "putlong", "putbuy"]);
+  const idxSellPut = findCol_(headerNorm, ["sellput", "shortput", "putshort", "putsell"]);
+  const idxSellCall = findCol_(headerNorm, ["sellcall", "shortcall", "callshort", "callsell"]);
+  const idxBuyCall = findCol_(headerNorm, ["buycall", "longcall", "calllong", "callbuy"]);
+  const idxCredit = findCol_(headerNorm, ["credit", "netcredit", "premium"]);
+  const idxQty = findCol_(headerNorm, ["qty", "quantity", "contracts", "contract", "count"]);
+
+  // Must have all four strikes
+  if (idxBuyPut < 0 || idxSellPut < 0 || idxSellCall < 0 || idxBuyCall < 0) {
+    return result;
+  }
+
+  for (let r = 1; r < rows.length; r++) {
+    // Filter by symbol
+    if (idxSym >= 0) {
+      const rowSym = String(rows[r][idxSym] ?? "").trim().toUpperCase();
+      if (rowSym && rowSym !== symbol) continue;
+    }
+
+    // Skip closed positions
+    if (idxStatus >= 0) {
+      const status = String(rows[r][idxStatus] ?? "").trim().toLowerCase();
+      if (status === "closed") continue;
+    }
+
+    const buyPut = toNum_(rows[r][idxBuyPut]);
+    const sellPut = toNum_(rows[r][idxSellPut]);
+    const sellCall = toNum_(rows[r][idxSellCall]);
+    const buyCall = toNum_(rows[r][idxBuyCall]);
+
+    // All four strikes required
+    if (!Number.isFinite(buyPut) || !Number.isFinite(sellPut) ||
+        !Number.isFinite(sellCall) || !Number.isFinite(buyCall)) {
+      continue;
+    }
+
+    const qty = idxQty >= 0 ? toNum_(rows[r][idxQty]) : 1;
+    if (!Number.isFinite(qty) || qty === 0) continue;
+
+    // Get credit (stored as negative debit for credit spreads)
+    let credit = 0;
+    if (idxCredit >= 0) {
+      credit = toNum_(rows[r][idxCredit]);
+      if (!Number.isFinite(credit)) credit = 0;
+    }
+
+    // Build label
+    let label = `IC ${buyPut}/${sellPut}/${sellCall}/${buyCall}`;
+    if (idxExp >= 0) {
+      const expLabel = formatExpLabel_(rows[r][idxExp]);
+      if (expLabel) label = `${expLabel} ${label}`;
+    }
+
+    // Split credit between the two spreads (approximation)
+    const putWidth = sellPut - buyPut;
+    const callWidth = buyCall - sellCall;
+    const totalWidth = putWidth + callWidth;
+    const putCredit = totalWidth > 0 ? credit * (putWidth / totalWidth) : credit / 2;
+    const callCredit = totalWidth > 0 ? credit * (callWidth / totalWidth) : credit / 2;
+
+    // Bull put spread: long lower put, short higher put
+    // debit is negative for credit spreads
+    result.bullPutSpreads.push({
+      qty,
+      kLong: buyPut,
+      kShort: sellPut,
+      debit: -putCredit,
+      flavor: "PUT",
+      label: label + " (put)",
+    });
+
+    // Bear call spread: short lower call, long higher call
+    // For bear call spreads, we use kLong=sellCall, kShort=buyCall
+    // and mark it as a bear call so the value calc handles it correctly
+    result.bearCallSpreads.push({
+      qty,
+      kLong: sellCall,
+      kShort: buyCall,
+      debit: -callCredit,
+      flavor: "BEAR_CALL",
+      label: label + " (call)",
+    });
+  }
+
+  return result;
 }
 
 /* =========================================================
