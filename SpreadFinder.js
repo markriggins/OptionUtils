@@ -572,36 +572,30 @@ function getSidebarData() {
   const sheet = ss.getSheetByName("SpreadFinder");
   const lastRow = sheet.getLastRow();
   const startRow = 21;
+  if (lastRow < startRow) return [];
 
-  if (lastRow < startRow) {
-    console.log("No data found below start row");
-    return [];
-  }
+  // Fetch 17 columns (A through Q) to capture the Label in Col Q
+  const data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 17).getValues();
 
-  // Get data up to Column R (18 columns)
-  const data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 18).getValues();
-
-  const payload = data.map(row => {
+  return data.map(row => {
     return {
-      delta: parseFloat(row[8]) || 0,     // Col I
-      roi: (parseFloat(row[7]) || 0),    // Col H (Raw number for chart)
-      label: String(row[16] || ""),      // Col Q
-      fitness: parseFloat(row[14]) || 0, // Col O
-      strike: parseFloat(row[2]) || 0,   // Col C
+      // Basic Chart Mapping
+      delta: parseFloat(row[8]) || 0,     // Col I (LowerDelta)
+      roi: parseFloat(row[7]) || 0,       // Col H (ROI)
+      strike: parseFloat(row[2]) || 0,    // Col C (Lower Strike)
+      fitness: parseFloat(row[14]) || 0,  // Col O (Fitness)
+      label: String(row[16] || ""),       // Col Q (Label)
 
-      // Detail Fields
-      width: row[4],        // Col E
-      debit: row[5],        // Col F
-      maxProfit: row[6],    // Col G
-      lowerDelta: row[9],   // Col J
-      upperDelta: row[10],  // Col K
-      lowerOI: row[11],     // Col L
-      upperOI: row[12],     // Col M
-      liquidity: row[13],   // Col N
-      tightness: row[17]    // Col R
+      // Detail Panel Mapping (Matches your screenshot headers)
+      width: row[4],         // Col E
+      debit: row[5],         // Col F
+      maxProfit: row[6],     // Col G
+      lowerDelta: row[8],    // Col I
+      upperDelta: row[9],    // Col J
+      lowerOI: row[10],      // Col K
+      upperOI: row[11],      // Col L
+      liquidity: row[12],    // Col M
+      tightness: row[13]     // Col N (Tightness)
     };
-  });
-
-  console.log("Payload generated: " + payload.length + " rows.");
-  return payload.sort((a, b) => a.fitness - b.fitness);
+  }).sort((a, b) => a.fitness - b.fitness); // Elite dots drawn last (on top)
 }
