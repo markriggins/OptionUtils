@@ -556,94 +556,104 @@ function outputSpreadResults_(sheet, spreads, config) {
  * Chart 2: Lower Strike (X) vs ROI (Y)
  * Preserves existing charts if they exist (user adjustments persist).
  */
+/**
+ * Creates scatter-style charts with the smallest possible "dots."
+ * Sorts data so high-fitness spreads are drawn on top of low-fitness ones.
+ */
 function createSpreadFinderCharts_(dataSheet, numRows, resultsStartRow) {
   if (numRows < 2) return;
 
   const ss = dataSheet.getParent();
   const GRAPHS_SHEET = "SpreadFinderGraphs";
+  let graphSheet = ss.getSheetByName(GRAPHS_SHEET) || ss.insertSheet(GRAPHS_SHEET);
+  graphSheet.clear();
 
-  // Get or create graphs sheet
-  let graphSheet = ss.getSheetByName(GRAPHS_SHEET);
-  if (!graphSheet) {
-    graphSheet = ss.insertSheet(GRAPHS_SHEET);
-  }
-
-  // Check if charts already exist - if so, leave them alone (preserves user adjustments)
-  const existingCharts = graphSheet.getCharts();
-  if (existingCharts.length > 0) {
-    // Charts exist - they will auto-update from the data ranges
-    graphSheet.getRange(1, 1).setValue("Data from SpreadFinder - " + new Date().toLocaleString());
-    return;
-  }
-
-  // No charts exist - create them
   const dataStartRow = resultsStartRow + 1;
-
-  // Ensure formulas are fully calculated before chart data extraction
   SpreadsheetApp.flush();
-  Utilities.sleep(200);
 
-  // Get source data from SpreadFinder sheet
-  const labelRange = dataSheet.getRange(dataStartRow, 17, numRows, 1);      // Q = Label
-  const lowerStrikeRange = dataSheet.getRange(dataStartRow, 3, numRows, 1); // C = Lower Strike
-  const deltaRange = dataSheet.getRange(dataStartRow, 9, numRows, 1);       // I = LowerDelta
-  const roiRange = dataSheet.getRange(dataStartRow, 8, numRows, 1);         // H = ROI
+  // 1. Get raw data
+  const labels = dataSheet.getRange(dataStartRow, 17, numRows, 1).getValues();      // Col Q
+  const deltas = dataSheet.getRange(dataStartRow, 9, numRows, 1).getValues();       // Col I
+  const rois = dataSheet.getRange(dataStartRow, 8, numRows, 1).getValues();         // Col H
+  const strikes = dataSheet.getRange(dataStartRow, 3, numRows, 1).getValues();      // Col C
+  const fitness = dataSheet.getRange(dataStartRow, 15, numRows, 1).getValues();     // Col O
 
-  const labels = labelRange.getDisplayValues();
-  const deltas = deltaRange.getValues();
-  const rois = roiRange.getValues();
-  const strikes = lowerStrikeRange.getValues();
-
-  // Chart 1 data: X | Y | Tooltip -> LowerDelta | ROI | Label
-  const chart1Headers = [["LowerDelta", "ROI", { role: "annotation" }]];
-  graphSheet.getRange(4, 1, 1, 3).setValues(chart1Headers).setFontWeight("bold");
-  const chart1Data = [];
+  // 2. Prepare data for sorting
+  let combinedData = [];
   for (let i = 0; i < numRows; i++) {
-    chart1Data.push([deltas[i][0], rois[i][0], String(labels[i][0])]);
-  }
-  graphSheet.getRange(5, 1, numRows, 3).setValues(chart1Data);
+    let f = fitness[i][0];
+    let bucket = "Level 1 (Low)";
+    if (f > 4) bucket = "Level 5 (Elite)";
+    else if (f > 3) bucket = "Level 4 (Great)";
+    else if (f > 2) bucket = "Level 3 (Good)";
+    else if (f > 1) bucket = "Level 2 (Fair)";
 
-  // Chart 2 data: X | Y | Tooltip -> LowerStrike | ROI | Label
-  const chart2Headers = [["LowerStrike", "ROI", { role: "annotation" }]];
-  graphSheet.getRange(4, 5, 1, 3).setValues(chart2Headers).setFontWeight("bold");
-  const chart2Data = [];
-  for (let i = 0; i < numRows; i++) {
-    chart2Data.push([strikes[i][0], rois[i][0], String(labels[i][0])]);
+    combinedData.push({
+      label: labels[i][0],
+      delta: deltas[i][0],
+      roi: rois[i][0],
+      strike: strikes[i][0],
+      bucket: bucket,
+      fitness: f
+    });
   }
-  graphSheet.getRange(5, 5, numRows, 3).setValues(chart2Data);
 
-  // Chart 1: LowerDelta vs ROI with labels
-  const chart1Range = graphSheet.getRange(4, 1, numRows + 1, 3);
+  // 3. Sort by fitness ASCENDING (so high fitness is at the bottom of the sheet, and top of the chart)
+  combinedData.sort((a, b) => a.fitness - b.fitness);
+
+  let chart1Values = combinedData.map(d => [d.label, d.delta, d.roi, d.bucket, 1]);
+  let chart2Values = combinedData.map(d => [d.label, d.strike, d.roi, d.bucket, 1]);
+
+  graphSheet.getRange(2, 1, numRows, 5).setValues(chart1Values);
+  graphSheet.getRange(2, 7, numRows, 5).setValues(chart2Values);
+
+  const commonOptions = {
+    bubble: {
+      textStyle: {fontSize: 1, color: 'none'},
+      minRadius: 0.5, // Even smaller
+      maxRadius: 0.5,
+      stroke: 'none',
+      opacity: 0.9    // Slight transparency helps see overlaps
+    },
+    series: {
+      'Level 1 (Low)':   {color: '#f44336'},
+      'Level 2 (Fair)':  {color: '#ff9800'},
+      'Level 3 (Good)':  {color: '#ffeb3b'},
+      'Level 4 (Great)': {color: '#8bc34a'},
+      'Level 5 (Elite)': {color: '#2e7d32'}
+    },
+    legend: {position: 'right'},
+    width: 900,
+    height: 600,
+    chartArea: {width: '85%', height: '80%'}
+  };
+
   const chart1 = graphSheet.newChart()
-    .setChartType(Charts.ChartType.SCATTER)
-    .addRange(chart1Range)
-    .setPosition(numRows + 8, 1, 0, 0)
-    .setOption('title', 'LowerDelta vs ROI')
-    .setOption('hAxis', { title: 'LowerDelta (probability)', minValue: 0, maxValue: 1 })
-    .setOption('vAxis', { title: 'ROI', minValue: 0 })
-    .setOption('pointSize', 5)
-    .setOption('width', 700)
-    .setOption('height', 500)
-    .setOption('annotations', { alwaysOutside: false })
+    .setChartType(Charts.ChartType.BUBBLE)
+    .addRange(graphSheet.getRange(2, 1, numRows, 5))
+    .setPosition(2, 1, 0, 0)
+    .setOption('title', 'Delta vs ROI (Top Fitness on Top)')
+    .setOption('hAxis', {title: 'Delta'})
+    .setOption('vAxis', {title: 'ROI'})
+    .setOption('bubble', commonOptions.bubble)
+    .setOption('series', commonOptions.series)
+    .setOption('width', commonOptions.width)
+    .setOption('height', commonOptions.height)
     .build();
 
-  // Chart 2: Lower Strike vs ROI with labels
-  const chart2Range = graphSheet.getRange(4, 5, numRows + 1, 3);
   const chart2 = graphSheet.newChart()
-    .setChartType(Charts.ChartType.SCATTER)
-    .addRange(chart2Range)
-    .setPosition(numRows + 8, 10, 0, 0)
-    .setOption('title', 'Lower Strike vs ROI')
-    .setOption('hAxis', { title: 'Lower Strike ($)' })
-    .setOption('vAxis', { title: 'ROI', minValue: 0 })
-    .setOption('pointSize', 5)
-    .setOption('width', 700)
-    .setOption('height', 500)
-    .setOption('annotations', { alwaysOutside: false })
+    .setChartType(Charts.ChartType.BUBBLE)
+    .addRange(graphSheet.getRange(2, 7, numRows, 5))
+    .setPosition(28, 1, 0, 0)
+    .setOption('title', 'Strike vs ROI (Top Fitness on Top)')
+    .setOption('hAxis', {title: 'Strike Price ($)'})
+    .setOption('vAxis', {title: 'ROI'})
+    .setOption('bubble', commonOptions.bubble)
+    .setOption('series', commonOptions.series)
+    .setOption('width', commonOptions.width)
+    .setOption('height', commonOptions.height)
     .build();
 
   graphSheet.insertChart(chart1);
   graphSheet.insertChart(chart2);
-  graphSheet.getRange(1, 1).setValue("Data from SpreadFinder - " + new Date().toLocaleString());
-  graphSheet.getRange(2, 1).setValue("Delete this sheet to reset charts to defaults");
 }
