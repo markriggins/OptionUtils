@@ -501,9 +501,11 @@ function outputSpreadResults_(sheet, spreads, config) {
     // Fitness = ROI * SQRT(Liquidity) * SQRT(Tightness)
     fitnessFormulas.push([`=ROUND(H${row}*SQRT(M${row})*SQRT(N${row}),2)`]);
     // OptionStrat URL as hyperlink
-    optionStratFormulas.push([`=HYPERLINK(buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row}),"OptionStrat")`]);
+//    optionStratFormulas.push([`=HYPERLINK(buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row}),"OptionStrat")`]);
+    optionStratFormulas.push([""]);
     // Label: "TSLA 350/450 Dec28"
-    labelFormulas.push([`=A${row}&" "&C${row}&"/"&D${row}&" "&TEXT(B${row},"MMMYY")`]);
+//    labelFormulas.push([`=A${row}&" "&C${row}&"/"&D${row}&" "&TEXT(B${row},"MMMYY")`]);
+    labelFormulas.push([`${sheet.getRange(row, 1).getValue()} ${sheet.getRange(row, 3).getValue()}/${sheet.getRange(row, 4).getValue()} ${Utilities.formatDate(new Date(sheet.getRange(row, 2).getValue()), "GMT", "MMM yy")}`]);
   }
 
   // Set formulas
@@ -511,7 +513,7 @@ function outputSpreadResults_(sheet, spreads, config) {
   sheet.getRange(dataStartRow, 8, spreads.length, 1).setFormulas(roiFormulas); // H
   sheet.getRange(dataStartRow, 15, spreads.length, 1).setFormulas(fitnessFormulas); // O
   sheet.getRange(dataStartRow, 16, spreads.length, 1).setFormulas(optionStratFormulas); // P
-  sheet.getRange(dataStartRow, 17, spreads.length, 1).setFormulas(labelFormulas); // Q
+  sheet.getRange(dataStartRow, 17, spreads.length, 1).setValues(labelFormulas); // Q
 
   // Format
   sheet.getRange(dataStartRow, 6, spreads.length, 1).setNumberFormat("$#,##0.00"); // Debit
@@ -577,46 +579,67 @@ function createSpreadFinderCharts_(dataSheet, numRows, resultsStartRow) {
   // No charts exist - create them
   const dataStartRow = resultsStartRow + 1;
 
-  // Column indices (1-based): C=Lower(3), H=ROI(8), I=LowerDelta(9), Q=Label(17)
+  // Ensure formulas are fully calculated before chart data extraction
+  SpreadsheetApp.flush();
+  Utilities.sleep(200);
+
+  // Get source data from SpreadFinder sheet
   const labelRange = dataSheet.getRange(dataStartRow, 17, numRows, 1);      // Q = Label
   const lowerStrikeRange = dataSheet.getRange(dataStartRow, 3, numRows, 1); // C = Lower Strike
   const deltaRange = dataSheet.getRange(dataStartRow, 9, numRows, 1);       // I = LowerDelta
   const roiRange = dataSheet.getRange(dataStartRow, 8, numRows, 1);         // H = ROI
 
-  // Chart 1: LowerDelta vs ROI
+  const labels = labelRange.getDisplayValues();
+  const deltas = deltaRange.getValues();
+  const rois = roiRange.getValues();
+  const strikes = lowerStrikeRange.getValues();
+
+  // Chart 1 data: X | Y | Tooltip -> LowerDelta | ROI | Label
+  const chart1Headers = [["LowerDelta", "ROI", { role: "annotation" }]];
+  graphSheet.getRange(4, 1, 1, 3).setValues(chart1Headers).setFontWeight("bold");
+  const chart1Data = [];
+  for (let i = 0; i < numRows; i++) {
+    chart1Data.push([deltas[i][0], rois[i][0], String(labels[i][0])]);
+  }
+  graphSheet.getRange(5, 1, numRows, 3).setValues(chart1Data);
+
+  // Chart 2 data: X | Y | Tooltip -> LowerStrike | ROI | Label
+  const chart2Headers = [["LowerStrike", "ROI", { role: "annotation" }]];
+  graphSheet.getRange(4, 5, 1, 3).setValues(chart2Headers).setFontWeight("bold");
+  const chart2Data = [];
+  for (let i = 0; i < numRows; i++) {
+    chart2Data.push([strikes[i][0], rois[i][0], String(labels[i][0])]);
+  }
+  graphSheet.getRange(5, 5, numRows, 3).setValues(chart2Data);
+
+  // Chart 1: LowerDelta vs ROI with labels
+  const chart1Range = graphSheet.getRange(4, 1, numRows + 1, 3);
   const chart1 = graphSheet.newChart()
     .setChartType(Charts.ChartType.SCATTER)
-    .addRange(labelRange)
-    .addRange(deltaRange)
-    .addRange(roiRange)
-    .setMergeStrategy(Charts.ChartMergeStrategy.MERGE_COLUMNS)
-    .setPosition(3, 1, 0, 0) // Row 3, Column A
-    .setOption('title', 'LowerDelta vs ROI (outliers above = good deals)')
+    .addRange(chart1Range)
+    .setPosition(numRows + 8, 1, 0, 0)
+    .setOption('title', 'LowerDelta vs ROI')
     .setOption('hAxis', { title: 'LowerDelta (probability)', minValue: 0, maxValue: 1 })
     .setOption('vAxis', { title: 'ROI', minValue: 0 })
-    .setOption('legend', { position: 'none' })
     .setOption('pointSize', 5)
-    .setOption('width', 600)
-    .setOption('height', 400)
-    .setOption('tooltip', { trigger: 'focus' })
+    .setOption('width', 700)
+    .setOption('height', 500)
+    .setOption('annotations', { alwaysOutside: false })
     .build();
 
-  // Chart 2: Lower Strike vs ROI
+  // Chart 2: Lower Strike vs ROI with labels
+  const chart2Range = graphSheet.getRange(4, 5, numRows + 1, 3);
   const chart2 = graphSheet.newChart()
     .setChartType(Charts.ChartType.SCATTER)
-    .addRange(labelRange)
-    .addRange(lowerStrikeRange)
-    .addRange(roiRange)
-    .setMergeStrategy(Charts.ChartMergeStrategy.MERGE_COLUMNS)
-    .setPosition(3, 8, 0, 0) // Row 3, Column H (next to first chart)
+    .addRange(chart2Range)
+    .setPosition(numRows + 8, 10, 0, 0)
     .setOption('title', 'Lower Strike vs ROI')
     .setOption('hAxis', { title: 'Lower Strike ($)' })
     .setOption('vAxis', { title: 'ROI', minValue: 0 })
-    .setOption('legend', { position: 'none' })
     .setOption('pointSize', 5)
-    .setOption('width', 600)
-    .setOption('height', 400)
-    .setOption('tooltip', { trigger: 'focus' })
+    .setOption('width', 700)
+    .setOption('height', 500)
+    .setOption('annotations', { alwaysOutside: false })
     .build();
 
   graphSheet.insertChart(chart1);

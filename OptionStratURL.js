@@ -158,6 +158,6 @@ function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
   const symbolHigh = `-.${ticker}${dateCode}${callOrPutChar}${highStrike}`;
  
   const url = `https://optionstrat.com/build/${strategy}/${ticker}/${symbolLow},${symbolHigh}`;
-  console.log("optionstrat URL:" + url);
+  //console.log("optionstrat URL:" + url);
   return url;
 }
