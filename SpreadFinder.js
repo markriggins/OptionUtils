@@ -544,15 +544,17 @@ function outputSpreadResults_(sheet, spreads, config) {
   optionStratCol.setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
   sheet.setColumnWidth(16, 100);
 
-  // Create scatter chart: LowerDelta (X) vs ROI (Y)
-  createDeltaVsRoiChart_(sheet, spreads.length, RESULTS_START_ROW);
+  // Create scatter charts on SpreadFinderGraphs sheet
+  createSpreadFinderCharts_(sheet, spreads.length, RESULTS_START_ROW);
 }
 
 /**
- * Creates/updates scatter chart of LowerDelta vs ROI on SpreadFinderGraphs sheet.
+ * Creates/updates scatter charts on SpreadFinderGraphs sheet.
+ * Chart 1: LowerDelta (X) vs ROI (Y)
+ * Chart 2: Lower Strike (X) vs ROI (Y)
  * Preserves existing charts if they exist (user adjustments persist).
  */
-function createDeltaVsRoiChart_(dataSheet, numRows, resultsStartRow) {
+function createSpreadFinderCharts_(dataSheet, numRows, resultsStartRow) {
   if (numRows < 2) return;
 
   const ss = dataSheet.getParent();
@@ -564,25 +566,25 @@ function createDeltaVsRoiChart_(dataSheet, numRows, resultsStartRow) {
     graphSheet = ss.insertSheet(GRAPHS_SHEET);
   }
 
-  // Check if chart already exists - if so, leave it alone (preserves user adjustments)
+  // Check if charts already exist - if so, leave them alone (preserves user adjustments)
   const existingCharts = graphSheet.getCharts();
   if (existingCharts.length > 0) {
-    // Chart exists - it will auto-update from the data ranges
-    // Just update the data note
+    // Charts exist - they will auto-update from the data ranges
     graphSheet.getRange(1, 1).setValue("Data from SpreadFinder - " + new Date().toLocaleString());
     return;
   }
 
-  // No chart exists - create one
+  // No charts exist - create them
   const dataStartRow = resultsStartRow + 1;
-  const dataSheetName = dataSheet.getName();
 
-  // Label (Q=17), LowerDelta (I=9), ROI (H=8) - reference SpreadFinder sheet
-  const labelRange = dataSheet.getRange(dataStartRow, 17, numRows, 1); // Q = Label
-  const deltaRange = dataSheet.getRange(dataStartRow, 9, numRows, 1);  // I = LowerDelta
-  const roiRange = dataSheet.getRange(dataStartRow, 8, numRows, 1);    // H = ROI
+  // Column indices (1-based): C=Lower(3), H=ROI(8), I=LowerDelta(9), Q=Label(17)
+  const labelRange = dataSheet.getRange(dataStartRow, 17, numRows, 1);      // Q = Label
+  const lowerStrikeRange = dataSheet.getRange(dataStartRow, 3, numRows, 1); // C = Lower Strike
+  const deltaRange = dataSheet.getRange(dataStartRow, 9, numRows, 1);       // I = LowerDelta
+  const roiRange = dataSheet.getRange(dataStartRow, 8, numRows, 1);         // H = ROI
 
-  const chart = graphSheet.newChart()
+  // Chart 1: LowerDelta vs ROI
+  const chart1 = graphSheet.newChart()
     .setChartType(Charts.ChartType.SCATTER)
     .addRange(labelRange)
     .addRange(deltaRange)
@@ -594,12 +596,31 @@ function createDeltaVsRoiChart_(dataSheet, numRows, resultsStartRow) {
     .setOption('vAxis', { title: 'ROI', minValue: 0 })
     .setOption('legend', { position: 'none' })
     .setOption('pointSize', 5)
-    .setOption('width', 700)
-    .setOption('height', 500)
+    .setOption('width', 600)
+    .setOption('height', 400)
     .setOption('tooltip', { trigger: 'focus' })
     .build();
 
-  graphSheet.insertChart(chart);
+  // Chart 2: Lower Strike vs ROI
+  const chart2 = graphSheet.newChart()
+    .setChartType(Charts.ChartType.SCATTER)
+    .addRange(labelRange)
+    .addRange(lowerStrikeRange)
+    .addRange(roiRange)
+    .setMergeStrategy(Charts.ChartMergeStrategy.MERGE_COLUMNS)
+    .setPosition(3, 8, 0, 0) // Row 3, Column H (next to first chart)
+    .setOption('title', 'Lower Strike vs ROI')
+    .setOption('hAxis', { title: 'Lower Strike ($)' })
+    .setOption('vAxis', { title: 'ROI', minValue: 0 })
+    .setOption('legend', { position: 'none' })
+    .setOption('pointSize', 5)
+    .setOption('width', 600)
+    .setOption('height', 400)
+    .setOption('tooltip', { trigger: 'focus' })
+    .build();
+
+  graphSheet.insertChart(chart1);
+  graphSheet.insertChart(chart2);
   graphSheet.getRange(1, 1).setValue("Data from SpreadFinder - " + new Date().toLocaleString());
-  graphSheet.getRange(2, 1).setValue("Delete this sheet to reset chart to defaults");
+  graphSheet.getRange(2, 1).setValue("Delete this sheet to reset charts to defaults");
 }
