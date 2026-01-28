@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <base target="_top">
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <style>
+        body {
+          font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+          background-color: #f1f3f4;
+          margin: 0;
+          padding: 15px;
+          color: #3c4043;
+        }
+
+        /* Layout Containers */
+        .dashboard {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 15px;
+          justify-content: center;
+        }
+        .chart-card {
+          background: white;
+          border-radius: 8px;
+          padding: 15px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+          flex: 1 1 480px;
+          min-width: 400px;
+        }
+        .chart-div {
+          width: 100%;
+          height: 420px;
+        }
+
+        /* Analytics Panel at Bottom */
+        #details-panel {
+          width: 100%;
+          max-width: 1050px;
+          background: #202124;
+          color: #e8eaed;
+          margin: 20px auto 0 auto;
+          padding: 20px;
+          border-radius: 8px;
+          border-left: 6px solid #8bc34a;
+          box-sizing: border-box;
+        }
+
+        #instruction {
+          color: #9aa0a6;
+          font-style: italic;
+          text-align: center;
+        }
+
+        .grid-container {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+          gap: 12px;
+          margin-top: 15px;
+        }
+
+        .metric-box {
+          background: #2d2e31;
+          padding: 10px;
+          border-radius: 4px;
+          border-bottom: 2px solid #3c4043;
+        }
+
+        .label {
+          font-size: 10px;
+          color: #9aa0a6;
+          text-transform: uppercase;
+          letter-spacing: 0.8px;
+          display: block;
+          margin-bottom: 4px;
+        }
+
+        .value {
+          font-size: 15px;
+          color: #8bc34a;
+          font-weight: bold;
+        }
+
+        h3 {
+          margin: 0;
+          font-weight: 500;
+          color: #8bc34a;
+          border-bottom: 1px solid #3c4043;
+          padding-bottom: 10px;
+        }
+
+        .error-msg {
+          color: #f44336;
+          text-align: center;
+          padding: 20px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="dashboard">
+    <div class="chart-card">
+        <div id="chart_delta" class="chart-div"></div>
+    </div>
+    <div class="chart-card">
+        <div id="chart_strike" class="chart-div"></div>
+    </div>
+</div>
+
+<div id="details-panel">
+    <div id="instruction">Click a data point on either chart to view full spread analytics...</div>
+
+    <div id="data-content" style="display:none;">
+        <h3 id="detail-label"></h3>
+        <div class="grid-container">
+            <div class="metric-box"><span class="label">Width</span><span id="det-width" class="value"></span></div>
+            <div class="metric-box"><span class="label">Debit</span><span id="det-debit" class="value"></span></div>
+            <div class="metric-box"><span class="label">Max Profit</span><span id="det-maxp" class="value"></span></div>
+            <div class="metric-box"><span class="label">ROI</span><span id="det-roi" class="value"></span></div>
+            <div class="metric-box"><span class="label">Lower Delta</span><span id="det-ld" class="value"></span></div>
+            <div class="metric-box"><span class="label">Upper Delta</span><span id="det-ud" class="value"></span></div>
+            <div class="metric-box"><span class="label">Lower OI</span><span id="det-loi" class="value"></span></div>
+            <div class="metric-box"><span class="label">Upper OI</span><span id="det-uoi" class="value"></span></div>
+            <div class="metric-box"><span class="label">Liquidity</span><span id="det-liq" class="value"></span></div>
+            <div class="metric-box"><span class="label">Tightness</span><span id="det-tight" class="value"></span></div>
+            <div class="metric-box"><span class="label">Fitness</span><span id="det-fit" class="value"></span></div>
+        </div>
+    </div>
+</div>
+
+<script type="text/javascript">
+    google.charts.load('current', {'packages':['corechart']});
+    google.charts.setOnLoadCallback(initDashboard);
+
+    function initDashboard() {
+      google.script.run
+        .withFailureHandler(function(err) {
+          document.body.innerHTML = `<div class="error-msg"><h3>Script Error</h3>${err.message}</div>`;
+        })
+        .withSuccessHandler(drawAllCharts)
+        .getSidebarData();
+    }
+
+    function drawAllCharts(dataArray) {
+      if (!dataArray || dataArray.length === 0) {
+        document.getElementById('instruction').innerText = "No data returned. Please ensure the SpreadFinder sheet has results.";
+        return;
+      }
+
+      try {
+        var dataDelta = new google.visualization.DataTable();
+        var dataStrike = new google.visualization.DataTable();
+
+        [dataDelta, dataStrike].forEach(dt => {
+          dt.addColumn('number', 'X');
+          dt.addColumn('number', 'ROI');
+          dt.addColumn({type: 'string', role: 'tooltip'});
+          dt.addColumn({type: 'string', role: 'style'});
+        });
+
+        // Fill DataTables
+        dataArray.forEach(r => {
+          let f = r.fitness;
+          let color = '#f44336'; // Default Red
+          let size = 2;          // Default Small
+
+          // Scaling logic for point size and color
+          if (f >= 4.5) { color = '#2e7d32'; size = 9; }      // Elite
+          else if (f >= 3.5) { color = '#8bc34a'; size = 5; } // Great
+          else if (f >= 2.5) { color = '#ffeb3b'; size = 3; } // Good
+          else if (f >= 1.5) { color = '#ff9800'; size = 2; } // Fair
+
+          let styleStr = `point { size: ${size}; fill-color: ${color}; stroke-width: 1; stroke-color: #333; }`;
+          let roiVal = r.roi * 100; // Convert to percentage for the axis
+
+          dataDelta.addRow([r.delta, roiVal, r.label, styleStr]);
+          dataStrike.addRow([r.strike, roiVal, r.label, styleStr]);
+        });
+
+        var baseOptions = {
+          legend: 'none',
+          chartArea: { width: '85%', height: '80%' },
+          explorer: { actions: ['dragToZoom', 'rightClickToReset'], keepInBounds: true },
+          hAxis: { gridlines: {color: '#f3f3f3'}, textStyle: {fontSize: 11} },
+          vAxis: { gridlines: {color: '#f3f3f3'}, title: 'ROI %', textStyle: {fontSize: 11} },
+          animation: { startup: true, duration: 1000, easing: 'out' }
+        };
+
+        var chartD = new google.visualization.ScatterChart(document.getElementById('chart_delta'));
+        var chartS = new google.visualization.ScatterChart(document.getElementById('chart_strike'));
+
+        // Click Listener Logic
+        function onSelect(chart, dt) {
+          var sel = chart.getSelection();
+          if (sel.length > 0) {
+            var trade = dataArray[sel[0].row];
+
+            document.getElementById('instruction').style.display = 'none';
+            document.getElementById('data-content').style.display = 'block';
+
+            // Populate UI
+            document.getElementById('detail-label').innerText = trade.label;
+            document.getElementById('det-width').innerText = trade.width || "-";
+            document.getElementById('det-debit').innerText = "$" + Number(trade.debit || 0).toFixed(2);
+            document.getElementById('det-maxp').innerText = "$" + Number(trade.maxProfit || 0).toFixed(2);
+            document.getElementById('det-roi').innerText = (trade.roi * 100).toFixed(1) + "%";
+            document.getElementById('det-ld').innerText = trade.lowerDelta || "-";
+            document.getElementById('det-ud').innerText = trade.upperDelta || "-";
+            document.getElementById('det-loi').innerText = trade.lowerOI || "-";
+            document.getElementById('det-uoi').innerText = trade.upperOI || "-";
+            document.getElementById('det-liq').innerText = trade.liquidity || "-";
+            document.getElementById('det-tight').innerText = trade.tightness || "-";
+            document.getElementById('det-fit').innerText = trade.fitness || "-";
+          }
+        }
+
+        google.visualization.events.addListener(chartD, 'select', () => onSelect(chartD, dataDelta));
+        google.visualization.events.addListener(chartS, 'select', () => onSelect(chartS, dataStrike));
+
+        chartD.draw(dataDelta, { ...baseOptions, title: 'Delta vs ROI' });
+        chartS.draw(dataStrike, { ...baseOptions, title: 'Strike vs ROI' });
+
+      } catch (e) {
+        console.error("Chart Render Error: ", e);
+        document.getElementById('instruction').innerText = "Render Error: " + e.message;
+      }
+    }
+</script>
+</body>
+</html>

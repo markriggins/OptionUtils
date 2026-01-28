@@ -11,6 +11,8 @@ function onOpen() {
     .addItem('Refresh Option Prices', 'refreshOptionPrices')
     .addItem('PlotPortfolioValueByPrice', 'PlotPortfolioValueByPrice')
     .addItem('Run SpreadFinder', 'runSpreadFinder')
+    .addItem('View SpreadFinder Graphs', 'showSpreadFinderGraphs')
+
     .addToUi();
 }
 

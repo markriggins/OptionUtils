@@ -546,114 +546,62 @@ function outputSpreadResults_(sheet, spreads, config) {
   optionStratCol.setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
   sheet.setColumnWidth(16, 100);
 
-  // Create scatter charts on SpreadFinderGraphs sheet
-  createSpreadFinderCharts_(sheet, spreads.length, RESULTS_START_ROW);
+  showSpreadFinderGraphs();
 }
 
 /**
- * Creates/updates scatter charts on SpreadFinderGraphs sheet.
- * Chart 1: LowerDelta (X) vs ROI (Y)
- * Chart 2: Lower Strike (X) vs ROI (Y)
- * Preserves existing charts if they exist (user adjustments persist).
+ * Opens a large dashboard window with Delta vs ROI and Strike vs ROI.
  */
-/**
- * Creates scatter-style charts with the smallest possible "dots."
- * Sorts data so high-fitness spreads are drawn on top of low-fitness ones.
- */
-function createSpreadFinderCharts_(dataSheet, numRows, resultsStartRow) {
-  if (numRows < 2) return;
-
-  const ss = dataSheet.getParent();
-  const GRAPHS_SHEET = "SpreadFinderGraphs";
-  let graphSheet = ss.getSheetByName(GRAPHS_SHEET) || ss.insertSheet(GRAPHS_SHEET);
-  graphSheet.clear();
-
-  const dataStartRow = resultsStartRow + 1;
+function showSpreadFinderGraphs() {
   SpreadsheetApp.flush();
 
-  // 1. Get raw data
-  const labels = dataSheet.getRange(dataStartRow, 17, numRows, 1).getValues();      // Col Q
-  const deltas = dataSheet.getRange(dataStartRow, 9, numRows, 1).getValues();       // Col I
-  const rois = dataSheet.getRange(dataStartRow, 8, numRows, 1).getValues();         // Col H
-  const strikes = dataSheet.getRange(dataStartRow, 3, numRows, 1).getValues();      // Col C
-  const fitness = dataSheet.getRange(dataStartRow, 15, numRows, 1).getValues();     // Col O
+  // Creates the HTML interface from the SidebarChart.html file
+  const html = HtmlService.createHtmlOutputFromFile('SpreadFinderGraphs')
+      .setWidth(1050) // Wide enough for side-by-side or large stacked charts
+      .setHeight(850);
 
-  // 2. Prepare data for sorting
-  let combinedData = [];
-  for (let i = 0; i < numRows; i++) {
-    let f = fitness[i][0];
-    let bucket = "Level 1 (Low)";
-    if (f > 4) bucket = "Level 5 (Elite)";
-    else if (f > 3) bucket = "Level 4 (Great)";
-    else if (f > 2) bucket = "Level 3 (Good)";
-    else if (f > 1) bucket = "Level 2 (Fair)";
+  SpreadsheetApp.getUi().showModalDialog(html, 'Spread Finder Graphs');
+}
 
-    combinedData.push({
-      label: labels[i][0],
-      delta: deltas[i][0],
-      roi: rois[i][0],
-      strike: strikes[i][0],
-      bucket: bucket,
-      fitness: f
-    });
+/**
+ * Fetches and formats data for the Sidebar chart.
+ * Orders by Fitness so the best points are drawn last (on top).
+ */
+function getSidebarData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("SpreadFinder");
+  const lastRow = sheet.getLastRow();
+  const startRow = 21;
+
+  if (lastRow < startRow) {
+    console.log("No data found below start row");
+    return [];
   }
 
-  // 3. Sort by fitness ASCENDING (so high fitness is at the bottom of the sheet, and top of the chart)
-  combinedData.sort((a, b) => a.fitness - b.fitness);
+  // Get data up to Column R (18 columns)
+  const data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 18).getValues();
 
-  let chart1Values = combinedData.map(d => [d.label, d.delta, d.roi, d.bucket, 1]);
-  let chart2Values = combinedData.map(d => [d.label, d.strike, d.roi, d.bucket, 1]);
+  const payload = data.map(row => {
+    return {
+      delta: parseFloat(row[8]) || 0,     // Col I
+      roi: (parseFloat(row[7]) || 0),    // Col H (Raw number for chart)
+      label: String(row[16] || ""),      // Col Q
+      fitness: parseFloat(row[14]) || 0, // Col O
+      strike: parseFloat(row[2]) || 0,   // Col C
 
-  graphSheet.getRange(2, 1, numRows, 5).setValues(chart1Values);
-  graphSheet.getRange(2, 7, numRows, 5).setValues(chart2Values);
+      // Detail Fields
+      width: row[4],        // Col E
+      debit: row[5],        // Col F
+      maxProfit: row[6],    // Col G
+      lowerDelta: row[9],   // Col J
+      upperDelta: row[10],  // Col K
+      lowerOI: row[11],     // Col L
+      upperOI: row[12],     // Col M
+      liquidity: row[13],   // Col N
+      tightness: row[17]    // Col R
+    };
+  });
 
-  const commonOptions = {
-    bubble: {
-      textStyle: {fontSize: 1, color: 'none'},
-      minRadius: 0.5, // Even smaller
-      maxRadius: 0.5,
-      stroke: 'none',
-      opacity: 0.9    // Slight transparency helps see overlaps
-    },
-    series: {
-      'Level 1 (Low)':   {color: '#f44336'},
-      'Level 2 (Fair)':  {color: '#ff9800'},
-      'Level 3 (Good)':  {color: '#ffeb3b'},
-      'Level 4 (Great)': {color: '#8bc34a'},
-      'Level 5 (Elite)': {color: '#2e7d32'}
-    },
-    legend: {position: 'right'},
-    width: 900,
-    height: 600,
-    chartArea: {width: '85%', height: '80%'}
-  };
-
-  const chart1 = graphSheet.newChart()
-    .setChartType(Charts.ChartType.BUBBLE)
-    .addRange(graphSheet.getRange(2, 1, numRows, 5))
-    .setPosition(2, 1, 0, 0)
-    .setOption('title', 'Delta vs ROI (Top Fitness on Top)')
-    .setOption('hAxis', {title: 'Delta'})
-    .setOption('vAxis', {title: 'ROI'})
-    .setOption('bubble', commonOptions.bubble)
-    .setOption('series', commonOptions.series)
-    .setOption('width', commonOptions.width)
-    .setOption('height', commonOptions.height)
-    .build();
-
-  const chart2 = graphSheet.newChart()
-    .setChartType(Charts.ChartType.BUBBLE)
-    .addRange(graphSheet.getRange(2, 7, numRows, 5))
-    .setPosition(28, 1, 0, 0)
-    .setOption('title', 'Strike vs ROI (Top Fitness on Top)')
-    .setOption('hAxis', {title: 'Strike Price ($)'})
-    .setOption('vAxis', {title: 'ROI'})
-    .setOption('bubble', commonOptions.bubble)
-    .setOption('series', commonOptions.series)
-    .setOption('width', commonOptions.width)
-    .setOption('height', commonOptions.height)
-    .build();
-
-  graphSheet.insertChart(chart1);
-  graphSheet.insertChart(chart2);
+  console.log("Payload generated: " + payload.length + " rows.");
+  return payload.sort((a, b) => a.fitness - b.fitness);
 }
