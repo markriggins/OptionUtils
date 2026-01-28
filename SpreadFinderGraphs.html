@@ -22,6 +22,10 @@
           background: #333; color: #fff; padding: 8px; border-radius: 4px;
           font-size: 11px; font-weight: normal; width: 180px; z-index: 1000;
           text-align: center; line-height: 1.4; box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+          white-space: pre-line;
+        }
+        .chart-title[data-help]:hover::after {
+          left: 0; transform: none; width: 220px; text-align: left;
         }
 
         /* Panel Styling */
@@ -46,7 +50,7 @@
 <div class="dashboard">
     <div class="chart-card">
         <div class="chart-header">
-            <span class="chart-title" data-help="ZOOM: Click-drag area. PAN: Right-click-drag. RESET: Right-click once.">Delta vs ROI</span>
+            <span class="chart-title" data-help="Controls&#10;• Zoom: click-drag area&#10;• Pan: arrow keys&#10;• Reset: right-click">Delta vs ROI</span>
             <button class="toggle-btn" onclick="toggleChart('chart_delta')">Hide/Show</button>
         </div>
         <div id="chart_delta" class="chart-div"></div>
@@ -54,7 +58,7 @@
 
     <div class="chart-card">
         <div class="chart-header">
-            <span class="chart-title" data-help="ZOOM: Click-drag area. PAN: Right-click-drag. RESET: Right-click once.">Strike vs ROI</span>
+            <span class="chart-title" data-help="Controls&#10;• Zoom: click-drag area&#10;• Pan: arrow keys&#10;• Reset: right-click">Strike vs ROI</span>
             <button class="toggle-btn" onclick="toggleChart('chart_strike')">Hide/Show</button>
         </div>
         <div id="chart_strike" class="chart-div"></div>
@@ -73,7 +77,7 @@
             <div class="metric-box" data-help="Strike gap width."><span class="label">Width</span><span id="det-width" class="value"></span></div>
             <div class="metric-box" data-help="Cost to enter."><span class="label">Debit</span><span id="det-debit" class="value"></span></div>
             <div class="metric-box" data-help="Width minus Debit."><span class="label">Max Profit</span><span id="det-maxp" class="value"></span></div>
-            <div class="metric-box" data-help="Green: >100%, Yellow: >50%, Red: <50%"><span class="label">ROI</span><span id="det-roi" class="value"></span></div>
+            <div class="metric-box" data-help="Max profit / debit cost. Higher = more return per dollar risked."><span class="label">ROI</span><span id="det-roi" class="value"></span></div>
             <div class="metric-box" data-help="Days to expire."><span class="label">DTE</span><span id="det-dte" class="value"></span></div>
             <div class="metric-box" data-help="Volatility level."><span class="label">IV</span><span id="det-iv" class="value"></span></div>
             <div class="metric-box" data-help="Buy-side Delta."><span class="label">L-Delta</span><span id="det-ld" class="value"></span></div>
@@ -81,8 +85,8 @@
             <div class="metric-box" data-help="Lower Open Interest."><span class="label">L-OI</span><span id="det-loi" class="value"></span></div>
             <div class="metric-box" data-help="Upper Open Interest."><span class="label">U-OI</span><span id="det-uoi" class="value"></span></div>
             <div class="metric-box" data-help="Volume/OI mix."><span class="label">Liquidity</span><span id="det-liq" class="value"></span></div>
-            <div class="metric-box" data-help="Green: <0.5, Yellow: <1.5, Red: >1.5"><span class="label">Tightness</span><span id="det-tight" class="value"></span></div>
-            <div class="metric-box" data-help="Green: 4.5+, Yellow: 2.5+, Red: Low"><span class="label">Fitness</span><span id="det-fit" class="value"></span></div>
+            <div class="metric-box" data-help="Bid-ask spread as % of mid price. Lower = easier to fill."><span class="label">Tightness</span><span id="det-tight" class="value"></span></div>
+            <div class="metric-box" data-help="ROI × √liquidity × √tightness × √time. Higher = better trade."><span class="label">Fitness</span><span id="det-fit" class="value"></span></div>
         </div>
     </div>
 </div>
@@ -92,9 +96,8 @@
     var rawData = [], chartD, chartS, dtD, dtS;
 
     // FIX: title removed here to stop double titles
-    var opts = {
+    var baseOpts = {
       legend: 'none', chartArea: {width: '85%', height: '85%', top: 20},
-      explorer: {actions: ['dragToZoom', 'rightClickToReset'], keepInBounds: true},
       vAxis: {title: 'ROI %'}, hAxis: {gridlines: {color: '#f0f0f0'}}
     };
 
@@ -102,12 +105,39 @@
     function init() { google.script.run.withSuccessHandler(draw).getSidebarData(); }
     function refreshData() { document.getElementById('instruction').innerText = "Processing..."; google.script.run.withSuccessHandler(init).refreshOptionPrices(); }
 
+    // Axis state: tracks current viewWindow for each chart
+    var views = { delta: {h: null, v: null}, strike: {h: null, v: null} };
+    var defaults = { delta: {h: null, v: null}, strike: {h: null, v: null} };
+
+    function dataRange(dt, col) {
+      var min = Infinity, max = -Infinity;
+      for (var i = 0; i < dt.getNumberOfRows(); i++) {
+        var v = dt.getValue(i, col);
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      var pad = (max - min) * 0.05 || 1;
+      return { min: min - pad, max: max + pad };
+    }
+
+    function makeOpts(key) {
+      var o = JSON.parse(JSON.stringify(baseOpts));
+      o.hAxis.viewWindow = views[key].h;
+      o.vAxis.viewWindow = views[key].v;
+      return o;
+    }
+
+    function redrawChart(key) {
+      if (key === 'delta') chartD.draw(dtD, makeOpts('delta'));
+      if (key === 'strike') chartS.draw(dtS, makeOpts('strike'));
+    }
+
     function toggleChart(id) {
       var el = document.getElementById(id);
       el.style.display = (el.style.display === 'none') ? 'block' : 'none';
       if (el.style.display === 'block') {
-        if (id === 'chart_delta') chartD.draw(dtD, opts);
-        if (id === 'chart_strike') chartS.draw(dtS, opts);
+        var key = id === 'chart_delta' ? 'delta' : 'strike';
+        redrawChart(key);
       }
     }
 
@@ -126,6 +156,12 @@
         dtD.addRow([r.delta, r.roi * 100, r.label, style]);
         dtS.addRow([r.strike, r.roi * 100, r.label, style]);
       });
+
+      // Set default ranges
+      defaults.delta.h = dataRange(dtD, 0); defaults.delta.v = dataRange(dtD, 1);
+      defaults.strike.h = dataRange(dtS, 0); defaults.strike.v = dataRange(dtS, 1);
+      views.delta = {h: Object.assign({}, defaults.delta.h), v: Object.assign({}, defaults.delta.v)};
+      views.strike = {h: Object.assign({}, defaults.strike.h), v: Object.assign({}, defaults.strike.v)};
 
       chartD = new google.visualization.ScatterChart(document.getElementById('chart_delta'));
       chartS = new google.visualization.ScatterChart(document.getElementById('chart_strike'));
@@ -148,18 +184,15 @@
         document.getElementById('det-uoi').innerText = t.upperOI;
         document.getElementById('det-liq').innerText = t.liquidity;
 
-        // Color ROI
         var roiVal = t.roi * 100;
         var roiEl = document.getElementById('det-roi');
         roiEl.innerText = roiVal.toFixed(1) + "%";
         roiEl.style.color = roiVal >= 100 ? '#8bc34a' : (roiVal >= 50 ? '#ffeb3b' : '#f44336');
 
-        // Color Tightness
         var tightEl = document.getElementById('det-tight');
         tightEl.innerText = t.tightness;
         tightEl.style.color = t.tightness <= 0.5 ? '#8bc34a' : (t.tightness <= 1.5 ? '#ffeb3b' : '#f44336');
 
-        // Color Fitness
         var fitEl = document.getElementById('det-fit');
         fitEl.innerText = t.fitness;
         fitEl.style.color = t.fitness >= 4.5 ? '#8bc34a' : (t.fitness >= 2.5 ? '#ffeb3b' : '#f44336');
@@ -180,8 +213,103 @@
         });
       });
 
-      chartD.draw(dtD, opts);
-      chartS.draw(dtS, opts);
+      // Drag-to-zoom on chart divs
+      ['chart_delta', 'chart_strike'].forEach(function(id) {
+        var el = document.getElementById(id);
+        var key = id === 'chart_delta' ? 'delta' : 'strike';
+        var chart = key === 'delta' ? chartD : chartS;
+        var dragStart = null;
+        el.style.position = 'relative';
+
+        // Selection box
+        var selBox = document.createElement('div');
+        selBox.style.cssText = 'position:absolute;border:2px dashed #1a73e8;background:rgba(26,115,232,0.1);display:none;z-index:11;pointer-events:none;';
+        el.appendChild(selBox);
+
+        el.addEventListener('mousedown', function(e) {
+          if (e.button !== 0 || e.shiftKey) return; // only left click, not shift (leave shift for select)
+          // Check if click is in chart area (not on a point)
+          var cli = chart.getChartLayoutInterface();
+          var rect = el.getBoundingClientRect();
+          var x = e.clientX - rect.left, y = e.clientY - rect.top;
+          var ca = cli.getChartAreaBoundingBox();
+          if (x < ca.left || x > ca.left + ca.width || y < ca.top || y > ca.top + ca.height) return;
+          dragStart = {x: x, y: y, clientX: e.clientX, clientY: e.clientY};
+          selBox.style.display = 'block';
+          selBox.style.left = x + 'px'; selBox.style.top = y + 'px';
+          selBox.style.width = '0'; selBox.style.height = '0';
+          e.preventDefault();
+        });
+
+        el.addEventListener('mousemove', function(e) {
+          if (!dragStart) return;
+          var rect = el.getBoundingClientRect();
+          var x = e.clientX - rect.left, y = e.clientY - rect.top;
+          var sx = Math.min(dragStart.x, x), sy = Math.min(dragStart.y, y);
+          var sw = Math.abs(x - dragStart.x), sh = Math.abs(y - dragStart.y);
+          selBox.style.left = sx + 'px'; selBox.style.top = sy + 'px';
+          selBox.style.width = sw + 'px'; selBox.style.height = sh + 'px';
+          e.preventDefault();
+        });
+
+        el.addEventListener('mouseup', function(e) {
+          if (!dragStart) return;
+          selBox.style.display = 'none';
+          var rect = el.getBoundingClientRect();
+          var x2 = e.clientX - rect.left, y2 = e.clientY - rect.top;
+          var sx = Math.min(dragStart.x, x2), ex = Math.max(dragStart.x, x2);
+          var sy = Math.min(dragStart.y, y2), ey = Math.max(dragStart.y, y2);
+          var dx = ex - sx, dy = ey - sy;
+          dragStart = null;
+
+          if (dx < 10 && dy < 10) return;
+
+          var cli = chart.getChartLayoutInterface();
+          var hMin = cli.getHAxisValue(sx), hMax = cli.getHAxisValue(ex);
+          var vMax = cli.getVAxisValue(sy), vMin = cli.getVAxisValue(ey);
+
+          if (hMin != null && hMax != null) views[key].h = {min: hMin, max: hMax};
+          if (vMin != null && vMax != null) views[key].v = {min: vMin, max: vMax};
+          redrawChart(key);
+          e.preventDefault();
+        });
+      });
+
+      redrawChart('delta');
+      redrawChart('strike');
+
+      // Arrow keys pan, right-click resets
+      document.addEventListener('keydown', function(e) {
+        var dominated = ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'];
+        if (dominated.indexOf(e.key) === -1) return;
+        var horiz = (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
+        var dir = (e.key === 'ArrowRight' || e.key === 'ArrowUp') ? 1 : -1;
+        ['delta', 'strike'].forEach(function(key) {
+          if (horiz) {
+            var h = views[key].h;
+            var shift = (h.max - h.min) * 0.15 * dir;
+            views[key].h = {min: h.min + shift, max: h.max + shift};
+          } else {
+            var v = views[key].v;
+            var shift = (v.max - v.min) * 0.15 * dir;
+            views[key].v = {min: v.min + shift, max: v.max + shift};
+          }
+        });
+        redrawChart('delta');
+        redrawChart('strike');
+        e.preventDefault();
+      });
+
+      // Right-click to reset zoom
+      ['chart_delta', 'chart_strike'].forEach(function(id) {
+        var key = id === 'chart_delta' ? 'delta' : 'strike';
+        document.getElementById(id).addEventListener('contextmenu', function(e) {
+          views[key].h = Object.assign({}, defaults[key].h);
+          views[key].v = Object.assign({}, defaults[key].v);
+          redrawChart(key);
+          e.preventDefault();
+        });
+      });
     }
 </script>
 </body>
