@@ -294,11 +294,12 @@ function generateSpreads_(chain, config) {
       // Skip if no valid bid/ask
       if (lower.ask <= 0 || upper.bid < 0) continue;
 
-      // Calculate debit using patience/alpha model
-      const alpha = 1 - Math.exp(-config.patience / 60);
-      const buyLimit = lower.ask - alpha * (lower.ask - lower.bid);
-      const sellLimit = upper.bid + alpha * (upper.ask - upper.bid);
-      let debit = buyLimit - sellLimit;
+      // Calculate debit using mid pricing (validated by executed trades with GT 60 patience)
+      // For patient orders, mid is achievable; below mid may not fill
+      const lowerMid = (lower.bid + lower.ask) / 2;
+      const upperMid = (upper.bid + upper.ask) / 2;
+
+      let debit = lowerMid - upperMid;
       if (debit < 0) debit = 0;
       debit = round2_(debit);
 
@@ -321,8 +322,16 @@ function generateSpreads_(chain, config) {
       // Lower delta = more OTM = lower prob but higher reward
       const probITM = Math.abs(lower.delta); // P(stock > lower strike)
 
-      // Fitness = ROI * liquidity * tightness (tunable)
-      const fitness = round2_(roi * Math.sqrt(liquidityScore) * Math.sqrt(tightness));
+      // Time factor: longer expirations are better (more time to reach target)
+      // Use sqrt for diminishing returns - going from 1yr to 2yr helps more than 2yr to 3yr
+      const expDate = new Date(lower.expiration);
+      const now = new Date();
+      const daysToExp = Math.max(1, (expDate - now) / (1000 * 60 * 60 * 24));
+      const yearsToExp = daysToExp / 365;
+      const timeFactor = Math.sqrt(yearsToExp);
+
+      // Fitness = ROI * liquidity * tightness * time (tunable)
+      const fitness = round2_(roi * Math.sqrt(liquidityScore) * Math.sqrt(tightness) * timeFactor);
 
       spreads.push({
         symbol: lower.symbol,

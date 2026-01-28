@@ -228,7 +228,7 @@ function getLiquidityScore_(quote) {
  * Get realistic buy price accounting for liquidity.
  *
  * - alpha=0: pay ask (aggressive)
- * - alpha=1, high liquidity: can approach mid
+ * - alpha=1, high liquidity: approaches mid
  * - alpha=1, low liquidity: stuck near ask
  *
  * @param {Object} quote - Quote with bid, mid, ask, volume, openint
@@ -237,17 +237,17 @@ function getLiquidityScore_(quote) {
  */
 function getRealisticBuyPrice_(quote, alpha) {
   const liquidity = getLiquidityScore_(quote);
-  // Best achievable: high liquidity → mid, low liquidity → ask
-  const bestAchievable = quote.ask - liquidity * (quote.ask - quote.mid);
-  // Interpolate from ask toward best achievable based on patience
-  return quote.ask - alpha * (quote.ask - bestAchievable);
+  // Effective alpha: patience scaled by liquidity
+  const effectiveAlpha = alpha * liquidity;
+  // Interpolate from ask toward mid based on effective alpha
+  return quote.ask - effectiveAlpha * (quote.ask - quote.mid);
 }
 
 /**
  * Get realistic sell price accounting for liquidity.
  *
  * - alpha=0: receive bid (aggressive)
- * - alpha=1, high liquidity: can approach mid
+ * - alpha=1, high liquidity: approaches mid
  * - alpha=1, low liquidity: stuck near bid
  *
  * @param {Object} quote - Quote with bid, mid, ask, volume, openint
@@ -256,10 +256,10 @@ function getRealisticBuyPrice_(quote, alpha) {
  */
 function getRealisticSellPrice_(quote, alpha) {
   const liquidity = getLiquidityScore_(quote);
-  // Best achievable: high liquidity → mid, low liquidity → bid
-  const bestAchievable = quote.bid + liquidity * (quote.mid - quote.bid);
-  // Interpolate from bid toward best achievable based on patience
-  return quote.bid + alpha * (bestAchievable - quote.bid);
+  // Effective alpha: patience scaled by liquidity
+  const effectiveAlpha = alpha * liquidity;
+  // Interpolate from bid toward mid based on effective alpha
+  return quote.bid + effectiveAlpha * (quote.mid - quote.bid);
 }
 
 /**
