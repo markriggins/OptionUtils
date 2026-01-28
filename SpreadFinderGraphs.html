@@ -8,130 +8,180 @@
         .controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; background: white; padding: 10px 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .dashboard { display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; }
         .chart-card { background: white; border-radius: 8px; padding: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); flex: 1 1 480px; min-width: 400px; }
-        .chart-div { width: 100%; height: 420px; }
 
-        #details-panel {
-          width: 100%; max-width: 1150px; background: #202124; color: #e8eaed;
-          margin: 20px auto 0 auto; padding: 20px; border-radius: 8px;
-          border-left: 6px solid #8bc34a; box-sizing: border-box;
+        /* Fix Double Title: Use HTML Header only */
+        .chart-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; margin-bottom: 5px; padding-bottom: 5px; }
+        .chart-title { font-weight: bold; color: #3c4043; border-bottom: 1px dashed #1a73e8; cursor: help; position: relative; }
+        .chart-div { width: 100%; height: 400px; }
+
+        /* CSS INSTANT TOOLTIPS */
+        [data-help] { position: relative; }
+        [data-help]:hover::after {
+          content: attr(data-help);
+          position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
+          background: #333; color: #fff; padding: 8px; border-radius: 4px;
+          font-size: 11px; font-weight: normal; width: 180px; z-index: 1000;
+          text-align: center; line-height: 1.4; box-shadow: 0 4px 8px rgba(0,0,0,0.2);
         }
 
-        .grid-container {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-          gap: 12px; margin-top: 15px;
-        }
-        .metric-box { background: #2d2e31; padding: 10px; border-radius: 4px; border-bottom: 2px solid #3c4043; cursor: help; }
-        .label { font-size: 10px; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.5px; display: block; margin-bottom: 4px; border-bottom: 1px dotted #5f6368; width: fit-content; }
-        .value { font-size: 15px; color: #8bc34a; font-weight: bold; }
+        /* Panel Styling */
+        #details-panel { width: 100%; max-width: 1150px; background: #202124; color: #e8eaed; margin: 20px auto 0 auto; padding: 20px; border-radius: 8px; border-left: 6px solid #8bc34a; }
+        .grid-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-top: 15px; }
+        .metric-box { background: #2d2e31; padding: 10px; border-radius: 4px; border-bottom: 2px solid #3c4043; }
+        .label { font-size: 10px; color: #9aa0a6; text-transform: uppercase; display: block; margin-bottom: 4px; border-bottom: 1px dashed #5f6368; width: fit-content; }
+        .value { font-size: 14px; color: #8bc34a; font-weight: bold; }
 
-        .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        .btn-refresh { background: #1a73e8; color: white; }
+        .os-link { color: #8ab4f8; text-decoration: none; font-weight: bold; border: 1px solid #8ab4f8; padding: 6px 12px; border-radius: 4px; }
+        .btn-refresh { background: #1a73e8; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .toggle-btn { font-size: 11px; cursor: pointer; color: #1a73e8; border: 1px solid #1a73e8; background: none; border-radius: 4px; padding: 2px 6px; }
     </style>
 </head>
 <body>
 
 <div class="controls">
-    <div style="font-weight:bold; color:#5f6368;">Elite Spread Finder v4.0</div>
-    <button class="btn btn-refresh" onclick="refreshData()">Sync Data & Redraw</button>
+    <div style="font-weight:bold; color:#5f6368;">Elite Spread Finder v5.8</div>
+    <button class="btn-refresh" onclick="refreshData()">Sync & Refresh</button>
 </div>
 
 <div class="dashboard">
-    <div class="chart-card"><div id="chart_delta" class="chart-div"></div></div>
-    <div class="chart-card"><div id="chart_strike" class="chart-div"></div></div>
+    <div class="chart-card">
+        <div class="chart-header">
+            <span class="chart-title" data-help="ZOOM: Click-drag area. PAN: Right-click-drag. RESET: Right-click once.">Delta vs ROI</span>
+            <button class="toggle-btn" onclick="toggleChart('chart_delta')">Hide/Show</button>
+        </div>
+        <div id="chart_delta" class="chart-div"></div>
+    </div>
+
+    <div class="chart-card">
+        <div class="chart-header">
+            <span class="chart-title" data-help="ZOOM: Click-drag area. PAN: Right-click-drag. RESET: Right-click once.">Strike vs ROI</span>
+            <button class="toggle-btn" onclick="toggleChart('chart_strike')">Hide/Show</button>
+        </div>
+        <div id="chart_strike" class="chart-div"></div>
+    </div>
 </div>
 
 <div id="details-panel">
-    <div id="instruction" style="text-align:center; color:#9aa0a6;">Click a data point to reveal full analytics...</div>
-
+    <div id="instruction" style="text-align:center; color:#9aa0a6; padding: 10px;">Select a trade point above. Double-click for OptionStrat.</div>
     <div id="data-content" style="display:none;">
-        <h3 id="detail-label" style="margin:0 0 10px 0; color:#8bc34a; border-bottom:1px solid #3c4043; padding-bottom:10px;"></h3>
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #3c4043; padding-bottom:12px;">
+            <h3 id="detail-label" style="margin:0; color:#8bc34a;"></h3>
+            <a id="det-osurl" href="#" target="_blank" class="os-link">OptionStrat ↗</a>
+        </div>
+
         <div class="grid-container">
-            <div class="metric-box" title="The price difference between your long and short strikes."><span class="label">Width</span><span id="det-width" class="value"></span></div>
-            <div class="metric-box" title="The total cost to enter the spread."><span class="label">Debit</span><span id="det-debit" class="value"></span></div>
-            <div class="metric-box" title="Max potential gain (Width - Debit)."><span class="label">Max Profit</span><span id="det-maxp" class="value"></span></div>
-            <div class="metric-box" title="Return on Investment (Max Profit / Debit)."><span class="label">ROI</span><span id="det-roi" class="value"></span></div>
-            <div class="metric-box" title="Days remaining until the option expires."><span class="label">DTE</span><span id="det-dte" class="value"></span></div>
-            <div class="metric-box" title="Implied Volatility: How much the market expects the price to move."><span class="label">IV</span><span id="det-iv" class="value"></span></div>
-            <div class="metric-box" title="Delta of the lower (Long) strike - you BUY this call."><span class="label">L-Delta</span><span id="det-ld" class="value"></span></div>
-            <div class="metric-box" title="Delta of the upper (Short) strike - you SELL this call."><span class="label">U-Delta</span><span id="det-ud" class="value"></span></div>
-            <div class="metric-box" title="Open Interest for the Lower strike."><span class="label">L-OI</span><span id="det-loi" class="value"></span></div>
-            <div class="metric-box" title="Open Interest for the Upper strike."><span class="label">U-OI</span><span id="det-uoi" class="value"></span></div>
-            <div class="metric-box" title="General liquidity score based on volume and OI."><span class="label">Liquidity</span><span id="det-liq" class="value"></span></div>
-            <div class="metric-box" title="The percentage difference between Bid and Ask prices. Smaller is better."><span class="label">Tightness</span><span id="det-tight" class="value"></span></div>
-            <div class="metric-box" title="Proprietary fitness score (4.5+ is Elite)."><span class="label">Fitness</span><span id="det-fit" class="value"></span></div>
+            <div class="metric-box" data-help="Strike gap width."><span class="label">Width</span><span id="det-width" class="value"></span></div>
+            <div class="metric-box" data-help="Cost to enter."><span class="label">Debit</span><span id="det-debit" class="value"></span></div>
+            <div class="metric-box" data-help="Width minus Debit."><span class="label">Max Profit</span><span id="det-maxp" class="value"></span></div>
+            <div class="metric-box" data-help="Green: >100%, Yellow: >50%, Red: <50%"><span class="label">ROI</span><span id="det-roi" class="value"></span></div>
+            <div class="metric-box" data-help="Days to expire."><span class="label">DTE</span><span id="det-dte" class="value"></span></div>
+            <div class="metric-box" data-help="Volatility level."><span class="label">IV</span><span id="det-iv" class="value"></span></div>
+            <div class="metric-box" data-help="Buy-side Delta."><span class="label">L-Delta</span><span id="det-ld" class="value"></span></div>
+            <div class="metric-box" data-help="Sell-side Delta."><span class="label">U-Delta</span><span id="det-ud" class="value"></span></div>
+            <div class="metric-box" data-help="Lower Open Interest."><span class="label">L-OI</span><span id="det-loi" class="value"></span></div>
+            <div class="metric-box" data-help="Upper Open Interest."><span class="label">U-OI</span><span id="det-uoi" class="value"></span></div>
+            <div class="metric-box" data-help="Volume/OI mix."><span class="label">Liquidity</span><span id="det-liq" class="value"></span></div>
+            <div class="metric-box" data-help="Green: <0.5, Yellow: <1.5, Red: >1.5"><span class="label">Tightness</span><span id="det-tight" class="value"></span></div>
+            <div class="metric-box" data-help="Green: 4.5+, Yellow: 2.5+, Red: Low"><span class="label">Fitness</span><span id="det-fit" class="value"></span></div>
         </div>
     </div>
 </div>
 
 <script type="text/javascript">
     google.charts.load('current', {'packages':['corechart']});
+    var rawData = [], chartD, chartS, dtD, dtS;
+
+    // FIX: title removed here to stop double titles
+    var opts = {
+      legend: 'none', chartArea: {width: '85%', height: '85%', top: 20},
+      explorer: {actions: ['dragToZoom', 'rightClickToReset'], keepInBounds: true},
+      vAxis: {title: 'ROI %'}, hAxis: {gridlines: {color: '#f0f0f0'}}
+    };
+
     google.charts.setOnLoadCallback(init);
+    function init() { google.script.run.withSuccessHandler(draw).getSidebarData(); }
+    function refreshData() { document.getElementById('instruction').innerText = "Processing..."; google.script.run.withSuccessHandler(init).refreshOptionPrices(); }
 
-    function refreshData() {
-      document.getElementById('instruction').innerText = "Warming cache and ingesting Barchart CSVs...";
-      google.script.run.withSuccessHandler(init).refreshOptionPrices();
-    }
-
-    function init() {
-      google.script.run.withSuccessHandler(draw).getSidebarData();
+    function toggleChart(id) {
+      var el = document.getElementById(id);
+      el.style.display = (el.style.display === 'none') ? 'block' : 'none';
+      if (el.style.display === 'block') {
+        if (id === 'chart_delta') chartD.draw(dtD, opts);
+        if (id === 'chart_strike') chartS.draw(dtS, opts);
+      }
     }
 
     function draw(dataArray) {
+      rawData = dataArray;
       if (!dataArray || dataArray.length === 0) return;
-
-      var dataDelta = new google.visualization.DataTable();
-      var dataStrike = new google.visualization.DataTable();
-      [dataDelta, dataStrike].forEach(dt => {
+      dtD = new google.visualization.DataTable(); dtS = new google.visualization.DataTable();
+      [dtD, dtS].forEach(dt => {
         dt.addColumn('number', 'X'); dt.addColumn('number', 'ROI');
         dt.addColumn({type: 'string', role: 'tooltip'}); dt.addColumn({type: 'string', role: 'style'});
       });
 
       dataArray.forEach(r => {
-        let size = r.fitness >= 4.5 ? 9 : (r.fitness >= 3.5 ? 5 : 2);
         let color = r.fitness >= 4.5 ? '#2e7d32' : (r.fitness >= 2.5 ? '#ffeb3b' : '#f44336');
-        let style = `point { size: ${size}; fill-color: ${color}; stroke-width: 1; stroke-color: #333; }`;
-        dataDelta.addRow([r.delta, r.roi * 100, r.label, style]);
-        dataStrike.addRow([r.strike, r.roi * 100, r.label, style]);
+        let style = `point { size: ${r.fitness >= 4.5 ? 9 : 4}; fill-color: ${color}; stroke-width: 1; stroke-color: #333; }`;
+        dtD.addRow([r.delta, r.roi * 100, r.label, style]);
+        dtS.addRow([r.strike, r.roi * 100, r.label, style]);
       });
 
-      var options = {
-        legend: 'none', chartArea: {width: '85%', height: '80%'},
-        explorer: {actions: ['dragToZoom', 'rightClickToReset'], keepInBounds: true},
-        vAxis: {title: 'ROI %'}, animation: {startup: true, duration: 800, easing: 'out'}
-      };
+      chartD = new google.visualization.ScatterChart(document.getElementById('chart_delta'));
+      chartS = new google.visualization.ScatterChart(document.getElementById('chart_strike'));
 
-      var chartD = new google.visualization.ScatterChart(document.getElementById('chart_delta'));
-      var chartS = new google.visualization.ScatterChart(document.getElementById('chart_strike'));
+      function updateAnalytics(rowIndex) {
+        var t = rawData[rowIndex];
+        document.getElementById('instruction').style.display = 'none';
+        document.getElementById('data-content').style.display = 'block';
+        document.getElementById('detail-label').innerText = t.label;
+        document.getElementById('det-osurl').onclick = function() { window.open(t.osUrl, '_blank'); return false; };
 
-      function onSelect(chart) {
-        var sel = chart.getSelection();
-        if (sel.length > 0) {
-          var trade = dataArray[sel[0].row];
-          document.getElementById('instruction').style.display = 'none';
-          document.getElementById('data-content').style.display = 'block';
-          document.getElementById('detail-label').innerText = trade.label;
-          document.getElementById('det-width').innerText = trade.width;
-          document.getElementById('det-debit').innerText = "$" + Number(trade.debit).toFixed(2);
-          document.getElementById('det-maxp').innerText = "$" + Number(trade.maxProfit).toFixed(2);
-          document.getElementById('det-roi').innerText = (trade.roi * 100).toFixed(1) + "%";
-          document.getElementById('det-dte').innerText = trade.dte + " days";
-          document.getElementById('det-iv').innerText = (trade.iv * 100).toFixed(2) + "%";
-          document.getElementById('det-ld').innerText = trade.lowerDelta;
-          document.getElementById('det-ud').innerText = trade.upperDelta;
-          document.getElementById('det-loi').innerText = trade.lowerOI;
-          document.getElementById('det-uoi').innerText = trade.upperOI;
-          document.getElementById('det-liq').innerText = trade.liquidity;
-          document.getElementById('det-tight').innerText = trade.tightness;
-          document.getElementById('det-fit').innerText = trade.fitness;
-        }
+        document.getElementById('det-width').innerText = t.width;
+        document.getElementById('det-debit').innerText = "$" + Number(t.debit).toFixed(2);
+        document.getElementById('det-maxp').innerText = "$" + Number(t.maxProfit).toFixed(2);
+        document.getElementById('det-dte').innerText = t.dte + "d";
+        document.getElementById('det-iv').innerText = (t.iv * 100).toFixed(1) + "%";
+        document.getElementById('det-ld').innerText = t.lowerDelta;
+        document.getElementById('det-ud').innerText = t.upperDelta;
+        document.getElementById('det-loi').innerText = t.lowerOI;
+        document.getElementById('det-uoi').innerText = t.upperOI;
+        document.getElementById('det-liq').innerText = t.liquidity;
+
+        // Color ROI
+        var roiVal = t.roi * 100;
+        var roiEl = document.getElementById('det-roi');
+        roiEl.innerText = roiVal.toFixed(1) + "%";
+        roiEl.style.color = roiVal >= 100 ? '#8bc34a' : (roiVal >= 50 ? '#ffeb3b' : '#f44336');
+
+        // Color Tightness
+        var tightEl = document.getElementById('det-tight');
+        tightEl.innerText = t.tightness;
+        tightEl.style.color = t.tightness <= 0.5 ? '#8bc34a' : (t.tightness <= 1.5 ? '#ffeb3b' : '#f44336');
+
+        // Color Fitness
+        var fitEl = document.getElementById('det-fit');
+        fitEl.innerText = t.fitness;
+        fitEl.style.color = t.fitness >= 4.5 ? '#8bc34a' : (t.fitness >= 2.5 ? '#ffeb3b' : '#f44336');
       }
 
-      google.visualization.events.addListener(chartD, 'select', () => onSelect(chartD));
-      google.visualization.events.addListener(chartS, 'select', () => onSelect(chartS));
+      [chartD, chartS].forEach(c => {
+        google.visualization.events.addListener(c, 'select', function() {
+          var sel = c.getSelection();
+          if (sel.length > 0) updateAnalytics(sel[0].row);
+        });
+      });
 
-      chartD.draw(dataDelta, {...options, title: 'Delta vs ROI'});
-      chartS.draw(dataStrike, {...options, title: 'Strike vs ROI'});
+      [document.getElementById('chart_delta'), document.getElementById('chart_strike')].forEach((el, idx) => {
+        el.addEventListener('dblclick', function() {
+          var c = idx === 0 ? chartD : chartS;
+          var sel = c.getSelection();
+          if (sel.length > 0) window.open(rawData[sel[0].row].osUrl, '_blank');
+        });
+      });
+
+      chartD.draw(dtD, opts);
+      chartS.draw(dtS, opts);
     }
 </script>
 </body>
