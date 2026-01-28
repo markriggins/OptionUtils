@@ -501,12 +501,16 @@ function outputSpreadResults_(sheet, spreads, config) {
     // Fitness = ROI * SQRT(Liquidity) * SQRT(Tightness)
     fitnessFormulas.push([`=ROUND(H${row}*SQRT(M${row})*SQRT(N${row}),2)`]);
     // OptionStrat URL as hyperlink
-//    optionStratFormulas.push([`=HYPERLINK(buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row}),"OptionStrat")`]);
-    optionStratFormulas.push([""]);
-    // Label: "TSLA 350/450 Dec28"
-//    labelFormulas.push([`=A${row}&" "&C${row}&"/"&D${row}&" "&TEXT(B${row},"MMMYY")`]);
-    labelFormulas.push([`${sheet.getRange(row, 1).getValue()} ${sheet.getRange(row, 3).getValue()}/${sheet.getRange(row, 4).getValue()} ${Utilities.formatDate(new Date(sheet.getRange(row, 2).getValue()), "GMT", "MMM yy")}`]);
-  }
+    const osUrl = `buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row})`;
+    optionStratFormulas.push([`=HYPERLINK(${osUrl},"OptionStrat")`]);
+
+    // Format labels as: "TSLA 350/450 Jan 28"
+    const sym = sheet.getRange(row, 1).getValue();
+    const lowStrike = sheet.getRange(row, 3).getValue();
+    const highStrike = sheet.getRange(row, 4).getValue();
+    const expDate = new Date(sheet.getRange(row, 2).getValue());
+    const dateStr = Utilities.formatDate(expDate, Session.getScriptTimeZone(), "MMM yy");
+    labelValues.push([`${sym} ${lowStrike}/${highStrike} ${dateStr}`]);  }
 
   // Set formulas
   sheet.getRange(dataStartRow, 7, spreads.length, 1).setFormulas(maxProfitFormulas); // G
@@ -567,6 +571,10 @@ function showSpreadFinderGraphs() {
  * Fetches and formats data for the Sidebar chart.
  * Orders by Fitness so the best points are drawn last (on top).
  */
+/**
+ * Enhanced Data Fetch for Graphs
+ * Integrates IV and uses the column mapping confirmed from your screenshots.
+ */
 function getSidebarData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName("SpreadFinder");
@@ -574,19 +582,24 @@ function getSidebarData() {
   const startRow = 21;
   if (lastRow < startRow) return [];
 
-  // Fetch 17 columns (A through Q) to capture the Label in Col Q
   const data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 17).getValues();
+  const today = new Date();
+  today.setHours(0,0,0,0);
 
   return data.map(row => {
-    return {
-      // Basic Chart Mapping
-      delta: parseFloat(row[8]) || 0,     // Col I (LowerDelta)
-      roi: parseFloat(row[7]) || 0,       // Col H (ROI)
-      strike: parseFloat(row[2]) || 0,    // Col C (Lower Strike)
-      fitness: parseFloat(row[14]) || 0,  // Col O (Fitness)
-      label: String(row[16] || ""),       // Col Q (Label)
+    const expDate = new Date(row[1]);
+    const diffTime = expDate.getTime() - today.getTime();
+    const dte = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-      // Detail Panel Mapping (Matches your screenshot headers)
+    return {
+      // Basic Charting
+      delta: parseFloat(row[8]) || 0,     // Col I
+      roi: parseFloat(row[7]) || 0,       // Col H
+      strike: parseFloat(row[2]) || 0,    // Col C
+      fitness: parseFloat(row[14]) || 0,  // Col O
+      label: String(row[16] || ""),       // Col Q
+
+      // Full Analytics Suite
       width: row[4],         // Col E
       debit: row[5],         // Col F
       maxProfit: row[6],     // Col G
@@ -595,7 +608,9 @@ function getSidebarData() {
       lowerOI: row[10],      // Col K
       upperOI: row[11],      // Col L
       liquidity: row[12],    // Col M
-      tightness: row[13]     // Col N (Tightness)
+      tightness: row[13],    // Col N
+      iv: row[15],           // Col P (OptionStrat/IV field)
+      dte: dte > 0 ? dte : 0
     };
-  }).sort((a, b) => a.fitness - b.fitness); // Elite dots drawn last (on top)
+  }).sort((a, b) => a.fitness - b.fitness);
 }
