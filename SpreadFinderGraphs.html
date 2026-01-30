@@ -143,16 +143,22 @@
       }
     }
 
+    function pointStyle(r) {
+      if (r.held) {
+        return 'point { size: 5; fill-color: #9e9e9e; opacity: 0.35; stroke-width: 1; stroke-color: #757575; }';
+      }
+      var color = r.fitness >= 4.0 ? '#2e7d32' : (r.fitness >= 3.0 ? '#66bb6a' : (r.fitness >= 2.0 ? '#ffeb3b' : '#f44336'));
+      return 'point { size: ' + (r.fitness >= 4.0 ? 9 : 4) + '; fill-color: ' + color + '; stroke-width: 1; stroke-color: #333; }';
+    }
+
     function buildStrikeTable(dataArray) {
       dtS = new google.visualization.DataTable();
       var yLabel = strikeYMode === 'roi' ? 'ROI' : 'ExpROI';
       dtS.addColumn('number', 'X'); dtS.addColumn('number', yLabel);
       dtS.addColumn({type: 'string', role: 'tooltip'}); dtS.addColumn({type: 'string', role: 'style'});
       dataArray.forEach(r => {
-        let color = r.fitness >= 4.0 ? '#2e7d32' : (r.fitness >= 3.0 ? '#66bb6a' : (r.fitness >= 2.0 ? '#ffeb3b' : '#f44336'));
-        let style = `point { size: ${r.fitness >= 4.0 ? 9 : 4}; fill-color: ${color}; stroke-width: 1; stroke-color: #333; }`;
         var yVal = strikeYMode === 'roi' ? r.roi * 100 : (r.expectedROI || 0) * 100;
-        dtS.addRow([r.strike, yVal, r.label, style]);
+        dtS.addRow([r.strike, yVal, r.held ? r.label + ' [HELD]' : r.label, pointStyle(r)]);
       });
     }
 
@@ -173,9 +179,7 @@
       dtD.addColumn({type: 'string', role: 'tooltip'}); dtD.addColumn({type: 'string', role: 'style'});
 
       dataArray.forEach(r => {
-        let color = r.fitness >= 4.0 ? '#2e7d32' : (r.fitness >= 3.0 ? '#66bb6a' : (r.fitness >= 2.0 ? '#ffeb3b' : '#f44336'));
-        let style = `point { size: ${r.fitness >= 4.0 ? 9 : 4}; fill-color: ${color}; stroke-width: 1; stroke-color: #333; }`;
-        dtD.addRow([r.delta, r.roi * 100, r.label, style]);
+        dtD.addRow([r.delta, r.roi * 100, r.held ? r.label + ' [HELD]' : r.label, pointStyle(r)]);
       });
       buildStrikeTable(dataArray);
 
@@ -192,7 +196,9 @@
         var t = rawData[rowIndex];
         document.getElementById('instruction').style.display = 'none';
         document.getElementById('data-content').style.display = 'block';
-        document.getElementById('detail-label').innerText = t.label;
+        var labelEl = document.getElementById('detail-label');
+        labelEl.innerHTML = t.held ? t.label + '  <span data-help="You cannot be long and short on the same option" style="color:#ff9800;cursor:help;">⚠ HELD</span>' : t.label;
+        labelEl.style.color = t.held ? '#ff9800' : '#8bc34a';
         document.getElementById('det-osurl').onclick = function() { window.open(t.osUrl, '_blank'); return false; };
 
         document.getElementById('det-width').innerText = t.width;
