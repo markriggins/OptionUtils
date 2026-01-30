@@ -79,6 +79,7 @@
             <div class="metric-box" data-help="Cost to enter."><span class="label">Debit</span><span id="det-debit" class="value"></span></div>
             <div class="metric-box" data-help="Width minus Debit."><span class="label">Max Profit</span><span id="det-maxp" class="value"></span></div>
             <div class="metric-box" data-help="Max profit / debit cost. Higher = more return per dollar risked."><span class="label">ROI</span><span id="det-roi" class="value"></span></div>
+            <div class="metric-box" data-help="Probability-weighted ROI using prob-of-touch model."><span class="label">Exp ROI</span><span id="det-eroi" class="value"></span></div>
             <div class="metric-box" data-help="Days to expire."><span class="label">DTE</span><span id="det-dte" class="value"></span></div>
             <div class="metric-box" data-help="Volatility level."><span class="label">IV</span><span id="det-iv" class="value"></span></div>
             <div class="metric-box" data-help="Buy-side Delta."><span class="label">L-Delta</span><span id="det-ld" class="value"></span></div>
@@ -209,6 +210,11 @@
         var roiEl = document.getElementById('det-roi');
         roiEl.innerText = roiVal.toFixed(1) + "%";
         roiEl.style.color = roiVal >= 100 ? '#8bc34a' : (roiVal >= 50 ? '#ffeb3b' : '#f44336');
+
+        var eroiVal = (t.expectedROI || 0) * 100;
+        var eroiEl = document.getElementById('det-eroi');
+        eroiEl.innerText = eroiVal.toFixed(1) + "%";
+        eroiEl.style.color = eroiVal >= 100 ? '#8bc34a' : (eroiVal >= 50 ? '#ffeb3b' : '#f44336');
 
         var tightEl = document.getElementById('det-tight');
         tightEl.innerText = t.tightness;

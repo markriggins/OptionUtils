@@ -104,11 +104,9 @@ function runSpreadFinder() {
   }
   Logger.log("Generated " + spreads.length + " spreads");
 
-  // Load existing short strikes from BullCallSpreads to avoid conflicts (by symbol)
-  const heldShortStrikesBySymbol = loadHeldShortStrikes_(ss);
-  for (const [sym, strikes] of heldShortStrikesBySymbol) {
-    Logger.log(`Held short strikes for ${sym}: ${JSON.stringify([...strikes])}`);
-  }
+  // Load conflicts from config sheet
+  const conflicts = loadConflicts_(configSheet);
+  Logger.log("Loaded " + conflicts.size + " conflicts");
 
   // Filter by config constraints
   const minExpDate = config.minExpirationDate;
@@ -116,9 +114,8 @@ function runSpreadFinder() {
   const filtered = spreads.filter(s => {
     // Parse expiration date
     const expDate = new Date(s.expiration);
-    // Can't use a strike as long if we're already short it (for same symbol)
-    const symbolShorts = heldShortStrikesBySymbol.get(s.symbol);
-    const hasConflict = symbolShorts ? symbolShorts.has(s.lowerStrike) : false;
+    // Check if this spread's lower strike conflicts with a held short position
+    const hasConflict = conflicts.has(`${s.symbol}|${s.lowerStrike}|${s.expiration}`);
     return s.debit > 0 &&
       s.debit <= config.maxDebit &&
       s.roi >= config.minROI &&
@@ -210,6 +207,44 @@ function ensureSpreadFinderConfigSheet_(ss) {
   sheet.autoResizeColumn(CONFIG_COL);
   sheet.autoResizeColumn(CONFIG_COL + 1);
   sheet.autoResizeColumn(CONFIG_COL + 2);
+
+  // --- Conflicts table ---
+  const conflictsStartRow = CONFIG_START_ROW + configData.length + 1; // blank row separator
+
+  // Read existing conflicts before overwriting
+  const existingConflicts = [];
+  try {
+    const lastRow = sheet.getLastRow();
+    if (lastRow > conflictsStartRow + 1) {
+      const conflictData = sheet.getRange(conflictsStartRow + 2, CONFIG_COL, lastRow - conflictsStartRow - 1, 3).getValues();
+      for (const row of conflictData) {
+        const sym = (row[0] || "").toString().trim();
+        if (sym) existingConflicts.push(row);
+      }
+    }
+  } catch (e) { /* no existing conflicts */ }
+
+  // If no existing conflicts, seed from Positions sheet
+  if (existingConflicts.length === 0) {
+    const posConflicts = seedConflictsFromPositions_(ss);
+    existingConflicts.push(...posConflicts);
+  }
+
+  // Write conflicts header + description
+  sheet.getRange(conflictsStartRow, CONFIG_COL, 1, 3).setValues([
+    ["Enter specific symbol, strike and expiration dates to ignore (presuming you already have conflicting short positions in them)", "", ""]
+  ]).setFontStyle("italic").setFontColor("#5f6368").setFontSize(9);
+  sheet.getRange(conflictsStartRow, CONFIG_COL).merge();
+
+  const conflictHeader = [["Symbol", "Strike", "Expiration"]];
+  const conflictHeaderRow = conflictsStartRow + 1;
+  sheet.getRange(conflictHeaderRow, CONFIG_COL, 1, 3).setValues(conflictHeader)
+    .setBackground("#e8710a").setFontColor("white").setFontWeight("bold");
+
+  // Write conflict data rows (or one empty row for user to fill in)
+  if (existingConflicts.length > 0) {
+    sheet.getRange(conflictHeaderRow + 1, CONFIG_COL, existingConflicts.length, 3).setValues(existingConflicts);
+  }
 
   return sheet;
 }
@@ -508,61 +543,89 @@ function generateSpreads_(chain, config) {
 }
 
 /**
- * Loads existing short strikes from BullCallSpreads table on Positions sheet.
- * Returns a Map of symbol -> Set of short strike numbers to avoid conflicts.
+ * Seeds initial conflicts from the Positions sheet BullCallSpreads table.
+ * Returns array of [symbol, strike, expiration] rows.
  */
-function loadHeldShortStrikes_(ss) {
-  const shortStrikesBySymbol = new Map();
-
+function seedConflictsFromPositions_(ss) {
+  const conflicts = [];
   const sheet = ss.getSheetByName("Positions");
-  if (!sheet) {
-    Logger.log("Positions sheet not found, skipping conflict check");
-    return shortStrikesBySymbol;
-  }
+  if (!sheet) return conflicts;
 
   const data = sheet.getDataRange().getValues();
-  if (data.length < 2) return shortStrikesBySymbol;
+  if (data.length < 2) return conflicts;
 
-  // Find header row with "Symbol", "Short Strike", "Contracts"
+  // Find header row with "Symbol", "Short Strike", "Expiration"
   let headerRow = -1;
-  let symbolCol = -1;
-  let shortStrikeCol = -1;
-  let contractsCol = -1;
+  let symbolCol = -1, shortStrikeCol = -1, expirationCol = -1, contractsCol = -1;
 
   for (let r = 0; r < Math.min(10, data.length); r++) {
     for (let c = 0; c < data[r].length; c++) {
       const val = (data[r][c] || "").toString().toLowerCase().trim();
       if (val === "symbol") symbolCol = c;
-      if (val === "short strike") {
-        headerRow = r;
-        shortStrikeCol = c;
-      }
+      if (val === "short strike") { headerRow = r; shortStrikeCol = c; }
+      if (val === "expiration") expirationCol = c;
       if (val === "contracts") contractsCol = c;
     }
     if (headerRow >= 0) break;
   }
 
-  if (headerRow < 0 || shortStrikeCol < 0) {
-    Logger.log("BullCallSpreads table not found on Positions sheet");
-    return shortStrikesBySymbol;
-  }
+  if (headerRow < 0 || shortStrikeCol < 0) return conflicts;
 
-  // Read short strikes from rows below header (where contracts > 0)
   for (let r = headerRow + 1; r < data.length; r++) {
     const symbol = symbolCol >= 0 ? (data[r][symbolCol] || "").toString().trim().toUpperCase() : "";
-    const shortStrike = +data[r][shortStrikeCol];
+    const strike = +data[r][shortStrikeCol];
     const contracts = contractsCol >= 0 ? +data[r][contractsCol] : 1;
+    let exp = expirationCol >= 0 ? data[r][expirationCol] : "";
+    if (exp instanceof Date) {
+      exp = Utilities.formatDate(exp, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    }
 
-    // Only count if we have contracts
-    if (symbol && Number.isFinite(shortStrike) && shortStrike > 0 && contracts > 0) {
-      if (!shortStrikesBySymbol.has(symbol)) {
-        shortStrikesBySymbol.set(symbol, new Set());
-      }
-      shortStrikesBySymbol.get(symbol).add(shortStrike);
+    if (symbol && Number.isFinite(strike) && strike > 0 && contracts > 0) {
+      conflicts.push([symbol, strike, exp || ""]);
     }
   }
 
-  return shortStrikesBySymbol;
+  return conflicts;
+}
+
+/**
+ * Loads conflicts from the SpreadFinderConfig sheet.
+ * Returns a Set of "SYMBOL|STRIKE|EXPIRATION" keys for fast lookup.
+ */
+function loadConflicts_(configSheet) {
+  const conflicts = new Set();
+  const data = configSheet.getDataRange().getValues();
+
+  // Find the conflicts header row
+  let headerRow = -1;
+  for (let r = 0; r < data.length; r++) {
+    const a = (data[r][0] || "").toString().trim();
+    const b = (data[r][1] || "").toString().trim();
+    const c = (data[r][2] || "").toString().trim();
+    if (a === "Symbol" && b === "Strike" && c === "Expiration") {
+      headerRow = r;
+      break;
+    }
+  }
+
+  if (headerRow < 0) return conflicts;
+
+  for (let r = headerRow + 1; r < data.length; r++) {
+    const symbol = (data[r][0] || "").toString().trim().toUpperCase();
+    const strike = +data[r][1];
+    let exp = data[r][2];
+    if (exp instanceof Date) {
+      exp = Utilities.formatDate(exp, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    } else {
+      exp = (exp || "").toString().trim();
+    }
+
+    if (symbol && Number.isFinite(strike) && strike > 0) {
+      conflicts.add(`${symbol}|${strike}|${exp}`);
+    }
+  }
+
+  return conflicts;
 }
 
 /**
