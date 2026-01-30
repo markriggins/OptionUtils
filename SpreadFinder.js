@@ -2,10 +2,10 @@
  * SpreadFinder.js
  * Analyzes OptionPricesUploaded to find and rank bull call spread opportunities.
  *
- * Uses a config table at top of SpreadFinder sheet for tunable parameters.
- * Results appear below the config on the same sheet.
+ * Config lives on the SpreadFinderConfig sheet.
+ * Results are written to the Spreads sheet.
  *
- * Config table format (auto-created):
+ * Config table format (auto-created on SpreadFinderConfig):
  *   | Setting            | Value | Description                                    |
  *   | maxSpreadWidth     | 150   | Maximum spread width in dollars                |
  *   | minOpenInterest    | 10    | Minimum open interest for both legs            |
@@ -14,18 +14,41 @@
  *   | maxDebit           | 50    | Maximum debit per share                        |
  *   | minROI             | 0.5   | Minimum ROI (0.5 = 50%)                        |
  *
- * Version: 1.0
+ * Version: 2.0
  */
 
-const SPREAD_FINDER_SHEET = "SpreadFinder";
+const SPREAD_FINDER_CONFIG_SHEET = "SpreadFinderConfig";
+const SPREADS_SHEET = "Spreads";
 const OPTION_PRICES_SHEET = "OptionPricesUploaded";
 const CONFIG_COL = 1; // Column A
 const CONFIG_START_ROW = 1;
 
-// Column letters for formulas
-const COLS = "ABCDEFGHIJKLMNOP";
-// A=Symbol, B=Expiration, C=Lower, D=Upper, E=Width, F=Debit, G=MaxProfit, H=ROI,
-// I=LowerDelta, J=UpperDelta, K=LowerOI, L=UpperOI, M=Liquidity, N=Tightness, O=Fitness, P=OptionStrat
+/**
+ * Calculates the Expected Gain for a Bull Call Spread based on an 80%-of-max-profit early exit.
+ * Uses the "Rule of Touch" (probTouch ≈ 1.6x delta) to estimate probability of reaching target.
+ * @param {number} longMid The mid price of the lower (long) leg.
+ * @param {number} shortMid The mid price of the upper (short) leg.
+ * @param {number} longStrike The strike price of the lower leg.
+ * @param {number} shortStrike The strike price of the upper leg.
+ * @param {number} shortDelta The delta of the upper (short) leg.
+ * @return {number} The expected dollar gain per spread.
+ */
+function calculateExpectedGain(longMid, shortMid, longStrike, shortStrike, shortDelta) {
+  var netDebit = longMid - shortMid;
+  var spreadWidth = shortStrike - longStrike;
+  var maxProfit = spreadWidth - netDebit;
+
+  var targetProfit = maxProfit * 0.80;
+
+  // Prob(Touch) ≈ 1.6x short delta, capped at 95%
+  var probTouch = Math.min(shortDelta * 1.6, 0.95);
+  var probLoss = 1 - probTouch;
+
+  // EV = (Prob of Win * Win Amount) + (Prob of Loss * Loss Amount)
+  var expectedValue = (probTouch * targetProfit) + (probLoss * -netDebit);
+
+  return expectedValue;
+}
 
 /**
  * Runs the spread finder analysis. Call from menu or script.
@@ -34,11 +57,12 @@ const COLS = "ABCDEFGHIJKLMNOP";
 function runSpreadFinder() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  // Ensure sheet and config exist
-  const sheet = ensureSpreadFinderSheet_(ss);
+  // Ensure config and results sheets exist
+  const configSheet = ensureSpreadFinderConfigSheet_(ss);
+  const sheet = ensureSpreadsSheet_(ss);
 
-  // Load config from sheet
-  const config = loadSpreadFinderConfig_(sheet);
+  // Load config from config sheet
+  const config = loadSpreadFinderConfig_(configSheet);
   Logger.log("SpreadFinder config: " + JSON.stringify(config));
 
   // Load option data
@@ -51,6 +75,25 @@ function runSpreadFinder() {
 
   // Group by symbol+expiration
   const grouped = groupBySymbolExpiration_(calls);
+
+  // Derive current price from ATM calls (delta closest to 0.5)
+  const currentPrice = estimateCurrentPrice_(calls);
+  Logger.log("Estimated current price: " + currentPrice);
+
+  // Default outlook if not set by user
+  if (!config.outlookFuturePrice) {
+    config.outlookFuturePrice = round2_(currentPrice * 1.25);
+    Logger.log("Defaulting outlookFuturePrice to " + config.outlookFuturePrice);
+  }
+  if (!config.outlookConfidence) {
+    config.outlookConfidence = 0.5;
+  }
+  if (!config.outlookDate) {
+    // Default to 18 months from now
+    const d = new Date();
+    d.setMonth(d.getMonth() + 18);
+    config.outlookDate = d;
+  }
 
   // Generate and score all spreads
   const spreads = [];
@@ -69,6 +112,7 @@ function runSpreadFinder() {
 
   // Filter by config constraints
   const minExpDate = config.minExpirationDate;
+  const maxExpDate = config.maxExpirationDate;
   const filtered = spreads.filter(s => {
     // Parse expiration date
     const expDate = new Date(s.expiration);
@@ -82,8 +126,10 @@ function runSpreadFinder() {
       s.upperOI >= config.minOpenInterest &&
       s.lowerVol >= config.minVolume &&
       s.upperVol >= config.minVolume &&
-      s.lowerStrike <= config.maxLowerStrike &&
+      s.lowerStrike >= config.minStrike &&
+      s.upperStrike <= config.maxStrike &&
       expDate >= minExpDate &&
+      expDate <= maxExpDate &&
       !hasConflict;
   });
   Logger.log("Filtered to " + filtered.length + " spreads meeting criteria");
@@ -108,32 +154,39 @@ function runSpreadFinder() {
 }
 
 /**
- * Ensures SpreadFinder sheet exists with config table.
+ * Ensures SpreadFinderConfig sheet exists with config table.
  * Creates sheet and config if needed, returns sheet.
  */
-function ensureSpreadFinderSheet_(ss) {
-  let sheet = ss.getSheetByName(SPREAD_FINDER_SHEET);
+function ensureSpreadFinderConfigSheet_(ss) {
+  let sheet = ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
   if (!sheet) {
-    sheet = ss.insertSheet(SPREAD_FINDER_SHEET);
+    sheet = ss.insertSheet(SPREAD_FINDER_CONFIG_SHEET);
   }
 
   // Always recreate config to ensure latest settings
   const configData = [
     ["Setting", "Value", "Description"],
+    ["minSpreadWidth", 20, "Minimum spread width in dollars"],
     ["maxSpreadWidth", 150, "Maximum spread width in dollars"],
     ["minOpenInterest", 10, "Minimum open interest for both legs"],
     ["minVolume", 0, "Minimum volume for both legs"],
     ["patience", 60, "Minutes for price calculation (0=aggressive, 60=patient)"],
     ["maxDebit", 50, "Maximum debit per share"],
     ["minROI", 0.5, "Minimum ROI (0.5 = 50% return)"],
-    ["maxLowerStrike", 9999, "Maximum lower strike price"],
+    ["minStrike", 300, "Minimum lower strike price"],
+    ["maxStrike", 700, "Maximum upper strike price"],
     ["minExpirationMonths", 6, "Minimum months until expiration"],
-    ["startTableOnRow", 20, "Row number where results table starts"]
+    ["maxExpirationMonths", 36, "Maximum months until expiration"],
+    ["", "", ""],
+    ["Outlook", "", "Price outlook for boosting fitness"],
+    ["outlookFuturePrice", "", "Target future price (e.g. 700)"],
+    ["outlookDate", "", "Target date (e.g. 2027-01-01)"],
+    ["outlookConfidence", "", "Confidence 0-1 (e.g. 0.7 = 70%)"]
   ];
   // Read existing values to preserve user edits
   const existingValues = {};
   try {
-    const existing = sheet.getRange(CONFIG_START_ROW + 1, CONFIG_COL, 10, 2).getValues();
+    const existing = sheet.getRange(CONFIG_START_ROW + 1, CONFIG_COL, configData.length - 1, 2).getValues();
     for (const row of existing) {
       if (row[0] && row[1] !== "") existingValues[row[0]] = row[1];
     }
@@ -162,26 +215,41 @@ function ensureSpreadFinderSheet_(ss) {
 }
 
 /**
- * Loads config from SpreadFinder sheet config table.
+ * Ensures the Spreads results sheet exists.
+ */
+function ensureSpreadsSheet_(ss) {
+  let sheet = ss.getSheetByName(SPREADS_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(SPREADS_SHEET);
+  }
+  return sheet;
+}
+
+/**
+ * Loads config from SpreadFinderConfig sheet config table.
  * Returns object with settings and defaults.
  */
 function loadSpreadFinderConfig_(sheet) {
   const defaults = {
+    minSpreadWidth: 20,
     maxSpreadWidth: 150,
     minOpenInterest: 10,
     minVolume: 0,
     patience: 60,
     maxDebit: 50,
     minROI: 0.5,
-    maxLowerStrike: 9999,
+    minStrike: 300,
+    maxStrike: 700,
     minExpirationMonths: 6,
-    startTableOnRow: 20
+    maxExpirationMonths: 36
   };
 
   const config = { ...defaults };
 
-  // Read config rows (rows 2-11, columns A-B)
-  const data = sheet.getRange(CONFIG_START_ROW + 1, CONFIG_COL, 10, 2).getValues();
+  // Read config rows (rows 2+, columns A-B)
+  const lastRow = Math.max(CONFIG_START_ROW + 1, sheet.getLastRow());
+  const numRows = lastRow - CONFIG_START_ROW;
+  const data = sheet.getRange(CONFIG_START_ROW + 1, CONFIG_COL, numRows, 2).getValues();
   for (const row of data) {
     const setting = (row[0] || "").toString().trim();
     const value = row[1];
@@ -190,9 +258,29 @@ function loadSpreadFinderConfig_(sheet) {
     }
   }
 
-  // Calculate min expiration date
+  // Read outlook settings (not in defaults, handled separately)
+  const outlookKeys = ["outlookFuturePrice", "outlookDate", "outlookConfidence"];
+  for (const row of data) {
+    const setting = (row[0] || "").toString().trim();
+    const value = row[1];
+    if (setting && value !== "" && value != null && outlookKeys.includes(setting)) {
+      if (setting === "outlookDate") {
+        config[setting] = value instanceof Date ? value : new Date(value);
+      } else {
+        config[setting] = +value;
+      }
+    }
+  }
+  // Default outlook to disabled
+  if (!config.outlookFuturePrice || !config.outlookConfidence) {
+    config.outlookFuturePrice = 0;
+    config.outlookConfidence = 0;
+  }
+
+  // Calculate min/max expiration dates
   const now = new Date();
   config.minExpirationDate = new Date(now.getFullYear(), now.getMonth() + config.minExpirationMonths, now.getDate());
+  config.maxExpirationDate = new Date(now.getFullYear(), now.getMonth() + config.maxExpirationMonths, now.getDate());
 
   return config;
 }
@@ -275,6 +363,24 @@ function groupBySymbolExpiration_(options) {
 }
 
 /**
+ * Estimates current stock price from call options by finding the strike with delta closest to 0.5.
+ * @param {Array} calls Array of call option objects with delta and strike.
+ * @return {number} Estimated current stock price.
+ */
+function estimateCurrentPrice_(calls) {
+  let bestDelta = Infinity;
+  let bestStrike = 0;
+  for (const c of calls) {
+    const dist = Math.abs(Math.abs(c.delta) - 0.5);
+    if (dist < bestDelta) {
+      bestDelta = dist;
+      bestStrike = c.strike;
+    }
+  }
+  return bestStrike || 0;
+}
+
+/**
  * Generates all valid spreads from a sorted chain of calls.
  * Returns array of spread objects with metrics.
  */
@@ -289,7 +395,7 @@ function generateSpreads_(chain, config) {
       const width = upper.strike - lower.strike;
 
       // Skip if too wide
-      if (width > config.maxSpreadWidth) continue;
+      if (width < config.minSpreadWidth || width > config.maxSpreadWidth) continue;
 
       // Skip if no valid bid/ask
       if (lower.ask <= 0 || upper.bid < 0) continue;
@@ -318,20 +424,59 @@ function generateSpreads_(chain, config) {
       const avgBidAskSpread = (lowerSpread + upperSpread) / 2;
       const tightness = avgBidAskSpread > 0 ? 1 / avgBidAskSpread : 10;
 
-      // Delta-based probability estimate (rough)
-      // Lower delta = more OTM = lower prob but higher reward
-      const probITM = Math.abs(lower.delta); // P(stock > lower strike)
+      // Expected gain using probability-of-touch model (80% of max profit target)
+      const expectedGain = calculateExpectedGain(lowerMid, upperMid, lower.strike, upper.strike, Math.abs(upper.delta));
+      const expectedROI = debit > 0 ? expectedGain / debit : 0;
 
-      // Time factor: longer expirations are better (more time to reach target)
-      // Use sqrt for diminishing returns - going from 1yr to 2yr helps more than 2yr to 3yr
-      const expDate = new Date(lower.expiration);
-      const now = new Date();
-      const daysToExp = Math.max(1, (expDate - now) / (1000 * 60 * 60 * 24));
-      const yearsToExp = daysToExp / 365;
-      const timeFactor = Math.sqrt(yearsToExp);
+      // Fitness = ExpROI * liquidity^0.1 * tightness^0.1
+      // Liquidity/tightness as mild tiebreakers (patient fills assumed)
+      // timeFactor dropped — already baked into delta and probTouch
+      // Outlook boost: adjust fitness based on price target, date, and confidence
+      let outlookBoost = 1;
+      if (config.outlookFuturePrice > 0 && config.outlookConfidence > 0) {
+        const target = config.outlookFuturePrice;
+        const conf = config.outlookConfidence;
 
-      // Fitness = ROI * liquidity * tightness * time (tunable)
-      const fitness = round2_(roi * Math.sqrt(liquidityScore) * Math.sqrt(tightness) * timeFactor);
+        // Price proximity boost
+        let priceBoost;
+        if (lower.strike >= target) {
+          // Both strikes above target — penalize
+          priceBoost = 1 - conf * 0.5;
+        } else if (upper.strike <= target) {
+          // Both strikes below target — full boost by proximity
+          priceBoost = 1 + conf * (upper.strike / target);
+        } else {
+          // Straddles target — partial boost by how much width is captured
+          const captured = (target - lower.strike) / width;
+          priceBoost = 1 + conf * captured * 0.5;
+        }
+
+        // Date proximity boost: expirations near outlookDate get more boost
+        // Expirations before target date are penalized (may expire before move happens)
+        let dateBoost = 1;
+        if (config.outlookDate) {
+          const expDate = new Date(lower.expiration);
+          const targetDate = new Date(config.outlookDate);
+          const now = new Date();
+          const totalDays = Math.max(1, (targetDate - now) / (1000 * 60 * 60 * 24));
+          const diffDays = (expDate - targetDate) / (1000 * 60 * 60 * 24);
+
+          if (diffDays < 0) {
+            // Expires before target date — penalize proportionally
+            // Expiring way before target = bigger penalty
+            const earlyRatio = Math.abs(diffDays) / totalDays;
+            dateBoost = 1 - conf * Math.min(earlyRatio, 0.5);
+          } else {
+            // Expires on or after target date — boost, with falloff for much later
+            const lateRatio = diffDays / totalDays;
+            dateBoost = 1 + conf * Math.max(0, 0.3 - lateRatio * 0.2);
+          }
+        }
+
+        outlookBoost = priceBoost * dateBoost;
+      }
+
+      const fitness = round2_(expectedROI * Math.pow(liquidityScore, 0.2) * Math.pow(tightness, 0.1) * outlookBoost);
 
       spreads.push({
         symbol: lower.symbol,
@@ -349,6 +494,8 @@ function generateSpreads_(chain, config) {
         upperOI: upper.openint,
         lowerVol: lower.volume,
         upperVol: upper.volume,
+        expectedGain: round2_(expectedGain),
+        expectedROI: round2_(expectedROI),
         liquidityScore: round2_(liquidityScore),
         tightness: round2_(tightness),
         fitness: round2_(fitness)
@@ -422,12 +569,12 @@ function loadHeldShortStrikes_(ss) {
  * Uses formulas for MaxProfit, ROI, Fitness so user can edit Debit.
  */
 function outputSpreadResults_(sheet, spreads, config) {
-  const RESULTS_START_ROW = config.startTableOnRow;
+  const RESULTS_START_ROW = 2; // Row 1 = timestamp, Row 2 = headers
 
-  // Clear results area (from RESULTS_START_ROW - 1 down for timestamp)
+  // Clear entire sheet
   const lastRow = Math.max(sheet.getLastRow(), RESULTS_START_ROW);
-  if (lastRow >= RESULTS_START_ROW - 1) {
-    const clearRange = sheet.getRange(RESULTS_START_ROW - 1, 1, lastRow - RESULTS_START_ROW + 2, 20);
+  if (lastRow >= 1) {
+    const clearRange = sheet.getRange(1, 1, lastRow, 20);
     // Remove any existing banding
     const bandings = clearRange.getBandings();
     bandings.forEach(b => b.remove());
@@ -439,13 +586,14 @@ function outputSpreadResults_(sheet, spreads, config) {
   const existingFilter = sheet.getFilter();
   if (existingFilter) existingFilter.remove();
 
-  // Timestamp above table
-  sheet.getRange(RESULTS_START_ROW - 1, 1).setValue("Results - " + new Date().toLocaleString());
+  // Timestamp
+  sheet.getRange(1, 1).setValue("Results - " + new Date().toLocaleString());
 
-  // Headers (A-Q)
+  // Headers (A-S)
   const headers = [
     "Symbol", "Expiration", "Lower", "Upper", "Width",
-    "Debit", "MaxProfit", "ROI", "LowerDelta", "UpperDelta",
+    "Debit", "MaxProfit", "ROI", "ExpGain", "ExpROI",
+    "LowerDelta", "UpperDelta",
     "LowerOI", "UpperOI", "Liquidity", "Tightness", "Fitness", "OptionStrat", "Label"
   ];
   const headerNotes = [
@@ -457,13 +605,15 @@ function outputSpreadResults_(sheet, spreads, config) {
     "Net debit to open (editable - formulas recalculate)",
     "Max profit = Width - Debit (if stock > Upper at expiry)",
     "Return on Investment = MaxProfit / Debit",
+    "Expected dollar gain using prob-of-touch model (80% target)",
+    "Expected ROI = ExpGain / Debit",
     "Delta of lower call (0-1). Higher = more ITM, higher prob of profit",
     "Delta of upper call. Lower than LowerDelta since further OTM",
     "Open Interest on lower strike. Higher = better liquidity",
     "Open Interest on upper strike. Want both legs liquid",
     "Liquidity score = sqrt(LowerOI × UpperOI) / 100",
     "Bid-ask tightness. Higher = tighter spreads, better fills",
-    "Fitness = ROI × sqrt(Liquidity) × sqrt(Tightness)",
+    "Fitness = ExpROI × Liquidity^0.1 × Tightness^0.1",
     "Link to OptionStrat visualization",
     "Label for chart identification"
   ];
@@ -475,13 +625,13 @@ function outputSpreadResults_(sheet, spreads, config) {
 
   const dataStartRow = RESULTS_START_ROW + 1;
 
-  // Data columns A-F (values), I-N (values)
-  // G, H, O, P, Q will be formulas
+  // Data columns: A-F values, G-H formulas, I-J values, K-P values, Q formula, R-S formulas
   const dataRows = spreads.map(s => [
     s.symbol, s.expiration, s.lowerStrike, s.upperStrike, s.width,
     s.debit, "", "", // G=MaxProfit, H=ROI (formulas)
+    s.expectedGain, s.expectedROI,
     s.lowerDelta, s.upperDelta, s.lowerOI, s.upperOI,
-    s.liquidityScore, s.tightness, "", "", "" // O=Fitness, P=OptionStrat, Q=Label (formulas)
+    s.liquidityScore, s.tightness, "", "", "" // Q=Fitness, R=OptionStrat, S=Label (formulas)
   ]);
   sheet.getRange(dataStartRow, 1, dataRows.length, headers.length).setValues(dataRows);
 
@@ -498,8 +648,8 @@ function outputSpreadResults_(sheet, spreads, config) {
     maxProfitFormulas.push([`=E${row}-F${row}`]);
     // ROI = MaxProfit / Debit (G / F)
     roiFormulas.push([`=IF(F${row}>0,G${row}/F${row},0)`]);
-    // Fitness = ROI * SQRT(Liquidity) * SQRT(Tightness)
-    fitnessFormulas.push([`=ROUND(H${row}*SQRT(M${row})*SQRT(N${row}),2)`]);
+    // Fitness = ExpROI * Liquidity^0.1 * Tightness^0.1 (cols J, O, P)
+    fitnessFormulas.push([`=ROUND(J${row}*POWER(O${row},0.2)*POWER(P${row},0.1),2)`]);
     // OptionStrat URL as hyperlink
     const osUrl = `buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row})`;
     optionStratFormulas.push([`=HYPERLINK(${osUrl},"OptionStrat")`]);
@@ -516,16 +666,18 @@ function outputSpreadResults_(sheet, spreads, config) {
   // Set formulas and calculated values
   sheet.getRange(dataStartRow, 7, spreads.length, 1).setFormulas(maxProfitFormulas); // G
   sheet.getRange(dataStartRow, 8, spreads.length, 1).setFormulas(roiFormulas); // H
-  sheet.getRange(dataStartRow, 15, spreads.length, 1).setFormulas(fitnessFormulas); // O
-  sheet.getRange(dataStartRow, 16, spreads.length, 1).setFormulas(optionStratFormulas); // P
-  sheet.getRange(dataStartRow, 17, spreads.length, 1).setValues(labelValues); // Q
+  sheet.getRange(dataStartRow, 17, spreads.length, 1).setFormulas(fitnessFormulas); // Q
+  sheet.getRange(dataStartRow, 18, spreads.length, 1).setFormulas(optionStratFormulas); // R
+  sheet.getRange(dataStartRow, 19, spreads.length, 1).setValues(labelValues); // S
 
   // Format
   sheet.getRange(dataStartRow, 6, spreads.length, 1).setNumberFormat("$#,##0.00"); // Debit
   sheet.getRange(dataStartRow, 7, spreads.length, 1).setNumberFormat("$#,##0.00"); // MaxProfit
   sheet.getRange(dataStartRow, 8, spreads.length, 1).setNumberFormat("0.00"); // ROI
-  sheet.getRange(dataStartRow, 9, spreads.length, 2).setNumberFormat("0.00"); // Deltas
-  sheet.getRange(dataStartRow, 15, spreads.length, 1).setNumberFormat("0.00"); // Fitness
+  sheet.getRange(dataStartRow, 9, spreads.length, 1).setNumberFormat("$#,##0.00"); // ExpGain
+  sheet.getRange(dataStartRow, 10, spreads.length, 1).setNumberFormat("0.00"); // ExpROI
+  sheet.getRange(dataStartRow, 11, spreads.length, 2).setNumberFormat("0.00"); // Deltas
+  sheet.getRange(dataStartRow, 17, spreads.length, 1).setNumberFormat("0.00"); // Fitness
 
   // Add filter
   const tableRange = sheet.getRange(RESULTS_START_ROW, 1, spreads.length + 1, headers.length);
@@ -547,9 +699,9 @@ function outputSpreadResults_(sheet, spreads, config) {
     sheet.autoResizeColumn(i);
   }
   // OptionStrat column: clip text, fixed width
-  const optionStratCol = sheet.getRange(RESULTS_START_ROW, 16, spreads.length + 1, 1);
+  const optionStratCol = sheet.getRange(RESULTS_START_ROW, 18, spreads.length + 1, 1);
   optionStratCol.setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
-  sheet.setColumnWidth(16, 100);
+  sheet.setColumnWidth(18, 100);
 
   showSpreadFinderGraphs();
 }
@@ -578,12 +730,12 @@ function showSpreadFinderGraphs() {
  */
  function getSidebarData() {
    const ss = SpreadsheetApp.getActiveSpreadsheet();
-   const sheet = ss.getSheetByName("SpreadFinder");
+   const sheet = ss.getSheetByName(SPREADS_SHEET);
    const lastRow = sheet.getLastRow();
-   const startRow = 21;
+   const startRow = 3; // Row 1=timestamp, Row 2=headers, Row 3+=data
    if (lastRow < startRow) return [];
 
-   const data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 17).getValues();
+   const data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 19).getValues();
    const today = new Date();
    today.setHours(0,0,0,0);
 
@@ -602,23 +754,24 @@ function showSpreadFinderGraphs() {
      const dte = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
      return {
-       delta: parseFloat(row[8]) || 0,
+       delta: parseFloat(row[10]) || 0,
        roi: parseFloat(row[7]) || 0,
        strike: parseFloat(row[2]) || 0,
-       fitness: parseFloat(row[14]) || 0,
-       label: String(row[16] || ""),
+       fitness: parseFloat(row[16]) || 0,
+       label: String(row[18] || ""),
        osUrl: osUrl, // Now a clean string
 
        width: row[4],
        debit: row[5],
        maxProfit: row[6],
-       lowerDelta: row[8],
-       upperDelta: row[9],
-       lowerOI: row[10],
-       upperOI: row[11],
-       liquidity: row[12],
-       tightness: row[13],
-       iv: row[15],
+       expectedGain: row[8],
+       expectedROI: row[9],
+       lowerDelta: row[10],
+       upperDelta: row[11],
+       lowerOI: row[12],
+       upperOI: row[13],
+       liquidity: row[14],
+       tightness: row[15],
        dte: dte > 0 ? dte : 0
      };
    }).sort((a, b) => a.fitness - b.fitness);
