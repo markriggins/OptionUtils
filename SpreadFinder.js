@@ -440,8 +440,9 @@ function generateSpreads_(chain, config) {
         // Price proximity boost
         let priceBoost;
         if (lower.strike >= target) {
-          // Both strikes above target — penalize
-          priceBoost = 1 - conf * 0.5;
+          // Both strikes above target — graduated penalty (further above = worse)
+          const overshoot = (lower.strike - target) / target;
+          priceBoost = 1 - conf * 0.5 * overshoot;
         } else if (upper.strike <= target) {
           // Both strikes below target — full boost by proximity
           priceBoost = 1 + conf * (upper.strike / target);
@@ -625,83 +626,72 @@ function outputSpreadResults_(sheet, spreads, config) {
 
   const dataStartRow = RESULTS_START_ROW + 1;
 
-  // Data columns: A-F values, G-H formulas, I-J values, K-P values, Q formula, R-S formulas
-  const dataRows = spreads.map(s => [
-    s.symbol, s.expiration, s.lowerStrike, s.upperStrike, s.width,
-    s.debit, "", "", // G=MaxProfit, H=ROI (formulas)
-    s.expectedGain, s.expectedROI,
-    s.lowerDelta, s.upperDelta, s.lowerOI, s.upperOI,
-    s.liquidityScore, s.tightness, "", "", "" // Q=Fitness, R=OptionStrat, S=Label (formulas)
-  ]);
-  sheet.getRange(dataStartRow, 1, dataRows.length, headers.length).setValues(dataRows);
+  // Build all data, formulas, labels in one pass (no per-row sheet reads)
+  const tz = Session.getScriptTimeZone();
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-  // Build formula arrays for columns G, H, O, P, Q
-  const maxProfitFormulas = [];
-  const roiFormulas = [];
-  const fitnessFormulas = [];
-  const optionStratFormulas = [];
-  const labelValues = [];
-
+  // Build all formulas and values in one pass, write as single 2D array
+  // Columns: A-F data, G formula, H formula, I-P data, Q formula, R formula, S value
+  const allRows = [];
   for (let i = 0; i < spreads.length; i++) {
+    const s = spreads[i];
     const row = dataStartRow + i;
-    // MaxProfit = Width - Debit (E - F)
-    maxProfitFormulas.push([`=E${row}-F${row}`]);
-    // ROI = MaxProfit / Debit (G / F)
-    roiFormulas.push([`=IF(F${row}>0,G${row}/F${row},0)`]);
-    // Fitness = ExpROI * Liquidity^0.1 * Tightness^0.1 (cols J, O, P)
-    fitnessFormulas.push([`=ROUND(J${row}*POWER(O${row},0.2)*POWER(P${row},0.1),2)`]);
-    // OptionStrat URL as hyperlink
+    const expDate = new Date(s.expiration);
+    const dateStr = months[expDate.getMonth()] + " " + String(expDate.getFullYear()).slice(2);
+    const label = `${s.symbol} ${s.lowerStrike}/${s.upperStrike} ${dateStr}`;
     const osUrl = `buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row})`;
-    optionStratFormulas.push([`=HYPERLINK(${osUrl},"OptionStrat")`]);
 
-    // Format labels as: "TSLA 350/450 Jan 28"
-    const sym = sheet.getRange(row, 1).getValue();
-    const lowStrike = sheet.getRange(row, 3).getValue();
-    const highStrike = sheet.getRange(row, 4).getValue();
-    const expDate = new Date(sheet.getRange(row, 2).getValue());
-    const dateStr = Utilities.formatDate(expDate, Session.getScriptTimeZone(), "MMM yy");
-    labelValues.push([`${sym} ${lowStrike}/${highStrike} ${dateStr}`]);
+    allRows.push([
+      s.symbol, s.expiration, s.lowerStrike, s.upperStrike, s.width,
+      s.debit,
+      s.maxProfit,   // G - pre-computed instead of formula
+      s.roi,         // H - pre-computed instead of formula
+      s.expectedGain, s.expectedROI,
+      s.lowerDelta, s.upperDelta, s.lowerOI, s.upperOI,
+      s.liquidityScore, s.tightness,
+      s.fitness,     // Q - pre-computed instead of formula
+      "",            // R - OptionStrat (formula, set separately)
+      label          // S
+    ]);
   }
+  sheet.getRange(dataStartRow, 1, allRows.length, headers.length).setValues(allRows);
 
-  // Set formulas and calculated values
-  sheet.getRange(dataStartRow, 7, spreads.length, 1).setFormulas(maxProfitFormulas); // G
-  sheet.getRange(dataStartRow, 8, spreads.length, 1).setFormulas(roiFormulas); // H
-  sheet.getRange(dataStartRow, 17, spreads.length, 1).setFormulas(fitnessFormulas); // Q
-  sheet.getRange(dataStartRow, 18, spreads.length, 1).setFormulas(optionStratFormulas); // R
-  sheet.getRange(dataStartRow, 19, spreads.length, 1).setValues(labelValues); // S
+  // Only OptionStrat needs formulas (HYPERLINK with custom function)
+  const optionStratFormulas = spreads.map((s, i) => {
+    const row = dataStartRow + i;
+    const osUrl = `buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row})`;
+    return [`=HYPERLINK(${osUrl},"OptionStrat")`];
+  });
+  sheet.getRange(dataStartRow, 18, spreads.length, 1).setFormulas(optionStratFormulas);
 
-  // Format
-  sheet.getRange(dataStartRow, 6, spreads.length, 1).setNumberFormat("$#,##0.00"); // Debit
-  sheet.getRange(dataStartRow, 7, spreads.length, 1).setNumberFormat("$#,##0.00"); // MaxProfit
-  sheet.getRange(dataStartRow, 8, spreads.length, 1).setNumberFormat("0.00"); // ROI
-  sheet.getRange(dataStartRow, 9, spreads.length, 1).setNumberFormat("$#,##0.00"); // ExpGain
-  sheet.getRange(dataStartRow, 10, spreads.length, 1).setNumberFormat("0.00"); // ExpROI
-  sheet.getRange(dataStartRow, 11, spreads.length, 2).setNumberFormat("0.00"); // Deltas
-  sheet.getRange(dataStartRow, 17, spreads.length, 1).setNumberFormat("0.00"); // Fitness
+  // Apply all number formats in one batch using a format array
+  const formats = spreads.map(() => [
+    "@", "@", "#,##0", "#,##0", "#,##0",           // A-E
+    "$#,##0.00", "$#,##0.00", "0.00",               // F-H
+    "$#,##0.00", "0.00",                             // I-J
+    "0.00", "0.00", "#,##0", "#,##0",               // K-N
+    "0.00", "0.00", "0.00",                          // O-Q
+    "@", "@"                                          // R-S
+  ]);
+  sheet.getRange(dataStartRow, 1, spreads.length, headers.length).setNumberFormats(formats);
 
-  // Add filter
+  // Style: header, banding, borders, filter in minimal API calls
   const tableRange = sheet.getRange(RESULTS_START_ROW, 1, spreads.length + 1, headers.length);
   tableRange.createFilter();
+  tableRange.setBorder(true, true, true, true, true, true, "#cccccc", SpreadsheetApp.BorderStyle.SOLID);
 
-  // Style as table: header row + banded rows
-  const headerRange = sheet.getRange(RESULTS_START_ROW, 1, 1, headers.length);
-  headerRange.setBackground("#4285f4").setFontColor("white").setFontWeight("bold");
+  sheet.getRange(RESULTS_START_ROW, 1, 1, headers.length)
+    .setBackground("#4285f4").setFontColor("white").setFontWeight("bold");
 
-  // Banded rows
   const dataRange = sheet.getRange(dataStartRow, 1, spreads.length, headers.length);
   dataRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
 
-  // Borders
-  tableRange.setBorder(true, true, true, true, true, true, "#cccccc", SpreadsheetApp.BorderStyle.SOLID);
-
-  // Auto-resize columns (except OptionStrat)
-  for (let i = 1; i < headers.length; i++) {
-    sheet.autoResizeColumn(i);
-  }
-  // OptionStrat column: clip text, fixed width
-  const optionStratCol = sheet.getRange(RESULTS_START_ROW, 18, spreads.length + 1, 1);
-  optionStratCol.setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
-  sheet.setColumnWidth(18, 100);
+  // Set column widths in batch instead of autoResizeColumn loop
+  const colWidths = [60, 90, 60, 60, 50, 70, 70, 50, 70, 55, 55, 55, 55, 55, 55, 55, 55, 100, 150];
+  colWidths.forEach((w, i) => sheet.setColumnWidth(i + 1, w));
+  // Clip OptionStrat column
+  sheet.getRange(RESULTS_START_ROW, 18, spreads.length + 1, 1)
+    .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
 
   showSpreadFinderGraphs();
 }

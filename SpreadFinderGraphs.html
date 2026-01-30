@@ -58,7 +58,8 @@
 
     <div class="chart-card">
         <div class="chart-header">
-            <span class="chart-title" data-help="Controls&#10;• Zoom: click-drag area&#10;• Pan: arrow keys&#10;• Reset: right-click">Strike vs ROI</span>
+            <span class="chart-title" data-help="Controls&#10;• Zoom: click-drag area&#10;• Pan: arrow keys&#10;• Reset: right-click">Strike vs <span id="strike-y-label">ROI</span></span>
+            <button class="toggle-btn" onclick="toggleStrikeY()">ROI / ExpROI</button>
             <button class="toggle-btn" onclick="toggleChart('chart_strike')">Hide/Show</button>
         </div>
         <div id="chart_strike" class="chart-div"></div>
@@ -93,7 +94,7 @@
 
 <script type="text/javascript">
     google.charts.load('current', {'packages':['corechart']});
-    var rawData = [], chartD, chartS, dtD, dtS;
+    var rawData = [], chartD, chartS, dtD, dtS, strikeYMode = 'roi';
 
     // FIX: title removed here to stop double titles
     var baseOpts = {
@@ -141,21 +142,41 @@
       }
     }
 
+    function buildStrikeTable(dataArray) {
+      dtS = new google.visualization.DataTable();
+      var yLabel = strikeYMode === 'roi' ? 'ROI' : 'ExpROI';
+      dtS.addColumn('number', 'X'); dtS.addColumn('number', yLabel);
+      dtS.addColumn({type: 'string', role: 'tooltip'}); dtS.addColumn({type: 'string', role: 'style'});
+      dataArray.forEach(r => {
+        let color = r.fitness >= 4.0 ? '#2e7d32' : (r.fitness >= 3.0 ? '#66bb6a' : (r.fitness >= 2.0 ? '#ffeb3b' : '#f44336'));
+        let style = `point { size: ${r.fitness >= 4.0 ? 9 : 4}; fill-color: ${color}; stroke-width: 1; stroke-color: #333; }`;
+        var yVal = strikeYMode === 'roi' ? r.roi * 100 : (r.expectedROI || 0) * 100;
+        dtS.addRow([r.strike, yVal, r.label, style]);
+      });
+    }
+
+    function toggleStrikeY() {
+      strikeYMode = strikeYMode === 'roi' ? 'expectedROI' : 'roi';
+      document.getElementById('strike-y-label').innerText = strikeYMode === 'roi' ? 'ROI' : 'ExpROI';
+      buildStrikeTable(rawData);
+      defaults.strike.h = dataRange(dtS, 0); defaults.strike.v = dataRange(dtS, 1);
+      views.strike = {h: Object.assign({}, defaults.strike.h), v: Object.assign({}, defaults.strike.v)};
+      redrawChart('strike');
+    }
+
     function draw(dataArray) {
       rawData = dataArray;
       if (!dataArray || dataArray.length === 0) return;
-      dtD = new google.visualization.DataTable(); dtS = new google.visualization.DataTable();
-      [dtD, dtS].forEach(dt => {
-        dt.addColumn('number', 'X'); dt.addColumn('number', 'ROI');
-        dt.addColumn({type: 'string', role: 'tooltip'}); dt.addColumn({type: 'string', role: 'style'});
-      });
+      dtD = new google.visualization.DataTable();
+      dtD.addColumn('number', 'X'); dtD.addColumn('number', 'ROI');
+      dtD.addColumn({type: 'string', role: 'tooltip'}); dtD.addColumn({type: 'string', role: 'style'});
 
       dataArray.forEach(r => {
-        let color = r.fitness >= 4.5 ? '#2e7d32' : (r.fitness >= 2.5 ? '#ffeb3b' : '#f44336');
-        let style = `point { size: ${r.fitness >= 4.5 ? 9 : 4}; fill-color: ${color}; stroke-width: 1; stroke-color: #333; }`;
+        let color = r.fitness >= 4.0 ? '#2e7d32' : (r.fitness >= 3.0 ? '#66bb6a' : (r.fitness >= 2.0 ? '#ffeb3b' : '#f44336'));
+        let style = `point { size: ${r.fitness >= 4.0 ? 9 : 4}; fill-color: ${color}; stroke-width: 1; stroke-color: #333; }`;
         dtD.addRow([r.delta, r.roi * 100, r.label, style]);
-        dtS.addRow([r.strike, r.roi * 100, r.label, style]);
       });
+      buildStrikeTable(dataArray);
 
       // Set default ranges
       defaults.delta.h = dataRange(dtD, 0); defaults.delta.v = dataRange(dtD, 1);
@@ -195,7 +216,7 @@
 
         var fitEl = document.getElementById('det-fit');
         fitEl.innerText = t.fitness;
-        fitEl.style.color = t.fitness >= 4.5 ? '#8bc34a' : (t.fitness >= 2.5 ? '#ffeb3b' : '#f44336');
+        fitEl.style.color = t.fitness >= 4.0 ? '#8bc34a' : (t.fitness >= 3.0 ? '#66bb6a' : (t.fitness >= 2.0 ? '#ffeb3b' : '#f44336'));
       }
 
       [chartD, chartS].forEach(c => {
