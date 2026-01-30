@@ -47,7 +47,7 @@ function recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upper
    * At alpha=0: debit = lower.ask - upper.bid (aggressive)
    * As alpha increases: moves toward lower.bid - upper.ask (patient, may not fill)
    */
-  const parsed = parseSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute);
+  const parsed = normalizeSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute);
   if (!parsed) return "#Could not parse inputs";
   const { sym, exp, lo, hi, alpha } = parsed;
   // OPEN a bull call spread:
@@ -64,7 +64,7 @@ function recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upper
   const sellLimit = getRealisticSellPrice_(upper, alpha);
   let debit = buyLimit - sellLimit;
   if (debit < 0) debit = 0;
-  return round2_(debit);
+  return roundTo_(debit, 2);
 }
 
 /**
@@ -88,7 +88,7 @@ function recommendBullCallSpreadCloseCredit(symbol, expiration, lowerStrike, upp
    * At alpha=0: credit = lower.bid - upper.ask (aggressive)
    * As alpha increases: moves toward lower.ask - upper.bid (patient)
    */
-  const parsed = parseSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute);
+  const parsed = normalizeSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute);
   if (!parsed) return "#Could not parse inputs";
   const { sym, exp, lo, hi, alpha } = parsed;
   const lower = getOptionQuote_(sym, exp, lo, "Call"); // you SELL this to close
@@ -100,11 +100,11 @@ function recommendBullCallSpreadCloseCredit(symbol, expiration, lowerStrike, upp
   const buyLimit = getRealisticBuyPrice_(upper, alpha);
   let credit = sellLimit - buyLimit;
   if (credit < 0) credit = 0;
-  return round2_(credit);
+  return roundTo_(credit, 2);
 }
 
 /**
- * parseSpreadInputs_ - Parses and validates inputs for bull call spread functions.
+ * normalizeSpreadInputs_ - Parses and validates inputs for bull call spread functions.
  *
  * Internal helper: Normalizes symbol, expiration, strikes, and computes alpha from minutes.
  * Alpha uses exponential decay: 1 - exp(-mins / 60), saturating at 1 for large mins.
@@ -119,7 +119,7 @@ function recommendBullCallSpreadCloseCredit(symbol, expiration, lowerStrike, upp
  * @returns {Object|null} Parsed {sym, exp, lo, hi, alpha} or null if invalid.
  */
 
-function parseSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute) {
+function normalizeSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute) {
   const sym = (symbol || "").toString().trim().toUpperCase(); // Faster toString
   const exp = normalizeExpiration_(expiration);
   const lo = +lowerStrike;
@@ -263,15 +263,6 @@ function getRealisticSellPrice_(quote, alpha) {
 }
 
 /**
- * round2_ - Rounds a number to 2 decimal places.
- *
- * Uses Math.round for banker’s rounding.
- *
- * @param {number} n - Number to round.
- * @returns {number} Rounded to 2 decimals.
- */
-
-/**
  * Recommends credit to OPEN a short iron condor.
  *
  * @param {string} symbol - Ticker (e.g. "TSLA")
@@ -302,7 +293,7 @@ function recommendIronCondorOpenCredit(
    *
    * Strikes must satisfy: buyPut < sellPut and sellCall < buyCall
    */
-  const parsed = parseIronCondorInputs_(
+  const parsed = normalizeIronCondorInputs_(
     symbol,
     expiration,
     buyPut,
@@ -330,7 +321,7 @@ function recommendIronCondorOpenCredit(
   // Net credit to open
   let credit = (sellPutLimit + sellCallLimit) - (buyPutLimit + buyCallLimit);
   if (credit < 0) credit = 0;
-  return round2_(credit);
+  return roundTo_(credit, 2);
 }
 
 /**
@@ -362,7 +353,7 @@ function recommendIronCondorCloseDebit(
    *   Spreadsheet: =recommendIronCondorCloseDebit("TSLA", "2028-06-16", 400, 420, 480, 500, 30)
    *   Script:      recommendIronCondorCloseDebit("TSLA", new Date("2028-06-16"), 400, 420, 480, 500, 60)
    */
-  const parsed = parseIronCondorInputs_(
+  const parsed = normalizeIronCondorInputs_(
     symbol,
     expiration,
     buyPut,
@@ -390,11 +381,11 @@ function recommendIronCondorCloseDebit(
   // Net debit to close
   let debit = (buyShortPutLimit + buyShortCallLimit) - (sellLongPutLimit + sellLongCallLimit);
   if (debit < 0) debit = 0;
-  return round2_(debit);
+  return roundTo_(debit, 2);
 }
 
 /**
- * parseIronCondorInputs_ - Parses and validates inputs for iron condor functions.
+ * normalizeIronCondorInputs_ - Parses and validates inputs for iron condor functions.
  *
  * Validates symbol, expiration, finite strikes, and order (buyPut < sellPut, sellCall < buyCall).
  * Computes alpha similarly to spreads.
@@ -411,7 +402,7 @@ function recommendIronCondorCloseDebit(
  * @returns {Object} {sym, exp, bp, sp, sc, bc, alpha, error} (error null if valid).
  */
 
-function parseIronCondorInputs_(
+function normalizeIronCondorInputs_(
   symbol,
   expiration,
   buyPut,

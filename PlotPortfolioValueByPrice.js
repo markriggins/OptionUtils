@@ -97,11 +97,11 @@ function getUniqueSymbolsFromPositions_(ss) {
     if (rows.length < 2) continue;
 
     const headerNorm = rows[0].map(normKey_);
-    const idxSym = findCol_(headerNorm, ["symbol", "ticker"]);
+    const idxSym = findColumn_(headerNorm, ["symbol", "ticker"]);
     if (idxSym < 0) continue;
 
     // Check for Status column (used by IronCondors to mark closed positions)
-    const idxStatus = findCol_(headerNorm, ["status"]);
+    const idxStatus = findColumn_(headerNorm, ["status"]);
 
     for (let r = 1; r < rows.length; r++) {
       // Skip closed positions
@@ -264,7 +264,7 @@ function plotForSymbol_(ss, symbolRaw) {
       const valuePerSpread = intrinsic * 100; // intrinsic value in dollars
       const totalValue = valuePerSpread * sp.qty;
       optionsValue += totalValue;
-      individualSpreadValues.push(round2_(totalValue));
+      individualSpreadValues.push(roundTo_(totalValue, 2));
     }
 
     // Bull put (credit) spread value at expiration
@@ -278,7 +278,7 @@ function plotForSymbol_(ss, symbolRaw) {
       const valuePerSpread = (width - loss) * 100; // what you keep
       const totalValue = valuePerSpread * sp.qty;
       optionsValue += totalValue;
-      individualSpreadValues.push(round2_(totalValue));
+      individualSpreadValues.push(roundTo_(totalValue, 2));
     }
 
     // Bear call (credit) spread value at expiration
@@ -293,7 +293,7 @@ function plotForSymbol_(ss, symbolRaw) {
       const valuePerSpread = (width - loss) * 100; // what you keep
       const totalValue = valuePerSpread * sp.qty;
       optionsValue += totalValue;
-      individualSpreadValues.push(round2_(totalValue));
+      individualSpreadValues.push(roundTo_(totalValue, 2));
     }
 
     const totalValue = sharesValue + optionsValue;
@@ -310,16 +310,16 @@ function plotForSymbol_(ss, symbolRaw) {
       const investment = spreadInvestments[idx];
       if (investment <= 0) return 0;
       const pl = val - investment;
-      return round4_(pl / investment);
+      return roundTo_(pl / investment, 4);
     });
 
     table.push([
-      round2_(S),
-      round2_(sharesValue),
-      round2_(optionsValue),
-      round2_(totalValue),
-      round4_(sharesROI),
-      round4_(optionsROI),
+      roundTo_(S, 2),
+      roundTo_(sharesValue, 2),
+      roundTo_(optionsValue, 2),
+      roundTo_(totalValue, 2),
+      roundTo_(sharesROI, 4),
+      roundTo_(optionsROI, 4),
       ...individualSpreadValues,
       ...individualSpreadROIs,
     ]);
@@ -640,275 +640,9 @@ function getNamedRangeWithTableFallback_(ss, rangeNameRaw) {
    Parsing with optional Symbol column filtering
    ========================================================= */
 
-function parseSharesFromTableForSymbol_(rows, symbol, outMeta) {
-  if (!rows || rows.length < 2) return [];
+// parseSharesFromTableForSymbol_ is in Parsing.js
 
-  const headerNorm = rows[0].map(normKey_);
-
-  const idxSym = findCol_(headerNorm, ["symbol", "ticker"]);
-  const idxQty = findCol_(headerNorm, ["shares", "share", "qty", "quantity", "units", "position"]);
-  const idxBasis = findCol_(headerNorm, [
-    "costbasis",
-    "basis",
-    "avgcost",
-    "averagecost",
-    "avgprice",
-    "averageprice",
-    "aveprice",
-    "avepricepaid",
-    "pricepaid",
-    "entry",
-    "entryprice",
-    "cost",
-    "purchaseprice",
-  ]);
-
-  const out = [];
-
-  for (let r = 1; r < rows.length; r++) {
-    if (idxSym >= 0) {
-      const rowSym = String(rows[r][idxSym] ?? "").trim().toUpperCase();
-      if (rowSym && rowSym !== symbol) continue;
-    }
-
-    if (idxQty < 0 || idxBasis < 0) continue;
-
-    const qty = toNum_(rows[r][idxQty]);
-    const basis = toNum_(rows[r][idxBasis]);
-
-    if (!Number.isFinite(qty) || qty === 0) continue;
-    if (!Number.isFinite(basis)) continue;
-
-    out.push({ qty, basis });
-  }
-
-  return out;
-}
-
-/**
- * Spread parsing:
- * - Counts ONLY "definition rows" that contain BOTH Long Strike and Short Strike
- * - Ignores fill-detail rows automatically
- * - Uses debit cost preference:
- *     Ave Debit / Avg Debit / Average Debit
- *     else Rec Debit / Recommended Debit
- *     else Net Debit / Debit / Cost / Entry / Price
- * - If contracts column missing, defaults qty=1
- * - Captures expiration date to generate labels like "Dec 28 350/450"
- */
-function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
-  if (!rows || rows.length < 2) return [];
-
-  const headerNorm = rows[0].map(normKey_);
-
-  const idxSym = findCol_(headerNorm, ["symbol", "ticker"]);
-
-  const idxQty = findCol_(headerNorm, [
-    "contracts",
-    "contract",
-    "qty",
-    "quantity",
-    "count",
-    "numcontracts",
-    "spreads",
-    "spreadqty",
-  ]);
-
-  const idxLong = findCol_(headerNorm, [
-    "lower",
-    "lowerstrike",
-    "long",
-    "longstrike",
-    "buystrike",
-    "strikebuy",
-    "strikelong",
-  ]);
-  const idxShort = findCol_(headerNorm, [
-    "upper",
-    "upperstrike",
-    "short",
-    "shortstrike",
-    "sellstrike",
-    "strikesell",
-    "strikeshort",
-  ]);
-
-  const idxExp = findCol_(headerNorm, [
-    "expiration",
-    "exp",
-    "expiry",
-    "expirationdate",
-    "expdate",
-  ]);
-
-  const idxAveDebit = findCol_(headerNorm, ["avedebit", "avgdebit", "averagedebit"]);
-  const idxRecDebit = findCol_(headerNorm, ["recdebit", "recommendeddebit"]);
-  const idxDebitFallback = findCol_(headerNorm, ["netdebit", "debit", "cost", "price", "entry", "premium"]);
-
-  if (idxLong < 0 || idxShort < 0) return [];
-
-  const assumeQty = idxQty < 0;
-  const out = [];
-
-  for (let r = 1; r < rows.length; r++) {
-    if (idxSym >= 0) {
-      const rowSym = String(rows[r][idxSym] ?? "").trim().toUpperCase();
-      if (rowSym && rowSym !== symbol) continue;
-    }
-
-    const kLong = toNum_(rows[r][idxLong]);
-    const kShort = toNum_(rows[r][idxShort]);
-
-    // Only definition rows have both strikes
-    if (!Number.isFinite(kLong) || !Number.isFinite(kShort)) continue;
-
-    const qty = assumeQty ? 1 : toNum_(rows[r][idxQty]);
-
-    if (!Number.isFinite(qty) || qty === 0) continue;
-
-    let debit = NaN;
-    if (idxAveDebit >= 0) debit = toNum_(rows[r][idxAveDebit]);
-    if (!Number.isFinite(debit) && idxRecDebit >= 0) debit = toNum_(rows[r][idxRecDebit]);
-    if (!Number.isFinite(debit) && idxDebitFallback >= 0) debit = toNum_(rows[r][idxDebitFallback]);
-    if (!Number.isFinite(debit)) continue;
-
-    // Build label like "Dec 28 350/450"
-    let label = `${kLong}/${kShort}`;
-    if (idxExp >= 0) {
-      const expLabel = formatExpLabel_(rows[r][idxExp]);
-      if (expLabel) label = `${expLabel} ${label}`;
-    }
-
-    out.push({ qty, kLong, kShort, debit, flavor, label });
-  }
-
-  return out;
-}
-
-/**
- * Format expiration for chart label: "Dec 28" from a Date or string
- */
-function formatExpLabel_(exp) {
-  if (!exp) return null;
-
-  let d = exp;
-  if (!(d instanceof Date)) {
-    d = new Date(exp);
-  }
-  if (isNaN(d.getTime())) return null;
-
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const mon = months[d.getMonth()];
-  const yr = String(d.getFullYear()).slice(-2);
-  return `${mon} ${yr}`;
-}
-
-/**
- * Parse iron condors from table for a specific symbol.
- * Iron condor = bull put spread + bear call spread
- *
- * Expected columns:
- *   Symbol, Expiration, Buy Put, Sell Put, Sell Call, Buy Call, Credit, Qty
- *
- * Returns { bullPutSpreads: [...], bearCallSpreads: [...] }
- */
-function parseIronCondorsFromTableForSymbol_(rows, symbol) {
-  const result = { bullPutSpreads: [], bearCallSpreads: [] };
-
-  if (!rows || rows.length < 2) return result;
-
-  const headerNorm = rows[0].map(normKey_);
-
-  const idxSym = findCol_(headerNorm, ["symbol", "ticker"]);
-  const idxExp = findCol_(headerNorm, ["expiration", "exp", "expiry", "expirationdate", "expdate"]);
-  const idxStatus = findCol_(headerNorm, ["status"]);
-  const idxBuyPut = findCol_(headerNorm, ["buyput", "longput", "putlong", "putbuy"]);
-  const idxSellPut = findCol_(headerNorm, ["sellput", "shortput", "putshort", "putsell"]);
-  const idxSellCall = findCol_(headerNorm, ["sellcall", "shortcall", "callshort", "callsell"]);
-  const idxBuyCall = findCol_(headerNorm, ["buycall", "longcall", "calllong", "callbuy"]);
-  const idxCredit = findCol_(headerNorm, ["credit", "netcredit", "premium"]);
-  const idxQty = findCol_(headerNorm, ["qty", "quantity", "contracts", "contract", "count"]);
-
-  // Must have all four strikes
-  if (idxBuyPut < 0 || idxSellPut < 0 || idxSellCall < 0 || idxBuyCall < 0) {
-    return result;
-  }
-
-  for (let r = 1; r < rows.length; r++) {
-    // Filter by symbol
-    if (idxSym >= 0) {
-      const rowSym = String(rows[r][idxSym] ?? "").trim().toUpperCase();
-      if (rowSym && rowSym !== symbol) continue;
-    }
-
-    // Skip closed positions
-    if (idxStatus >= 0) {
-      const status = String(rows[r][idxStatus] ?? "").trim().toLowerCase();
-      if (status === "closed") continue;
-    }
-
-    const buyPut = toNum_(rows[r][idxBuyPut]);
-    const sellPut = toNum_(rows[r][idxSellPut]);
-    const sellCall = toNum_(rows[r][idxSellCall]);
-    const buyCall = toNum_(rows[r][idxBuyCall]);
-
-    // All four strikes required
-    if (!Number.isFinite(buyPut) || !Number.isFinite(sellPut) ||
-        !Number.isFinite(sellCall) || !Number.isFinite(buyCall)) {
-      continue;
-    }
-
-    const qty = idxQty >= 0 ? toNum_(rows[r][idxQty]) : 1;
-    if (!Number.isFinite(qty) || qty === 0) continue;
-
-    // Get credit (stored as negative debit for credit spreads)
-    let credit = 0;
-    if (idxCredit >= 0) {
-      credit = toNum_(rows[r][idxCredit]);
-      if (!Number.isFinite(credit)) credit = 0;
-    }
-
-    // Build label
-    let label = `IC ${buyPut}/${sellPut}/${sellCall}/${buyCall}`;
-    if (idxExp >= 0) {
-      const expLabel = formatExpLabel_(rows[r][idxExp]);
-      if (expLabel) label = `${expLabel} ${label}`;
-    }
-
-    // Split credit between the two spreads (approximation)
-    const putWidth = sellPut - buyPut;
-    const callWidth = buyCall - sellCall;
-    const totalWidth = putWidth + callWidth;
-    const putCredit = totalWidth > 0 ? credit * (putWidth / totalWidth) : credit / 2;
-    const callCredit = totalWidth > 0 ? credit * (callWidth / totalWidth) : credit / 2;
-
-    // Bull put spread: long lower put, short higher put
-    // debit is negative for credit spreads
-    result.bullPutSpreads.push({
-      qty,
-      kLong: buyPut,
-      kShort: sellPut,
-      debit: -putCredit,
-      flavor: "PUT",
-      label: label + " (put)",
-    });
-
-    // Bear call spread: short lower call, long higher call
-    // For bear call spreads, we use kLong=sellCall, kShort=buyCall
-    // and mark it as a bear call so the value calc handles it correctly
-    result.bearCallSpreads.push({
-      qty,
-      kLong: sellCall,
-      kShort: buyCall,
-      debit: -callCredit,
-      flavor: "BEAR_CALL",
-      label: label + " (call)",
-    });
-  }
-
-  return result;
-}
+// parseSpreadsFromTableForSymbol_, formatExpirationLabel_, parseIronCondorsFromTableForSymbol_ are in Parsing.js
 
 /* =========================================================
    Status messaging
@@ -927,79 +661,5 @@ function clearStatus_(sheet) {
    Range helpers
    ========================================================= */
 
-function rangesIntersect_(a, b) {
-  if (a.getSheet().getSheetId() !== b.getSheet().getSheetId()) return false;
+// rangesIntersect_ is in CommonUtils.js
 
-  const aR1 = a.getRow(),
-    aC1 = a.getColumn();
-  const aR2 = aR1 + a.getNumRows() - 1;
-  const aC2 = aC1 + a.getNumColumns() - 1;
-
-  const bR1 = b.getRow(),
-    bC1 = b.getColumn();
-  const bR2 = bR1 + b.getNumRows() - 1;
-  const bC2 = bC1 + b.getNumColumns() - 1;
-
-  return aR1 <= bR2 && aR2 >= bR1 && aC1 <= bC2 && aC2 >= bC1;
-}
-
-function rangesEqual_(a, b) {
-  return (
-    a.getSheet().getSheetId() === b.getSheet().getSheetId() &&
-    a.getRow() === b.getRow() &&
-    a.getColumn() === b.getColumn() &&
-    a.getNumRows() === b.getNumRows() &&
-    a.getNumColumns() === b.getNumColumns()
-  );
-}
-
-/* =========================================================
-   Generic helpers
-   ========================================================= */
-
-function normKey_(v) {
-  return String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function findCol_(normHeaders, synonyms) {
-  const syn = synonyms.map(normKey_);
-  for (let i = 0; i < normHeaders.length; i++) {
-    if (syn.includes(normHeaders[i])) return i;
-  }
-  return -1;
-}
-
-/**
- * Robust numeric parse:
- * - strips $, %, commas
- * - supports parentheses negatives: (123.45) => -123.45
- */
-function toNum_(v) {
-  if (v == null || v === "") return NaN;
-  if (typeof v === "number") return v;
-
-  let s = String(v).trim();
-  if (!s) return NaN;
-
-  const neg = /^\(.*\)$/.test(s);
-  if (neg) s = s.slice(1, -1);
-
-  s = s.replace(/[$,%]/g, "").replace(/,/g, "").trim();
-  const n = Number(s);
-
-  if (!Number.isFinite(n)) return NaN;
-  return neg ? -n : n;
-}
-
-function numOr_(v, fallback) {
-  const n = toNum_(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function clamp_(x, lo, hi) {
-  return Math.max(lo, Math.min(hi, x));
-}
-
-function round4_(x) {
-  return Math.round(x * 10000) / 10000;
-}

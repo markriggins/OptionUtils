@@ -82,7 +82,7 @@ function runSpreadFinder() {
 
   // Default outlook if not set by user
   if (!config.outlookFuturePrice) {
-    config.outlookFuturePrice = round2_(currentPrice * 1.25);
+    config.outlookFuturePrice = roundTo_(currentPrice * 1.25, 2);
     Logger.log("Defaulting outlookFuturePrice to " + config.outlookFuturePrice);
   }
   if (!config.outlookConfidence) {
@@ -318,7 +318,7 @@ function loadOptionData_(ss) {
     const strike = +row[idx.strike];
     if (!Number.isFinite(strike)) continue;
 
-    const type = normalizeType_(row[idx.type]);
+    const type = parseOptionType_(row[idx.type]);
     if (!type) continue;
 
     const bid = +row[idx.bid] || 0;
@@ -402,7 +402,7 @@ function generateSpreads_(chain, config) {
 
       let debit = lowerMid - upperMid;
       if (debit < 0) debit = 0;
-      debit = round2_(debit);
+      debit = roundTo_(debit, 2);
 
       // Calculate metrics
       const maxProfit = width - debit;
@@ -472,7 +472,7 @@ function generateSpreads_(chain, config) {
         outlookBoost = priceBoost * dateBoost;
       }
 
-      const fitness = round2_(expectedROI * Math.pow(liquidityScore, 0.2) * Math.pow(tightness, 0.1) * outlookBoost);
+      const fitness = roundTo_(expectedROI * Math.pow(liquidityScore, 0.2) * Math.pow(tightness, 0.1) * outlookBoost, 2);
 
       spreads.push({
         symbol: lower.symbol,
@@ -481,21 +481,21 @@ function generateSpreads_(chain, config) {
         upperStrike: upper.strike,
         width,
         debit,
-        maxProfit: round2_(maxProfit),
-        maxLoss: round2_(maxLoss),
-        roi: round2_(roi),
-        lowerIV: round2_(lower.iv || 0),
-        lowerDelta: round2_(lower.delta),
-        upperDelta: round2_(upper.delta),
+        maxProfit: roundTo_(maxProfit, 2),
+        maxLoss: roundTo_(maxLoss, 2),
+        roi: roundTo_(roi, 2),
+        lowerIV: roundTo_(lower.iv || 0, 2),
+        lowerDelta: roundTo_(lower.delta, 2),
+        upperDelta: roundTo_(upper.delta, 2),
         lowerOI: lower.openint,
         upperOI: upper.openint,
         lowerVol: lower.volume,
         upperVol: upper.volume,
-        expectedGain: round2_(expectedGain),
-        expectedROI: round2_(expectedROI),
-        liquidityScore: round2_(liquidityScore),
-        tightness: round2_(tightness),
-        fitness: round2_(fitness)
+        expectedGain: roundTo_(expectedGain, 2),
+        expectedROI: roundTo_(expectedROI, 2),
+        liquidityScore: roundTo_(liquidityScore, 2),
+        tightness: roundTo_(tightness, 2),
+        fitness: roundTo_(fitness, 2)
       });
     }
   }
@@ -586,7 +586,7 @@ function outputSpreadResults_(sheet, spreads, config) {
   // Clear entire sheet
   const lastRow = Math.max(sheet.getLastRow(), RESULTS_START_ROW);
   if (lastRow >= 1) {
-    const clearRange = sheet.getRange(1, 1, lastRow, 20);
+    const clearRange = sheet.getRange(1, 1, lastRow, Math.max(sheet.getLastColumn(), 1));
     // Remove any existing banding
     const bandings = clearRange.getBandings();
     bandings.forEach(b => b.remove());
@@ -637,57 +637,77 @@ function outputSpreadResults_(sheet, spreads, config) {
 
   if (spreads.length === 0) return;
 
-  const dataStartRow = RESULTS_START_ROW + 1;
+  // Build column index: col("Name") returns 1-based sheet column number
+  const colIdx = {};
+  headers.forEach((h, i) => colIdx[h] = i);
+  const col = name => colIdx[name] + 1;   // 1-based for sheet APIs
+  const colLetter = name => String.fromCharCode(65 + colIdx[name]); // A-Z
 
-  // Build all data, formulas, labels in one pass (no per-row sheet reads)
-  const tz = Session.getScriptTimeZone();
+  // Per-column number formats and widths, keyed by header name
+  const formatMap = {
+    Symbol: "@", Expiration: "@", Lower: "#,##0", Upper: "#,##0", Width: "#,##0",
+    Debit: "$#,##0.00", MaxProfit: "$#,##0.00", ROI: "0.00",
+    ExpGain: "$#,##0.00", ExpROI: "0.00",
+    LowerDelta: "0.00", UpperDelta: "0.00", LowerOI: "#,##0", UpperOI: "#,##0",
+    Liquidity: "0.00", Tightness: "0.00", Fitness: "0.00",
+    OptionStrat: "@", Label: "@", Held: "@", IV: "0.00%"
+  };
+  const widthMap = {
+    Symbol: 60, Expiration: 90, Lower: 60, Upper: 60, Width: 50,
+    Debit: 70, MaxProfit: 70, ROI: 50, ExpGain: 70, ExpROI: 55,
+    LowerDelta: 55, UpperDelta: 55, LowerOI: 55, UpperOI: 55,
+    Liquidity: 55, Tightness: 55, Fitness: 55, OptionStrat: 100, Label: 150, Held: 50, IV: 55
+  };
+
+  const dataStartRow = RESULTS_START_ROW + 1;
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-  // Build all formulas and values in one pass, write as single 2D array
-  // Columns: A-F data, G formula, H formula, I-P data, Q formula, R formula, S value
+  // Build a row-value map per spread, placed into correct column positions
   const allRows = [];
   for (let i = 0; i < spreads.length; i++) {
     const s = spreads[i];
-    const row = dataStartRow + i;
     const expDate = new Date(s.expiration);
     const dateStr = months[expDate.getMonth()] + " " + String(expDate.getFullYear()).slice(2);
     const label = `${s.symbol} ${s.lowerStrike}/${s.upperStrike} ${dateStr}`;
-    const osUrl = `buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row})`;
 
-    allRows.push([
-      s.symbol, s.expiration, s.lowerStrike, s.upperStrike, s.width,
-      s.debit,
-      s.maxProfit,   // G - pre-computed instead of formula
-      s.roi,         // H - pre-computed instead of formula
-      s.expectedGain, s.expectedROI,
-      s.lowerDelta, s.upperDelta, s.lowerOI, s.upperOI,
-      s.liquidityScore, s.tightness,
-      s.fitness,     // Q - pre-computed instead of formula
-      "",            // R - OptionStrat (formula, set separately)
-      label,         // S
-      s.held ? "HELD" : "",  // T
-      s.lowerIV              // U
-    ]);
+    const rowData = new Array(headers.length).fill("");
+    rowData[colIdx.Symbol] = s.symbol;
+    rowData[colIdx.Expiration] = s.expiration;
+    rowData[colIdx.Lower] = s.lowerStrike;
+    rowData[colIdx.Upper] = s.upperStrike;
+    rowData[colIdx.Width] = s.width;
+    rowData[colIdx.Debit] = s.debit;
+    rowData[colIdx.MaxProfit] = s.maxProfit;
+    rowData[colIdx.ROI] = s.roi;
+    rowData[colIdx.ExpGain] = s.expectedGain;
+    rowData[colIdx.ExpROI] = s.expectedROI;
+    rowData[colIdx.LowerDelta] = s.lowerDelta;
+    rowData[colIdx.UpperDelta] = s.upperDelta;
+    rowData[colIdx.LowerOI] = s.lowerOI;
+    rowData[colIdx.UpperOI] = s.upperOI;
+    rowData[colIdx.Liquidity] = s.liquidityScore;
+    rowData[colIdx.Tightness] = s.tightness;
+    rowData[colIdx.Fitness] = s.fitness;
+    rowData[colIdx.OptionStrat] = "";  // formula set separately
+    rowData[colIdx.Label] = label;
+    rowData[colIdx.Held] = s.held ? "HELD" : "";
+    rowData[colIdx.IV] = s.lowerIV;
+    allRows.push(rowData);
   }
   sheet.getRange(dataStartRow, 1, allRows.length, headers.length).setValues(allRows);
 
-  // Only OptionStrat needs formulas (HYPERLINK with custom function)
+  // OptionStrat formulas reference other columns by letter
+  const lowerLetter = colLetter("Lower"), upperLetter = colLetter("Upper");
+  const symLetter = colLetter("Symbol"), expLetter = colLetter("Expiration");
   const optionStratFormulas = spreads.map((s, i) => {
     const row = dataStartRow + i;
-    const osUrl = `buildOptionStratUrl(C${row}&"/"&D${row},A${row},"bull-call-spread",B${row})`;
+    const osUrl = `buildOptionStratUrl(${lowerLetter}${row}&"/"&${upperLetter}${row},${symLetter}${row},"bull-call-spread",${expLetter}${row})`;
     return [`=HYPERLINK(${osUrl},"OptionStrat")`];
   });
-  sheet.getRange(dataStartRow, 18, spreads.length, 1).setFormulas(optionStratFormulas);
+  sheet.getRange(dataStartRow, col("OptionStrat"), spreads.length, 1).setFormulas(optionStratFormulas);
 
-  // Apply all number formats in one batch using a format array
-  const formats = spreads.map(() => [
-    "@", "@", "#,##0", "#,##0", "#,##0",           // A-E
-    "$#,##0.00", "$#,##0.00", "0.00",               // F-H
-    "$#,##0.00", "0.00",                             // I-J
-    "0.00", "0.00", "#,##0", "#,##0",               // K-N
-    "0.00", "0.00", "0.00",                          // O-Q
-    "@", "@", "@", "0.00%"                              // R-U
-  ]);
+  // Number formats from the map
+  const formats = spreads.map(() => headers.map(h => formatMap[h] || "@"));
   sheet.getRange(dataStartRow, 1, spreads.length, headers.length).setNumberFormats(formats);
 
   // Style: header, banding, borders, filter in minimal API calls
@@ -701,11 +721,11 @@ function outputSpreadResults_(sheet, spreads, config) {
   const dataRange = sheet.getRange(dataStartRow, 1, spreads.length, headers.length);
   dataRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
 
-  // Set column widths in batch instead of autoResizeColumn loop
-  const colWidths = [60, 90, 60, 60, 50, 70, 70, 50, 70, 55, 55, 55, 55, 55, 55, 55, 55, 100, 150, 50, 55];
-  colWidths.forEach((w, i) => sheet.setColumnWidth(i + 1, w));
+  // Column widths from the map
+  headers.forEach((h, i) => sheet.setColumnWidth(i + 1, widthMap[h] || 55));
+
   // Clip OptionStrat column
-  sheet.getRange(RESULTS_START_ROW, 18, spreads.length + 1, 1)
+  sheet.getRange(RESULTS_START_ROW, col("OptionStrat"), spreads.length + 1, 1)
     .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
 
   showSpreadFinderGraphs();
@@ -717,7 +737,7 @@ function outputSpreadResults_(sheet, spreads, config) {
 function showSpreadFinderGraphs() {
   SpreadsheetApp.flush();
 
-  // Creates the HTML interface from the SidebarChart.html file
+  // Creates the SpreadFinderGraphs modal dialog
   const html = HtmlService.createHtmlOutputFromFile('SpreadFinderGraphs')
       .setWidth(1050) // Wide enough for side-by-side or large stacked charts
       .setHeight(850);
@@ -726,60 +746,59 @@ function showSpreadFinderGraphs() {
 }
 
 /**
- * Fetches and formats data for the Sidebar chart.
+ * Fetches spread data for SpreadFinderGraphs.
  * Orders by Fitness so the best points are drawn last (on top).
  */
-/**
- * Enhanced Data Fetch for Graphs
- * Integrates IV and uses the column mapping confirmed from your screenshots.
- */
- function getSidebarData() {
+ function getSpreadFinderGraphData() {
    const ss = SpreadsheetApp.getActiveSpreadsheet();
    const sheet = ss.getSheetByName(SPREADS_SHEET);
    const lastRow = sheet.getLastRow();
-   const startRow = 3; // Row 1=timestamp, Row 2=headers, Row 3+=data
+   const headerRow = 2; // Row 1=timestamp, Row 2=headers
+   const startRow = 3;  // Row 3+=data
    if (lastRow < startRow) return [];
 
-   const data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 21).getValues();
+   // Build column index from header row
+   const hdrs = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0];
+   const c = {};
+   hdrs.forEach((h, i) => c[h.toString().trim()] = i);
+
+   const data = sheet.getRange(startRow, 1, lastRow - startRow + 1, hdrs.length).getValues();
    const today = new Date();
    today.setHours(0,0,0,0);
 
    return data.map(row => {
-     const sym = row[0];
-     const expDate = new Date(row[1]);
-     const lowStrike = row[2];
-     const highStrike = row[3];
+     const sym = row[c.Symbol];
+     const expDate = new Date(row[c.Expiration]);
+     const lowStrike = row[c.Lower];
+     const highStrike = row[c.Upper];
 
-     // Re-build the URL string directly instead of scraping the formula
-     // Matches: optionstrat.com/build/bull-call-spread/TSLA/280119C350,280119C450 (example format)
-     // Note: Adjust the buildOptionStratUrl logic if your function uses a different format
      const osUrl = buildOptionStratUrl(`${lowStrike}/${highStrike}`, sym, "bull-call-spread", expDate);
 
      const diffTime = expDate.getTime() - today.getTime();
      const dte = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
      return {
-       delta: parseFloat(row[10]) || 0,
-       roi: parseFloat(row[7]) || 0,
-       strike: parseFloat(row[2]) || 0,
-       fitness: parseFloat(row[16]) || 0,
-       label: String(row[18] || ""),
-       osUrl: osUrl, // Now a clean string
+       delta: parseFloat(row[c.LowerDelta]) || 0,
+       roi: parseFloat(row[c.ROI]) || 0,
+       strike: parseFloat(row[c.Lower]) || 0,
+       fitness: parseFloat(row[c.Fitness]) || 0,
+       label: String(row[c.Label] || ""),
+       osUrl: osUrl,
 
-       width: row[4],
-       debit: row[5],
-       maxProfit: row[6],
-       expectedGain: row[8],
-       expectedROI: row[9],
-       lowerDelta: row[10],
-       upperDelta: row[11],
-       lowerOI: row[12],
-       upperOI: row[13],
-       liquidity: row[14],
-       tightness: row[15],
+       width: row[c.Width],
+       debit: row[c.Debit],
+       maxProfit: row[c.MaxProfit],
+       expectedGain: row[c.ExpGain],
+       expectedROI: row[c.ExpROI],
+       lowerDelta: row[c.LowerDelta],
+       upperDelta: row[c.UpperDelta],
+       lowerOI: row[c.LowerOI],
+       upperOI: row[c.UpperOI],
+       liquidity: row[c.Liquidity],
+       tightness: row[c.Tightness],
        dte: dte > 0 ? dte : 0,
-       held: (row[19] || "").toString().trim() === "HELD",
-       iv: parseFloat(row[20]) || 0
+       held: (row[c.Held] || "").toString().trim() === "HELD",
+       iv: parseFloat(row[c.IV]) || 0
      };
    }).sort((a, b) => a.fitness - b.fitness);
  }

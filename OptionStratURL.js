@@ -109,32 +109,6 @@ function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
     }
   }
 
-  /*******************************************************
-   * STRIKE PARSING (STRICT ORDER, FLEXIBLE TEXT)
-   *******************************************************/
-
-  function parseStrikePairStrict(strikePair) {
-    const text = String(strikePair);
-
-    // Extract first number/number anywhere in string
-    const match = text.match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
-    if (!match) {
-      throw new Error(`Strike must contain a pair like "450/460". Got: "${strikePair}"`);
-    }
-
-    const lower = Number(match[1]);
-    const upper = Number(match[2]);
-
-    if (!Number.isFinite(lower) || !Number.isFinite(upper)) {
-      throw new Error(`Strikes must be numeric: "${strikePair}"`);
-    }
-
-    if (lower >= upper) {
-      throw new Error(`Invalid strike order: ${lower} must be < ${upper}`);
-    }
-    return [match[1], match[2]];
-  }
-
   if (!(strikes && ticker && strategy && expiration) ) {
     throw new Error("undefined parameter");
   }
@@ -153,7 +127,7 @@ function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
   const callOrPutChar = strategy.toLowerCase().includes("call") ? "C" : "P";
 
   //const [lowStrike, highStrike] = strikes.split('/');
-  const [lowStrike, highStrike] = parseStrikePairStrict(strikes);
+  const [lowStrike, highStrike] = parseStrikePairStrict_(strikes);
   const symbolLow = `.${ticker}${dateCode}${callOrPutChar}${lowStrike}`;
   const symbolHigh = `-.${ticker}${dateCode}${callOrPutChar}${highStrike}`;
  

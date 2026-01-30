@@ -50,7 +50,7 @@ function refreshOptionPrices() {
       const file = entry.file;
 
       // Parse expStr into a Date (midnight) for sheet storage
-      const expDate = parseYyyyMmDdToDate_(expStr);
+      const expDate = parseYyyyMmDdToDateAtMidnight_(expStr);
       if (!expDate || isNaN(expDate.getTime())) {
         throw new Error(`Cannot parse expiration '${expStr}' from filename for ${symbol}. Expected format: exp-YYYY-MM-DD`);
       }
@@ -59,7 +59,7 @@ function refreshOptionPrices() {
       const csvData = Utilities.parseCsv(csvContent);
       if (csvData.length < 2) continue;
 
-      const parsedRows = parseCsvData_(csvData, symbol, expDate);
+      const parsedRows = loadCsvData_(csvData, symbol, expDate);
       if (parsedRows.length > 0) {
         allRows.push(...parsedRows);
         expGroupsLoaded++;
@@ -93,12 +93,11 @@ function refreshOptionPrices() {
   targetSheet.setFrozenRows(1);
 
   // Sort: symbol, expiration, type, strike
-  targetSheet.getRange(2, 1, allRows.length, headersOut.length).sort([
-    { column: 1, ascending: true },
-    { column: 2, ascending: true },
-    { column: 4, ascending: true },
-    { column: 3, ascending: true }
-  ]);
+  targetSheet.getRange(2, 1, allRows.length, headersOut.length).sort(
+    ["symbol", "expiration", "type", "strike"].map(name => ({
+      column: headersOut.indexOf(name) + 1, ascending: true
+    }))
+  );
 
   // Format IV and moneyness columns as percent
   const ivCol = headersOut.indexOf("iv") + 1;
@@ -124,11 +123,11 @@ function refreshOptionPrices() {
     XLookupByKeys_WarmCache(SHEET_NAME, ["symbol", "expiration", "strike", "type"], ["bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness"]);
   } catch (e) {}
 
-  // Force recalculation of BullCallSpreads formulas
+  // Force recalculate of BullCallSpreads formulas
   try {
-    forceRecalcBullCallSpreads_(ss);
+    forceRecalculateBullCallSpreads_(ss);
   } catch (e) {
-    Logger.log("Could not force recalc BullCallSpreads: " + e);
+    Logger.log("Could not force recalculate BullCallSpreads: " + e);
   }
 
   ss.toast(
@@ -225,7 +224,7 @@ function findInputFiles_(path = "Investing/Data/OptionPrices") {
  * @param {Date} expDate - Expiration as Date object (midnight).
  * @returns {Array<Array<*>}} Array of [symbol, expDate, strike, type, bid, mid, ask, iv, delta, volume, openInt, moneyness] rows.
  */
-function parseCsvData_(csvData, symbol, expDate) {
+function loadCsvData_(csvData, symbol, expDate) {
   const rows = [];
 
   const headers = csvData[0].map(h => String(h).trim().toLowerCase());
@@ -244,30 +243,30 @@ function parseCsvData_(csvData, symbol, expDate) {
     const r = csvData[i];
     if (!r || r.length === 0) continue;
 
-    const strike = safeNumber_(r[strikeIdx]);
+    const strike = parseNumber_(r[strikeIdx]);
     if (!Number.isFinite(strike)) continue;
 
-    const optionType = normalizeOptionType_(r[typeIdx]);
+    const optionType = parseOptionType_(r[typeIdx]);
     if (!optionType) continue;
 
-    const bid = safeNumber_(r[bidIdx]);
-    const ask = safeNumber_(r[askIdx]);
-    const mid = midIdx === -1 ? null : safeNumber_(r[midIdx]);
+    const bid = parseNumber_(r[bidIdx]);
+    const ask = parseNumber_(r[askIdx]);
+    const mid = midIdx === -1 ? null : parseNumber_(r[midIdx]);
 
     // Parse IV (stored as decimal, e.g., 0.5532 for 55.32%)
-    const ivRaw = ivIdx === -1 ? null : safePercent_(r[ivIdx]);
+    const ivRaw = ivIdx === -1 ? null : parsePercent_(r[ivIdx]);
 
     // Parse delta (already a decimal like 0.6873)
-    const delta = deltaIdx === -1 ? null : safeNumber_(r[deltaIdx]);
+    const delta = deltaIdx === -1 ? null : parseNumber_(r[deltaIdx]);
 
     // Parse volume (integer)
-    const volume = volumeIdx === -1 ? null : safeInteger_(r[volumeIdx]);
+    const volume = volumeIdx === -1 ? null : parseInteger_(r[volumeIdx]);
 
     // Parse open interest (integer)
-    const openInt = openIntIdx === -1 ? null : safeInteger_(r[openIntIdx]);
+    const openInt = openIntIdx === -1 ? null : parseInteger_(r[openIntIdx]);
 
     // Parse moneyness (stored as decimal, e.g., -0.0912 for -9.12%)
-    const moneyness = moneynessIdx === -1 ? null : safePercent_(r[moneynessIdx]);
+    const moneyness = moneynessIdx === -1 ? null : parsePercent_(r[moneynessIdx]);
 
     rows.push([
       symbol,
@@ -288,58 +287,6 @@ function parseCsvData_(csvData, symbol, expDate) {
   return rows;
 }
 
-/**
- * Finds indexes of required columns in headers (all in lowercase).
- *
- * Supports variations in column names:
- * - strike: "strike"
- * - bid: "bid"
- * - mid: "mid" (optional)
- * - ask: "ask"
- * - type: "type", "option type", "call/put", "cp", "put/call"
- * - iv: "iv", "implied volatility", "impliedvolatility"
- * - delta: "delta"
- * - volume: "volume", "vol"
- * - openInt: "open int", "openint", "open interest", "openinterest", "oi"
- * - moneyness: "moneyness", "money", "itm/otm"
- *
- * @param {Array<string>} headers - Lowercased, trimmed headers.
- * @returns {Object} { strikeIdx, bidIdx, midIdx, askIdx, typeIdx, ivIdx, deltaIdx, volumeIdx, openIntIdx, moneynessIdx } (-1 if not found).
- */
-function findColumnIndexes_(headers) {
-  const strikeIdx = headers.indexOf("strike");
-  const bidIdx = headers.indexOf("bid");
-  const midIdx = headers.indexOf("mid");
-  const askIdx = headers.indexOf("ask");
-
-  let typeIdx = headers.indexOf("type");
-  if (typeIdx === -1) typeIdx = headers.indexOf("option type");
-  if (typeIdx === -1) typeIdx = headers.indexOf("call/put");
-  if (typeIdx === -1) typeIdx = headers.indexOf("cp");
-  if (typeIdx === -1) typeIdx = headers.indexOf("put/call");
-
-  let ivIdx = headers.indexOf("iv");
-  if (ivIdx === -1) ivIdx = headers.indexOf("implied volatility");
-  if (ivIdx === -1) ivIdx = headers.indexOf("impliedvolatility");
-
-  const deltaIdx = headers.indexOf("delta");
-
-  let volumeIdx = headers.indexOf("volume");
-  if (volumeIdx === -1) volumeIdx = headers.indexOf("vol");
-
-  let openIntIdx = headers.indexOf("open int");
-  if (openIntIdx === -1) openIntIdx = headers.indexOf("openint");
-  if (openIntIdx === -1) openIntIdx = headers.indexOf("open interest");
-  if (openIntIdx === -1) openIntIdx = headers.indexOf("openinterest");
-  if (openIntIdx === -1) openIntIdx = headers.indexOf("oi");
-
-  let moneynessIdx = headers.indexOf("moneyness");
-  if (moneynessIdx === -1) moneynessIdx = headers.indexOf("money");
-  if (moneynessIdx === -1) moneynessIdx = headers.indexOf("itm/otm");
-
-  return { strikeIdx, bidIdx, midIdx, askIdx, typeIdx, ivIdx, deltaIdx, volumeIdx, openIntIdx, moneynessIdx };
-}
-
 /** ---------- helpers ---------- */
 
 function getFolder_(parent, name) {
@@ -351,8 +298,7 @@ function getFolder_(parent, name) {
 /**
  * Forces recalculation of a named table by adding then deleting a column on the left.
  */
-function forceRecalcTable_(ss, tableName) {
-  return;
+function forceRecalculateTable_(ss, tableName) {
   const range = ss.getRangeByName(tableName);
   if (!range) {
     Logger.log(tableName + " not found");
@@ -362,167 +308,22 @@ function forceRecalcTable_(ss, tableName) {
   const sheet = range.getSheet();
   const firstCol = range.getColumn();
 
-  // Insert column before table to force recalculation
+  // Insert column before table to force recalculateulation
   sheet.insertColumnBefore(firstCol);
-  sheet.getRange(range.getRow(), firstCol).setValue("Recalc");
+  sheet.getRange(range.getRow(), firstCol).setValue("Recalculate");
   SpreadsheetApp.flush();
 
   // Delete it
   sheet.deleteColumn(firstCol);
   SpreadsheetApp.flush();
-  Logger.log("Forced recalc of " + tableName + " via column add/delete");
+  Logger.log("Forced recalculate of " + tableName + " via column add/delete");
 }
 
 /**
  * Forces recalculation of position tables.
  */
-function forceRecalcBullCallSpreads_(ss) {
-  forceRecalcTable_(ss, "BullCallSpreadsTable");
-  forceRecalcTable_(ss, "IronCondorsTable");
+function forceRecalculateBullCallSpreads_(ss) {
+  forceRecalculateTable_(ss, "BullCallSpreadsTable");
+  forceRecalculateTable_(ss, "IronCondorsTable");
 }
 
-function parseYyyyMmDdToDate_(s) {
-  // Create a Date at midnight local time for deterministic day comparisons
-  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return null;
-  const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
-  const dt = new Date(y, mo, d);
-  if (isNaN(dt.getTime())) return null;
-  dt.setHours(0, 0, 0, 0);
-  return dt;
-}
-
-function safeNumber_(v) {
-  if (v === null || v === undefined) return NaN;
-  const s = String(v).trim();
-  if (!s || s === "--" || s.toLowerCase() === "na" || s.toLowerCase() === "n/a" || s.toLowerCase() === "unch") return NaN;
-  const n = Number(s.replace(/,/g, ""));
-  return Number.isFinite(n) ? n : NaN;
-}
-
-/**
- * Parse a percentage string like "55.32%" or "-9.12%" to decimal (0.5532 or -0.0912)
- */
-function safePercent_(v) {
-  if (v === null || v === undefined) return NaN;
-  const s = String(v).trim();
-  if (!s || s === "--" || s.toLowerCase() === "na" || s.toLowerCase() === "n/a") return NaN;
-
-  // Handle +/- prefix and % suffix
-  const cleaned = s.replace(/,/g, "").replace(/%$/, "");
-  const n = Number(cleaned);
-  if (!Number.isFinite(n)) return NaN;
-
-  // Convert from percentage to decimal (55.32 -> 0.5532)
-  return n / 100;
-}
-
-/**
- * Parse an integer, handling commas
- */
-function safeInteger_(v) {
-  if (v === null || v === undefined) return NaN;
-  const s = String(v).trim();
-  if (!s || s === "--" || s.toLowerCase() === "na" || s.toLowerCase() === "n/a" || s.toLowerCase() === "unch") return NaN;
-
-  const cleaned = s.replace(/,/g, "").replace(/^\+/, "");
-  const n = parseInt(cleaned, 10);
-  return Number.isFinite(n) ? n : NaN;
-}
-
-function normalizeOptionType_(v) {
-  const s = String(v || "").trim().toLowerCase();
-  if (!s) return null;
-  if (["call", "calls", "c"].includes(s)) return "Call";
-  if (["put", "puts", "p"].includes(s)) return "Put";
-  return null;
-}
-
-/** ---------- test cases ---------- */
-
-/**
- * Tests parseCsvData_ with different column orders.
- *
- * Mocks CSV data with headers in varying orders (e.g., Ask,Bid,Mid or Bid,Mid,Ask).
- * Ensures output rows are correct regardless of order, as long as names match (case-insensitive).
- *
- * Run: test_parseCsvData_columnOrders
- */
-function test_parseCsvData_columnOrders() {
-  const symbol = "TSLA";
-  const expDate = new Date(2028, 5, 16); // 2028-06-16 (month 5=June)
-
-  // Test 1: Standard order Bid,Mid,Ask + Type at end
-  const csv1 = [
-    ["Strike", "Bid", "Mid", "Ask", "Type"],
-    ["450", "203.15", "206.00", "208.85", "Call"],
-    ["350", "250.00", "255.00", "260.00", "Put"]
-  ];
-  const rows1 = parseCsvData_(csv1, symbol, expDate);
-  assertArrayDeepEqual(rows1, [
-    [symbol, expDate, 450, "Call", 203.15, 206.00, 208.85],
-    [symbol, expDate, 350, "Put", 250.00, 255.00, 260.00]
-  ], "Test 1: Standard order");
-
-  // Test 2: Reversed order Ask,Bid,Mid + Type in middle
-  const csv2 = [
-    ["Ask", "Bid", "Mid", "Type", "Strike"],
-    ["208.85", "203.15", "206.00", "Call", "450"],
-    ["260.00", "250.00", "255.00", "Put", "350"]
-  ];
-  const rows2 = parseCsvData_(csv2, symbol, expDate);
-  assertArrayDeepEqual(rows2, [
-    [symbol, expDate, 450, "Call", 203.15, 206.00, 208.85],
-    [symbol, expDate, 350, "Put", 250.00, 255.00, 260.00]
-  ], "Test 2: Reversed order");
-
-  // Test 3: Mixed case headers, no Mid, different Type name "Option Type"
-  const csv3 = [
-    ["sTriKe", "BID", "ASK", "Option Type"],
-    ["450", "203.15", "208.85", "Call"],
-    ["350", "250.00", "260.00", "Put"]
-  ];
-  const rows3 = parseCsvData_(csv3, symbol, expDate);
-  assertArrayDeepEqual(rows3, [
-    [symbol, expDate, 450, "Call", 203.15, null, 208.85],
-    [symbol, expDate, 350, "Put", 250.00, null, 260.00]
-  ], "Test 3: Mixed case, no Mid, alt Type");
-
-  // Test 4: Invalid (missing Bid) -> empty rows
-  const csv4 = [
-    ["Strike", "Mid", "Ask", "Type"],
-    ["450", "206.00", "208.85", "Call"]
-  ];
-  const rows4 = parseCsvData_(csv4, symbol, expDate);
-  assertArrayDeepEqual(rows4, [], "Test 4: Missing Bid -> empty");
-
-  Logger.log("✅ All parseCsvData_ column order tests passed");
-}
-
-/**
- * Helper: Assert two arrays are deeply equal.
- *
- * @param {Array<*>} actual
- * @param {Array<*>} expected
- * @param {string} msg
- */
-function assertArrayDeepEqual(actual, expected, msg = "") {
-  if (actual.length !== expected.length) {
-    throw new Error(`ASSERT FAILED${msg ? " – " + msg : ""}\nLength mismatch: ${actual.length} != ${expected.length}`);
-  }
-  actual.forEach((row, i) => {
-    const expRow = expected[i];
-    if (row.length !== expRow.length) {
-      throw new Error(`ASSERT FAILED${msg ? " – " + msg : ""}\nRow ${i} length mismatch`);
-    }
-    row.forEach((v, j) => {
-      if (v instanceof Date && expRow[j] instanceof Date) {
-        if (v.getTime() !== expRow[j].getTime()) {
-          throw new Error(`ASSERT FAILED${msg ? " – " + msg : ""}\nRow ${i}, Col ${j}: Dates differ`);
-        }
-      } else if (v !== expRow[j]) {
-        throw new Error(`ASSERT FAILED${msg ? " – " + msg : ""}\nRow ${i}, Col ${j}: ${v} != ${expRow[j]}`);
-      }
-    });
-  });
-}
