@@ -81,7 +81,7 @@
             <div class="metric-box" data-help="Max profit / debit cost. Higher = more return per dollar risked."><span class="label">ROI</span><span id="det-roi" class="value"></span></div>
             <div class="metric-box" data-help="Probability-weighted ROI using prob-of-touch model."><span class="label">Exp ROI</span><span id="det-eroi" class="value"></span></div>
             <div class="metric-box" data-help="Days to expire."><span class="label">DTE</span><span id="det-dte" class="value"></span></div>
-            <div class="metric-box" data-help="Volatility level."><span class="label">IV</span><span id="det-iv" class="value"></span></div>
+            <div class="metric-box" data-help="Implied volatility of the lower (long) leg."><span class="label">IV</span><span id="det-iv" class="value"></span></div>
             <div class="metric-box" data-help="Buy-side Delta."><span class="label">L-Delta</span><span id="det-ld" class="value"></span></div>
             <div class="metric-box" data-help="Sell-side Delta."><span class="label">U-Delta</span><span id="det-ud" class="value"></span></div>
             <div class="metric-box" data-help="Lower Open Interest."><span class="label">L-OI</span><span id="det-loi" class="value"></span></div>
@@ -110,6 +110,7 @@
     // Axis state: tracks current viewWindow for each chart
     var views = { delta: {h: null, v: null}, strike: {h: null, v: null} };
     var defaults = { delta: {h: null, v: null}, strike: {h: null, v: null} };
+    var activeKey = null;
 
     function dataRange(dt, col) {
       var min = Infinity, max = -Infinity;
@@ -205,7 +206,7 @@
         document.getElementById('det-debit').innerText = "$" + Number(t.debit).toFixed(2);
         document.getElementById('det-maxp').innerText = "$" + Number(t.maxProfit).toFixed(2);
         document.getElementById('det-dte').innerText = t.dte + "d";
-        document.getElementById('det-iv').innerText = (t.iv * 100).toFixed(1) + "%";
+        document.getElementById('det-iv').innerText = t.iv ? (t.iv * 100).toFixed(1) + "%" : "—";
         document.getElementById('det-ld').innerText = t.lowerDelta;
         document.getElementById('det-ud').innerText = t.upperDelta;
         document.getElementById('det-loi').innerText = t.lowerOI;
@@ -246,6 +247,12 @@
         });
       });
 
+      // Track which chart is active for arrow-key panning
+      ['chart_delta', 'chart_strike'].forEach(function(id) {
+        var k = id === 'chart_delta' ? 'delta' : 'strike';
+        document.getElementById(id).addEventListener('mouseenter', function() { activeKey = k; });
+      });
+
       // Drag-to-zoom on chart divs
       ['chart_delta', 'chart_strike'].forEach(function(id) {
         var el = document.getElementById(id);
@@ -260,6 +267,7 @@
         el.appendChild(selBox);
 
         el.addEventListener('mousedown', function(e) {
+          activeKey = key;
           if (e.button !== 0 || e.shiftKey) return; // only left click, not shift (leave shift for select)
           // Check if click is in chart area (not on a point)
           var cli = chart.getChartLayoutInterface();
@@ -313,23 +321,11 @@
 
       // Arrow keys pan, right-click resets
       document.addEventListener('keydown', function(e) {
-        var dominated = ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'];
-        if (dominated.indexOf(e.key) === -1) return;
-        var horiz = (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
-        var dir = (e.key === 'ArrowRight' || e.key === 'ArrowUp') ? 1 : -1;
-        ['delta', 'strike'].forEach(function(key) {
-          if (horiz) {
-            var h = views[key].h;
-            var shift = (h.max - h.min) * 0.15 * dir;
-            views[key].h = {min: h.min + shift, max: h.max + shift};
-          } else {
-            var v = views[key].v;
-            var shift = (v.max - v.min) * 0.15 * dir;
-            views[key].v = {min: v.min + shift, max: v.max + shift};
-          }
-        });
-        redrawChart('delta');
-        redrawChart('strike');
+        if (!activeKey || ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].indexOf(e.key) === -1) return;
+        var axis = (e.key === 'ArrowLeft' || e.key === 'ArrowRight') ? views[activeKey].h : views[activeKey].v;
+        var shift = (axis.max - axis.min) * 0.15 * ((e.key === 'ArrowRight' || e.key === 'ArrowUp') ? 1 : -1);
+        axis.min += shift; axis.max += shift;
+        redrawChart(activeKey);
         e.preventDefault();
       });
 

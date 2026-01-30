@@ -51,9 +51,8 @@ function refreshOptionPrices() {
 
       // Parse expStr into a Date (midnight) for sheet storage
       const expDate = parseYyyyMmDdToDate_(expStr);
-      if (!expDate) {
-        Logger.log(`Warning: Could not parse expiration '${expStr}' for ${symbol}`);
-        continue;
+      if (!expDate || isNaN(expDate.getTime())) {
+        throw new Error(`Cannot parse expiration '${expStr}' from filename for ${symbol}. Expected format: exp-YYYY-MM-DD`);
       }
 
       const csvContent = file.getBlob().getDataAsString();
@@ -78,8 +77,15 @@ function refreshOptionPrices() {
     return;
   }
 
-  // ---- Write output ----
+  // ---- Validate and write output ----
   const headersOut = ["symbol", "expiration", "strike", "type", "bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness"];
+
+  // Verify no rows have missing expirations
+  const badRows = allRows.filter(r => !r[1] || (r[1] instanceof Date && isNaN(r[1].getTime())));
+  if (badRows.length > 0) {
+    throw new Error(`${badRows.length} rows have missing or invalid expiration dates. First bad row: ${JSON.stringify(badRows[0])}`);
+  }
+
   targetSheet.getRange(1, 1, 1, headersOut.length).setValues([headersOut]);
   targetSheet.getRange(2, 1, allRows.length, headersOut.length).setValues(allRows);
   SpreadsheetApp.flush(); // Force commit to avoid timing issues
@@ -346,6 +352,7 @@ function getFolder_(parent, name) {
  * Forces recalculation of a named table by adding then deleting a column on the left.
  */
 function forceRecalcTable_(ss, tableName) {
+  return;
   const range = ss.getRangeByName(tableName);
   if (!range) {
     Logger.log(tableName + " not found");
@@ -355,7 +362,7 @@ function forceRecalcTable_(ss, tableName) {
   const sheet = range.getSheet();
   const firstCol = range.getColumn();
 
-  // Insert column before table
+  // Insert column before table to force recalculation
   sheet.insertColumnBefore(firstCol);
   sheet.getRange(range.getRow(), firstCol).setValue("Recalc");
   SpreadsheetApp.flush();
@@ -363,7 +370,6 @@ function forceRecalcTable_(ss, tableName) {
   // Delete it
   sheet.deleteColumn(firstCol);
   SpreadsheetApp.flush();
-
   Logger.log("Forced recalc of " + tableName + " via column add/delete");
 }
 

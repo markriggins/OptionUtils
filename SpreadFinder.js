@@ -484,6 +484,7 @@ function generateSpreads_(chain, config) {
         maxProfit: round2_(maxProfit),
         maxLoss: round2_(maxLoss),
         roi: round2_(roi),
+        lowerIV: round2_(lower.iv || 0),
         lowerDelta: round2_(lower.delta),
         upperDelta: round2_(upper.delta),
         lowerOI: lower.openint,
@@ -605,7 +606,7 @@ function outputSpreadResults_(sheet, spreads, config) {
     "Symbol", "Expiration", "Lower", "Upper", "Width",
     "Debit", "MaxProfit", "ROI", "ExpGain", "ExpROI",
     "LowerDelta", "UpperDelta",
-    "LowerOI", "UpperOI", "Liquidity", "Tightness", "Fitness", "OptionStrat", "Label", "Held"
+    "LowerOI", "UpperOI", "Liquidity", "Tightness", "Fitness", "OptionStrat", "Label", "Held", "IV"
   ];
   const headerNotes = [
     "Stock ticker symbol",
@@ -627,7 +628,8 @@ function outputSpreadResults_(sheet, spreads, config) {
     "Fitness = ExpROI × Liquidity^0.1 × Tightness^0.1",
     "Link to OptionStrat visualization",
     "Label for chart identification",
-    "HELD = you already have a conflicting short position"
+    "HELD = you already have a conflicting short position",
+    "Implied volatility of the lower (long) leg"
   ];
   const hdrRange = sheet.getRange(RESULTS_START_ROW, 1, 1, headers.length);
   hdrRange.setValues([headers]).setFontWeight("bold");
@@ -663,7 +665,8 @@ function outputSpreadResults_(sheet, spreads, config) {
       s.fitness,     // Q - pre-computed instead of formula
       "",            // R - OptionStrat (formula, set separately)
       label,         // S
-      s.held ? "HELD" : ""  // T
+      s.held ? "HELD" : "",  // T
+      s.lowerIV              // U
     ]);
   }
   sheet.getRange(dataStartRow, 1, allRows.length, headers.length).setValues(allRows);
@@ -683,7 +686,7 @@ function outputSpreadResults_(sheet, spreads, config) {
     "$#,##0.00", "0.00",                             // I-J
     "0.00", "0.00", "#,##0", "#,##0",               // K-N
     "0.00", "0.00", "0.00",                          // O-Q
-    "@", "@", "@"                                      // R-T
+    "@", "@", "@", "0.00%"                              // R-U
   ]);
   sheet.getRange(dataStartRow, 1, spreads.length, headers.length).setNumberFormats(formats);
 
@@ -699,7 +702,7 @@ function outputSpreadResults_(sheet, spreads, config) {
   dataRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
 
   // Set column widths in batch instead of autoResizeColumn loop
-  const colWidths = [60, 90, 60, 60, 50, 70, 70, 50, 70, 55, 55, 55, 55, 55, 55, 55, 55, 100, 150, 50];
+  const colWidths = [60, 90, 60, 60, 50, 70, 70, 50, 70, 55, 55, 55, 55, 55, 55, 55, 55, 100, 150, 50, 55];
   colWidths.forEach((w, i) => sheet.setColumnWidth(i + 1, w));
   // Clip OptionStrat column
   sheet.getRange(RESULTS_START_ROW, 18, spreads.length + 1, 1)
@@ -737,7 +740,7 @@ function showSpreadFinderGraphs() {
    const startRow = 3; // Row 1=timestamp, Row 2=headers, Row 3+=data
    if (lastRow < startRow) return [];
 
-   const data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 20).getValues();
+   const data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 21).getValues();
    const today = new Date();
    today.setHours(0,0,0,0);
 
@@ -775,7 +778,8 @@ function showSpreadFinderGraphs() {
        liquidity: row[14],
        tightness: row[15],
        dte: dte > 0 ? dte : 0,
-       held: (row[19] || "").toString().trim() === "HELD"
+       held: (row[19] || "").toString().trim() === "HELD",
+       iv: parseFloat(row[20]) || 0
      };
    }).sort((a, b) => a.fitness - b.fitness);
  }
