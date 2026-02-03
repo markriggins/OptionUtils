@@ -509,6 +509,52 @@ function generateSpreads_(chain, config) {
  */
 function loadHeldPositions_(ss) {
   const held = new Set();
+
+  // Try Legs table first
+  const legsRange = getNamedRangeWithTableFallback_(ss, "Legs");
+  if (legsRange) {
+    const rows = legsRange.getValues();
+    Logger.log("found Legs table with rows:" + rows.length);
+    if (rows.length >= 2) {
+      const headers = rows[0];
+      const idxSym = findColumn_(headers, ["symbol", "ticker"]);
+      const idxStrike = findColumn_(headers, ["strike", "strikeprice"]);
+      const idxQty = findColumn_(headers, ["qty", "quantity", "contracts", "contract", "count", "shares"]);
+      const idxExp = findColumn_(headers, ["expiration", "exp", "expiry", "expirationdate", "expdate"]);
+
+      if (idxStrike >= 0 && idxQty >= 0) {
+        let lastSym = "";
+        let lastExp = "";
+        for (let r = 1; r < rows.length; r++) {
+          const rawSym = idxSym >= 0 ? String(rows[r][idxSym] ?? "").trim().toUpperCase() : "";
+          if (rawSym) lastSym = rawSym;
+
+          if (idxExp >= 0) {
+            let rawExp = rows[r][idxExp];
+            if (rawExp instanceof Date) {
+              lastExp = Utilities.formatDate(rawExp, Session.getScriptTimeZone(), "yyyy-MM-dd");
+            } else if (rawExp) {
+              const parsed = new Date(rawExp);
+              if (!isNaN(parsed.getTime())) {
+                lastExp = Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
+              }
+            }
+          }
+
+          const qty = parseNumber_(rows[r][idxQty]);
+          const strike = parseNumber_(rows[r][idxStrike]);
+
+          // Short legs have negative qty
+          if (lastSym && Number.isFinite(strike) && strike > 0 && Number.isFinite(qty) && qty < 0) {
+            held.add(`${lastSym}|${strike}|${lastExp}`);
+          }
+        }
+        return held;
+      }
+    }
+  }
+
+  // Fall back to old Positions sheet logic
   const sheet = ss.getSheetByName("Positions");
   if (!sheet) {
     Logger.log("Positions sheet not found, skipping held position check");
@@ -697,14 +743,16 @@ function outputSpreadResults_(sheet, spreads, config) {
   sheet.getRange(dataStartRow, 1, allRows.length, headers.length).setValues(allRows);
 
   // OptionStrat formulas reference other columns by letter
-  const lowerLetter = colLetter("Lower"), upperLetter = colLetter("Upper");
-  const symLetter = colLetter("Symbol"), expLetter = colLetter("Expiration");
-  const optionStratFormulas = spreads.map((s, i) => {
-    const row = dataStartRow + i;
-    const osUrl = `buildOptionStratUrl(${lowerLetter}${row}&"/"&${upperLetter}${row},${symLetter}${row},"bull-call-spread",${expLetter}${row})`;
-    return [`=HYPERLINK(${osUrl},"OptionStrat")`];
-  });
-  sheet.getRange(dataStartRow, col("OptionStrat"), spreads.length, 1).setFormulas(optionStratFormulas);
+  if (false) {
+      const lowerLetter = colLetter("Lower"), upperLetter = colLetter("Upper");
+      const symLetter = colLetter("Symbol"), expLetter = colLetter("Expiration");
+      const optionStratFormulas = spreads.map((s, i) => {
+        const row = dataStartRow + i;
+        const osUrl = `buildOptionStratUrl(${lowerLetter}${row}&"/"&${upperLetter}${row},${symLetter}${row},"bull-call-spread",${expLetter}${row})`;
+        return [`=HYPERLINK(${osUrl},"OptionStrat")`];
+      });
+      sheet.getRange(dataStartRow, col("OptionStrat"), spreads.length, 1).setFormulas(optionStratFormulas);
+  }
 
   // Number formats from the map
   const formats = spreads.map(() => headers.map(h => formatMap[h] || "@"));
@@ -750,6 +798,7 @@ function showSpreadFinderGraphs() {
  * Orders by Fitness so the best points are drawn last (on top).
  */
  function getSpreadFinderGraphData() {
+   Logger.log("getSpreadFinderGraphData");
    const ss = SpreadsheetApp.getActiveSpreadsheet();
    const sheet = ss.getSheetByName(SPREADS_SHEET);
    const lastRow = sheet.getLastRow();
@@ -772,7 +821,7 @@ function showSpreadFinderGraphs() {
      const lowStrike = row[c.Lower];
      const highStrike = row[c.Upper];
 
-     const osUrl = buildOptionStratUrl(`${lowStrike}/${highStrike}`, sym, "bull-call-spread", expDate);
+     const osUrl = ""; //buildOptionStratUrl(`${lowStrike}/${highStrike}`, sym, "bull-call-spread", expDate);
 
      const diffTime = expDate.getTime() - today.getTime();
      const dte = Math.ceil(diffTime / (1000 * 60 * 60 * 24));

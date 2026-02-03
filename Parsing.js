@@ -431,6 +431,363 @@ function parseSpreadsFromTableForSymbol_(rows, symbol, flavor) {
   return out;
 }
 
+// ---- Unified Multi-Leg Position Parsing ----
+
+/**
+ * Detects strategy type from leg data. For use in Legs table Strategy column.
+ *
+ * @param {Range} strikeRange - Strike column for the group (e.g., C3:C4)
+ * @param {Range} typeRange - Type column for the group (e.g., D3:D4)
+ * @param {Range} qtyRange - Qty column for the group (e.g., F3:F4)
+ * @param {Array} [_labels] - Optional; ignored, for spreadsheet readability
+ * @return {string} Strategy: "bull-call-spread", "bull-put-spread", "iron-condor", "stock", or "?"
+ * @customfunction
+ */
+function detectStrategy(strikeRange, typeRange, qtyRange, _labels) {
+  // Flatten inputs (ranges come as 2D arrays)
+  const strikes = Array.isArray(strikeRange) ? strikeRange.flat() : [strikeRange];
+  const types = Array.isArray(typeRange) ? typeRange.flat() : [typeRange];
+  const qtys = Array.isArray(qtyRange) ? qtyRange.flat() : [qtyRange];
+
+  // Build legs array
+  const legs = [];
+  const n = Math.max(strikes.length, types.length, qtys.length);
+  for (let i = 0; i < n; i++) {
+    const strike = parseNumber_(strikes[i] ?? "");
+    const type = parseOptionType_(types[i] ?? "");
+    const qty = parseNumber_(qtys[i] ?? "");
+    if (!Number.isFinite(qty) || qty === 0) continue;
+    legs.push({ strike, type: type || (Number.isFinite(strike) ? null : "Stock"), qty });
+  }
+
+  const posType = detectPositionType_(legs);
+  return posType || "?";
+}
+
+/**
+ * Detects position type from an array of leg objects.
+ * Each leg: { strike, type, qty }
+ * Returns: "stock", "bull-call-spread", "bull-put-spread", "iron-condor", or null.
+ */
+function detectPositionType_(legs) {
+  if (!legs || legs.length === 0) return null;
+
+  if (legs.length === 1) {
+    const leg = legs[0];
+    if (!leg.type || leg.type === "Stock" || !Number.isFinite(leg.strike)) return "stock";
+    return null;
+  }
+
+  if (legs.length === 2) {
+    const [a, b] = legs;
+    // Both must have types and opposite qty signs
+    if (!a.type || !b.type) return null;
+    if (a.type === "Stock" || b.type === "Stock") return null;
+    const sameType = a.type === b.type;
+    const oppositeSigns = (a.qty > 0 && b.qty < 0) || (a.qty < 0 && b.qty > 0);
+    if (!sameType || !oppositeSigns) return null;
+
+    if (a.type === "Call") return "bull-call-spread";
+    if (a.type === "Put") return "bull-put-spread";
+    return null;
+  }
+
+  if (legs.length === 4) {
+    const calls = legs.filter(l => l.type === "Call");
+    const puts = legs.filter(l => l.type === "Put");
+    if (calls.length === 2 && puts.length === 2) return "iron-condor";
+    return null;
+  }
+
+  return null;
+}
+
+/**
+ * Parses positions from a unified Legs table for a specific symbol.
+ * Handles merged-cell carry-forward for Symbol, Group, Strategy columns.
+ *
+ * @param {Array[]} rows - 2D array with header row first
+ * @param {string} symbol - Uppercase ticker to filter by
+ * @returns {{ shares: Array<{qty, basis}>, bullCallSpreads: Array, bullPutSpreads: Array, bearCallSpreads: Array }}
+ */
+function parsePositionsForSymbol_(rows, symbol) {
+  const result = { shares: [], bullCallSpreads: [], bullPutSpreads: [], bearCallSpreads: [] };
+
+  if (!rows || rows.length < 2) return result;
+
+  const headers = rows[0];
+  const idxSym = findColumn_(headers, ["symbol", "ticker"]);
+  const idxGroup = findColumn_(headers, ["group", "grp"]);
+  const idxStrategy = findColumn_(headers, ["strategy", "strat", "type"]);
+  const idxStrike = findColumn_(headers, ["strike", "strikeprice"]);
+  const idxType = findColumn_(headers, ["type", "optiontype", "callput", "cp", "putcall", "legtype"]);
+  const idxExp = findColumn_(headers, ["expiration", "exp", "expiry", "expirationdate", "expdate"]);
+  const idxQty = findColumn_(headers, ["qty", "quantity", "contracts", "contract", "count", "shares"]);
+  const idxPrice = findColumn_(headers, ["price", "cost", "entry", "premium", "basis", "costbasis", "avgprice", "pricepaid"]);
+
+  // If Strategy and Type resolve to same column, disambiguate: Strategy needs its own column
+  // Strategy aliases shouldn't include bare "type" if Type column also uses "type"
+  // Re-find Strategy without "type" alias if they collided
+  let idxStrat = idxStrategy;
+  if (idxStrat >= 0 && idxStrat === idxType) {
+    idxStrat = findColumn_(headers, ["strategy", "strat"]);
+  }
+
+  if (idxQty < 0 || idxPrice < 0) return result;
+
+  // Group rows by (symbol, group) with carry-forward
+  let lastSym = "";
+  let lastGroup = "";
+
+  // Collect groups: Map<groupKey, { legs: [...], firstRow: number }>
+  const groups = new Map();
+
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+
+    // Carry-forward symbol
+    const rawSym = String(row[idxSym] ?? "").trim().toUpperCase();
+    if (rawSym) lastSym = rawSym;
+    if (lastSym !== symbol) continue;
+
+    // Carry-forward group
+    const rawGroup = String(row[idxGroup >= 0 ? idxGroup : -1] ?? "").trim();
+    if (rawGroup) lastGroup = rawGroup;
+
+    const qty = parseNumber_(row[idxQty]);
+    const price = parseNumber_(row[idxPrice]);
+    if (!Number.isFinite(qty) || qty === 0) continue;
+    if (!Number.isFinite(price)) continue;
+
+    const strike = idxStrike >= 0 ? parseNumber_(row[idxStrike]) : NaN;
+    const optType = idxType >= 0 ? parseOptionType_(row[idxType]) : null;
+
+    // For stock legs, parseOptionType_ may return null but the Strategy column or
+    // lack of strike indicates stock
+    let legType = optType;
+    if (!legType && !Number.isFinite(strike)) {
+      legType = "Stock";
+    }
+    // Check if strategy column says Stock
+    if (!legType && idxStrat >= 0) {
+      const strat = parseSpreadStrategy_(row[idxStrat]);
+      if (strat === "stock") legType = "Stock";
+    }
+
+    const groupKey = `${lastSym}|${lastGroup || r}`;
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, { legs: [], firstRow: r });
+    }
+
+    const leg = { qty, price, strike, type: legType };
+    if (idxExp >= 0 && row[idxExp]) leg.expiration = row[idxExp];
+    groups.get(groupKey).legs.push(leg);
+  }
+
+  // Process each group
+  for (const [, group] of groups) {
+    const legs = group.legs;
+    const posType = detectPositionType_(legs);
+
+    if (posType === "stock") {
+      const leg = legs[0];
+      result.shares.push({ qty: leg.qty, basis: leg.price });
+    } else if (posType === "bull-call-spread") {
+      const longLeg = legs.find(l => l.qty > 0);
+      const shortLeg = legs.find(l => l.qty < 0);
+      if (!longLeg || !shortLeg) continue;
+
+      const debit = longLeg.price - shortLeg.price;
+      let label = `${longLeg.strike}/${shortLeg.strike}`;
+      if (longLeg.expiration) {
+        const expLabel = formatExpirationLabel_(longLeg.expiration);
+        if (expLabel) label = `${expLabel} ${label}`;
+      }
+
+      result.bullCallSpreads.push({
+        qty: Math.abs(longLeg.qty),
+        kLong: longLeg.strike,
+        kShort: shortLeg.strike,
+        debit,
+        flavor: "CALL",
+        label,
+      });
+    } else if (posType === "bull-put-spread") {
+      const longLeg = legs.find(l => l.qty > 0);
+      const shortLeg = legs.find(l => l.qty < 0);
+      if (!longLeg || !shortLeg) continue;
+
+      const debit = longLeg.price - shortLeg.price;
+      let label = `${longLeg.strike}/${shortLeg.strike}`;
+      if (longLeg.expiration) {
+        const expLabel = formatExpirationLabel_(longLeg.expiration);
+        if (expLabel) label = `${expLabel} ${label}`;
+      }
+
+      result.bullPutSpreads.push({
+        qty: Math.abs(longLeg.qty),
+        kLong: longLeg.strike,
+        kShort: shortLeg.strike,
+        debit,
+        flavor: "PUT",
+        label,
+      });
+    } else if (posType === "iron-condor") {
+      const puts = legs.filter(l => l.type === "Put").sort((a, b) => a.strike - b.strike);
+      const calls = legs.filter(l => l.type === "Call").sort((a, b) => a.strike - b.strike);
+
+      // Bull put spread: long lower put, short higher put
+      const longPut = puts.find(l => l.qty > 0) || puts[0];
+      const shortPut = puts.find(l => l.qty < 0) || puts[1];
+      // Bear call spread: short lower call, long higher call
+      const shortCall = calls.find(l => l.qty < 0) || calls[0];
+      const longCall = calls.find(l => l.qty > 0) || calls[1];
+
+      if (longPut && shortPut) {
+        const putDebit = longPut.price - shortPut.price;
+        let label = `IC ${longPut.strike}/${shortPut.strike}/${shortCall.strike}/${longCall.strike}`;
+        if (longPut.expiration) {
+          const expLabel = formatExpirationLabel_(longPut.expiration);
+          if (expLabel) label = `${expLabel} ${label}`;
+        }
+        result.bullPutSpreads.push({
+          qty: Math.abs(longPut.qty),
+          kLong: longPut.strike,
+          kShort: shortPut.strike,
+          debit: putDebit,
+          flavor: "PUT",
+          label: label + " (put)",
+        });
+      }
+
+      if (shortCall && longCall) {
+        const callDebit = longCall.price - shortCall.price;
+        let label = `IC ${longPut.strike}/${shortPut.strike}/${shortCall.strike}/${longCall.strike}`;
+        if (shortCall.expiration) {
+          const expLabel = formatExpirationLabel_(shortCall.expiration);
+          if (expLabel) label = `${expLabel} ${label}`;
+        }
+        result.bearCallSpreads.push({
+          qty: Math.abs(shortCall.qty),
+          kLong: shortCall.strike,
+          kShort: longCall.strike,
+          debit: callDebit,
+          flavor: "BEAR_CALL",
+          label: label + " (call)",
+        });
+      }
+    }
+    // null/unknown types are silently skipped
+  }
+
+  return result;
+}
+
+/**
+ * Returns unique symbols from a Legs table, with carry-forward for merged cells.
+ * @param {Array[]} rows - 2D array with header row first
+ * @returns {string[]} Sorted unique symbols
+ */
+function getSymbolsFromLegsTable_(rows) {
+  if (!rows || rows.length < 2) return [];
+
+  const headers = rows[0];
+  const idxSym = findColumn_(headers, ["symbol", "ticker"]);
+  if (idxSym < 0) return [];
+
+  const symbols = new Set();
+  let lastSym = "";
+
+  for (let r = 1; r < rows.length; r++) {
+    const rawSym = String(rows[r][idxSym] ?? "").trim().toUpperCase();
+    if (rawSym) lastSym = rawSym;
+    if (lastSym) symbols.add(lastSym);
+  }
+
+  return Array.from(symbols).sort();
+}
+
+/**
+ * Returns the strategy abbreviation for writing back to the sheet.
+ */
+function strategyAbbrev_(type) {
+  switch (type) {
+    case "bull-call-spread": return "BCS";
+    case "bull-put-spread": return "BPS";
+    case "iron-condor": return "IC";
+    case "stock": return "Stock";
+    default: return "?";
+  }
+}
+
+/**
+ * Auto-fills Strategy column on the Legs sheet for each group.
+ * @param {Sheet} sheet - The Legs sheet
+ * @param {Range} range - The named range for the Legs table
+ * @param {Array[]} rows - 2D values from the range
+ */
+function updateLegsSheetStrategy_(sheet, range, rows) {
+  if (!rows || rows.length < 2) return;
+
+  const headers = rows[0];
+  const idxSym = findColumn_(headers, ["symbol", "ticker"]);
+  const idxGroup = findColumn_(headers, ["group", "grp"]);
+  const idxStrat = findColumn_(headers, ["strategy", "strat"]);
+  const idxStrike = findColumn_(headers, ["strike", "strikeprice"]);
+  const idxType = findColumn_(headers, ["type", "optiontype", "callput", "cp", "putcall", "legtype"]);
+  const idxQty = findColumn_(headers, ["qty", "quantity", "contracts", "contract", "count", "shares"]);
+  const idxPrice = findColumn_(headers, ["price", "cost", "entry", "premium", "basis", "costbasis", "avgprice", "pricepaid"]);
+
+  // Disambiguate strategy vs type if they resolve to same column
+  let stratCol = idxStrat;
+  if (stratCol >= 0 && stratCol === idxType) {
+    stratCol = findColumn_(headers, ["strategy", "strat"]);
+  }
+  if (stratCol < 0) return; // no strategy column to write
+
+  // Group rows with carry-forward
+  let lastSym = "";
+  let lastGroup = "";
+  const groups = []; // { legs: [{strike, type, qty}], firstRow: number }
+  let currentGroup = null;
+
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    const rawSym = String(row[idxSym] ?? "").trim().toUpperCase();
+    if (rawSym) lastSym = rawSym;
+
+    const rawGroup = String(row[idxGroup >= 0 ? idxGroup : -1] ?? "").trim();
+    if (rawGroup) lastGroup = rawGroup;
+
+    const qty = parseNumber_(row[idxQty]);
+    if (!Number.isFinite(qty) || qty === 0) continue;
+
+    const strike = idxStrike >= 0 ? parseNumber_(row[idxStrike]) : NaN;
+    const optType = idxType >= 0 ? parseOptionType_(row[idxType]) : null;
+    let legType = optType;
+    if (!legType && !Number.isFinite(strike)) legType = "Stock";
+
+    const groupKey = `${lastSym}|${lastGroup || r}`;
+    if (!currentGroup || currentGroup.key !== groupKey) {
+      currentGroup = { key: groupKey, legs: [], firstRow: r };
+      groups.push(currentGroup);
+    }
+    currentGroup.legs.push({ strike, type: legType, qty });
+  }
+
+  // Write strategy for each group
+  const rangeStartRow = range.getRow();
+  const rangeStartCol = range.getColumn();
+
+  for (const group of groups) {
+    const posType = detectPositionType_(group.legs);
+    const abbrev = strategyAbbrev_(posType);
+    const sheetRow = rangeStartRow + group.firstRow; // firstRow is 1-based from rows array
+    const sheetCol = rangeStartCol + stratCol;
+    sheet.getRange(sheetRow, sheetCol).setValue(abbrev);
+  }
+}
+
 // ---- Tests ----
 
 function test_parseSpreadStrategy() {
@@ -563,4 +920,101 @@ function test_loadCsvData_columnOrders() {
   assertArrayDeepEqual(rows4, [], "Test 4: Missing Bid -> empty");
 
   Logger.log("All parseCsvData column order tests passed");
+}
+
+function test_detectPositionType_stock() {
+  assertEqual(detectPositionType_([{ strike: NaN, type: "Stock", qty: 100 }]), "stock", "single stock leg");
+  assertEqual(detectPositionType_([{ strike: NaN, type: null, qty: 100 }]), "stock", "no type no strike = stock");
+  assertEqual(detectPositionType_([]), null, "empty legs");
+  assertEqual(detectPositionType_(null), null, "null");
+  Logger.log("All detectPositionType stock tests passed");
+}
+
+function test_detectPositionType_spreads() {
+  assertEqual(
+    detectPositionType_([
+      { strike: 300, type: "Call", qty: 7 },
+      { strike: 440, type: "Call", qty: -7 },
+    ]),
+    "bull-call-spread",
+    "BCS: 2 calls opposite signs"
+  );
+  assertEqual(
+    detectPositionType_([
+      { strike: 200, type: "Put", qty: 5 },
+      { strike: 250, type: "Put", qty: -5 },
+    ]),
+    "bull-put-spread",
+    "BPS: 2 puts opposite signs"
+  );
+  assertEqual(
+    detectPositionType_([
+      { strike: 200, type: "Call", qty: 5 },
+      { strike: 250, type: "Call", qty: 5 },
+    ]),
+    null,
+    "same sign = null"
+  );
+  Logger.log("All detectPositionType spread tests passed");
+}
+
+function test_detectPositionType_ironCondor() {
+  assertEqual(
+    detectPositionType_([
+      { strike: 200, type: "Put", qty: 3 },
+      { strike: 250, type: "Put", qty: -3 },
+      { strike: 400, type: "Call", qty: -3 },
+      { strike: 450, type: "Call", qty: 3 },
+    ]),
+    "iron-condor",
+    "IC: 2 puts + 2 calls"
+  );
+  Logger.log("All detectPositionType iron condor tests passed");
+}
+
+function test_parsePositionsForSymbol_stock() {
+  const rows = [
+    ["Symbol", "Group", "Strategy", "Strike", "Type", "Expiration", "Qty", "Price"],
+    ["TSLA",   "4",     "",         "",       "Stock", "",          "600", "333"],
+  ];
+  const result = parsePositionsForSymbol_(rows, "TSLA");
+  assertEqual(result.shares.length, 1, "one stock position");
+  assertEqual(result.shares[0].qty, 600, "stock qty");
+  assertEqual(result.shares[0].basis, 333, "stock basis");
+  Logger.log("All parsePositionsForSymbol stock tests passed");
+}
+
+function test_parsePositionsForSymbol_bullCallSpread() {
+  const rows = [
+    ["Symbol", "Group", "Strategy", "Strike", "Type", "Expiration",  "Qty", "Price"],
+    ["TSLA",   "1",     "",         "300",    "Call", "12/15/2028",  "7",   "223.50"],
+    ["",       "",      "",         "440",    "Call", "12/15/2028",  "-7",  "165.50"],
+  ];
+  const result = parsePositionsForSymbol_(rows, "TSLA");
+  assertEqual(result.bullCallSpreads.length, 1, "one BCS");
+  const bcs = result.bullCallSpreads[0];
+  assertEqual(bcs.qty, 7, "BCS qty");
+  assertEqual(bcs.kLong, 300, "BCS long strike");
+  assertEqual(bcs.kShort, 440, "BCS short strike");
+  assertEqual(bcs.debit, 58, "BCS debit = 223.50 - 165.50");
+  assertEqual(bcs.flavor, "CALL", "BCS flavor");
+  Logger.log("All parsePositionsForSymbol BCS tests passed");
+}
+
+function test_parsePositionsForSymbol_ironCondor() {
+  const rows = [
+    ["Symbol", "Group", "Strategy", "Strike", "Type", "Expiration",  "Qty", "Price"],
+    ["TSLA",   "5",     "",         "200",    "Put",  "12/15/2028",  "3",   "10.00"],
+    ["",       "",      "",         "250",    "Put",  "12/15/2028",  "-3",  "15.00"],
+    ["",       "",      "",         "400",    "Call", "12/15/2028",  "-3",  "20.00"],
+    ["",       "",      "",         "450",    "Call", "12/15/2028",  "3",   "12.00"],
+  ];
+  const result = parsePositionsForSymbol_(rows, "TSLA");
+  assertEqual(result.bullPutSpreads.length, 1, "IC produces one BPS");
+  assertEqual(result.bearCallSpreads.length, 1, "IC produces one bear call");
+  assertEqual(result.bullPutSpreads[0].kLong, 200, "BPS long strike");
+  assertEqual(result.bullPutSpreads[0].kShort, 250, "BPS short strike");
+  assertEqual(result.bearCallSpreads[0].kLong, 400, "bear call long (short) strike");
+  assertEqual(result.bearCallSpreads[0].kShort, 450, "bear call short (long) strike");
+  Logger.log("All parsePositionsForSymbol iron condor tests passed");
 }

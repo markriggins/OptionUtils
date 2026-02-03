@@ -52,3 +52,26 @@ function roundTo_(n, digits) {
   const f = Math.pow(10, digits);
   return Math.round(Number(n) * f) / f;
 }
+
+/**
+ * Returns the first non-blank value from a range, scanning from bottom to top.
+ * Useful for finding values in merged cells when called from a lower row.
+ *
+ * @param {Array} range - A vertical range (e.g., A$1:A3)
+ * @return {*} First non-blank value found (bottom-up), or empty string if all blank
+ * @customfunction
+ */
+function coalesce(range) {
+  if (!Array.isArray(range)) {
+    const v = (range ?? "").toString().trim();
+    return v || "";
+  }
+  // Flatten 2D array (vertical range comes as [[a],[b],[c]])
+  const flat = range.flat ? range.flat() : [].concat(...range);
+  // Scan from end (bottom of range) toward start (top)
+  for (let i = flat.length - 1; i >= 0; i--) {
+    const v = flat[i];
+    if (v != null && v !== "") return v;
+  }
+  return "";
+}

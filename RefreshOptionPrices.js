@@ -299,6 +299,7 @@ function getFolder_(parent, name) {
  * Forces recalculation of a named table by adding then deleting a column on the left.
  */
 function forceRecalculateTable_(ss, tableName) {
+  return;
   const range = ss.getRangeByName(tableName);
   if (!range) {
     Logger.log(tableName + " not found");

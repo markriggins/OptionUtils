@@ -14,7 +14,7 @@
 
 
 function testbuildOptionStratUrl () {
-  
+
   buildOptionStratUrl("350/450","TSLA", "bull-call-spread", new Date(2028, 5, 16));
   buildOptionStratUrl("350/450","TSLA", "bull-call-spread", 'Jun \'28');
   buildOptionStratUrl("350/450","TSLA", "bull-put-spread", 'Jun 17 2028');
@@ -22,6 +22,91 @@ function testbuildOptionStratUrl () {
   buildOptionStratUrl("350/450","TSLA", "bull-call-spread", 'Jan 16 2026');
   //buildOptionStratUrl(undefined,"TSLA", "bull-call-spread", 'Jan 16 2026');
   console.log("✅ testbuildOptionStratUrl PASSED");
+}
+
+/**
+ * Builds an OptionStrat URL from multi-leg position data.
+ *
+ * @param {Range|string} symbolRange - Symbol or range to search upward for first non-blank
+ * @param {Range} strikeRange - Strike column for the group
+ * @param {Range} typeRange - Type column (Call/Put) for the group
+ * @param {Range} expirationRange - Expiration column for the group
+ * @param {Range} qtyRange - Qty column for the group (positive=long, negative=short)
+ * @param {Array} [_labels] - Optional; ignored, for spreadsheet readability
+ * @return {string} OptionStrat URL
+ * @customfunction
+ */
+function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange, _labels) {
+  // Find symbol (with upward lookup if range)
+  let symbol = symbolRange;
+  if (Array.isArray(symbolRange)) {
+    const flat = symbolRange.flat ? symbolRange.flat() : [].concat(...symbolRange);
+    symbol = "";
+    for (let i = flat.length - 1; i >= 0; i--) {
+      const v = (flat[i] ?? "").toString().trim();
+      if (v) { symbol = v; break; }
+    }
+  }
+  symbol = (symbol || "").toString().trim().toUpperCase();
+  if (!symbol) return "#Symbol required";
+
+  // Flatten inputs
+  const strikes = Array.isArray(strikeRange) ? strikeRange.flat() : [strikeRange];
+  const types = Array.isArray(typeRange) ? typeRange.flat() : [typeRange];
+  const expirations = Array.isArray(expirationRange) ? expirationRange.flat() : [expirationRange];
+  const qtys = Array.isArray(qtyRange) ? qtyRange.flat() : [qtyRange];
+
+  // Build legs array
+  const legs = [];
+  const n = Math.max(strikes.length, types.length, expirations.length, qtys.length);
+  for (let i = 0; i < n; i++) {
+    const strike = parseNumber_(strikes[i] ?? "");
+    const type = parseOptionType_(types[i] ?? "");
+    const qty = parseNumber_(qtys[i] ?? "");
+    const exp = expirations[i];
+
+    if (!Number.isFinite(qty) || qty === 0) continue;
+    if (!Number.isFinite(strike)) continue;
+    if (!type || type === "Stock") continue;
+
+    legs.push({ strike, type, qty, expiration: exp });
+  }
+
+  if (legs.length === 0) return "#No valid option legs";
+
+  // Detect strategy
+  const posType = detectPositionType_(legs);
+  const strategyMap = {
+    "bull-call-spread": "bull-call-spread",
+    "bull-put-spread": "bull-put-spread",
+    "iron-condor": "iron-condor",
+    "bear-call-spread": "bear-call-spread",
+  };
+  const strategy = strategyMap[posType] || "custom";
+
+  // Format date code (YYMMDD)
+  function formatDateCode(exp) {
+    let d = exp;
+    if (!(d instanceof Date)) {
+      d = new Date(exp);
+    }
+    if (isNaN(d.getTime())) return "000000";
+    return (
+      String(d.getFullYear() % 100).padStart(2, "0") +
+      String(d.getMonth() + 1).padStart(2, "0") +
+      String(d.getDate()).padStart(2, "0")
+    );
+  }
+
+  // Build leg strings: [sign].SYMBOL[YYMMDD][C/P][STRIKE]
+  const legStrings = legs.map(leg => {
+    const sign = leg.qty < 0 ? "-" : "";
+    const dateCode = formatDateCode(leg.expiration);
+    const typeChar = leg.type === "Call" ? "C" : "P";
+    return `${sign}.${symbol}${dateCode}${typeChar}${leg.strike}`;
+  });
+
+  return `https://optionstrat.com/build/${strategy}/${symbol}/${legStrings.join(",")}`;
 }
 
 /**

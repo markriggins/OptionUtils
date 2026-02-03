@@ -385,6 +385,93 @@ function recommendIronCondorCloseDebit(
 }
 
 /**
+ * Recommends price to close a single option leg.
+ *
+ * @param {string|Range} symbol - Ticker (e.g. "TSLA"), or a range like $A$1:$A3 to find first non-blank looking upward
+ * @param {Date|string} expiration - Expiration date
+ * @param {number} strike - Strike price
+ * @param {string} type - "Call" or "Put"
+ * @param {number} qty - Position quantity (positive=long, negative=short)
+ * @param {number} avgMinutesToExecute - Patience: 0=aggressive, 60=patient
+ * @param {Array} [_labels] - Optional; ignored, for spreadsheet readability
+ * @return {number} Credit (positive) if closing long, Debit (negative) if closing short, or error string
+ * @customfunction
+ */
+function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecute, _labels) {
+  /*
+   * Examples:
+   *   Spreadsheet: =recommendClose("TSLA", "2028-06-16", 450, "Call", 7, 60)
+   *   Spreadsheet: =recommendClose($A$1:$A3, "2028-06-16", 450, "Call", -7, 60)  // range for merged/grouped symbols
+   *
+   * Closing a LONG position (qty > 0): SELL to close → returns credit (positive)
+   * Closing a SHORT position (qty < 0): BUY to close → returns debit (negative)
+   */
+  const parsed = normalizeLegInputs_(symbol, expiration, strike, type, qty, avgMinutesToExecute);
+  if (parsed.error) return parsed.error;
+
+  const { sym, exp, k, optType, position, alpha } = parsed;
+
+  const quote = getOptionQuote_(sym, exp, k, optType);
+  if (!hasBidAsk_(quote)) return "#No Data:" + sym + " " + exp + " " + k + " " + optType;
+
+  if (position > 0) {
+    // Long position: SELL to close → credit (positive)
+    const sellLimit = getRealisticSellPrice_(quote, alpha);
+    return roundTo_(sellLimit, 2);
+  } else {
+    // Short position: BUY to close → debit (negative)
+    const buyLimit = getRealisticBuyPrice_(quote, alpha);
+    return roundTo_(-buyLimit, 2);
+  }
+}
+
+/**
+ * normalizeLegInputs_ - Parses and validates inputs for single leg functions.
+ *
+ * @param {string|Array} symbol - Stock symbol, or a vertical range to search upward for first non-blank.
+ * @param {string|Date} expiration - Expiration date.
+ * @param {number} strike - Strike price.
+ * @param {string} type - "Call" or "Put".
+ * @param {number} qty - Position quantity (positive=long, negative=short).
+ * @param {number} avgMinutesToExecute - Patience in minutes.
+ * @returns {Object} {sym, exp, k, optType, position, alpha, error} (error null if valid).
+ */
+function normalizeLegInputs_(symbol, expiration, strike, type, qty, avgMinutesToExecute) {
+  // Handle range input: find last non-blank value (bottom-up, for merged cells / grouped rows)
+  let symRaw = symbol;
+  if (Array.isArray(symbol)) {
+    const flat = symbol.flat ? symbol.flat() : [].concat(...symbol);
+    symRaw = "";
+    for (let i = flat.length - 1; i >= 0; i--) {
+      const v = (flat[i] ?? "").toString().trim();
+      if (v) { symRaw = v; break; }
+    }
+  }
+  const sym = (symRaw || "").toString().trim().toUpperCase();
+  if (!sym) return { error: "#Symbol required" };
+
+  const exp = normalizeExpiration_(expiration);
+  if (!exp) return { error: "#Bad expiration" };
+
+  const k = +strike;
+  if (!Number.isFinite(k) || k <= 0) return { error: "#Bad strike" };
+
+  const optType = parseOptionType_(type);
+  if (!optType) return { error: "#Bad type (use Call or Put)" };
+
+  const position = +qty;
+  if (!Number.isFinite(position) || position === 0) return { error: "#Bad qty (non-zero required)" };
+
+  let mins = +avgMinutesToExecute;
+  if (!Number.isFinite(mins) || mins < 0) mins = 0;
+
+  const HALF_LIFE_MIN = 60;
+  const alpha = 1 - Math.exp(-mins / HALF_LIFE_MIN);
+
+  return { sym, exp, k, optType, position, alpha, error: null };
+}
+
+/**
  * normalizeIronCondorInputs_ - Parses and validates inputs for iron condor functions.
  *
  * Validates symbol, expiration, finite strikes, and order (buyPut < sellPut, sellCall < buyCall).

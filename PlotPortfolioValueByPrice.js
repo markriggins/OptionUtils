@@ -85,6 +85,15 @@ function onEdit(e) {
    ========================================================= */
 
 function getUniqueSymbolsFromPositions_(ss) {
+  // Try Legs table first
+  const legsRange = getNamedRangeWithTableFallback_(ss, "Legs");
+  if (legsRange) {
+    const legsRows = legsRange.getValues();
+    const legsSymbols = getSymbolsFromLegsTable_(legsRows);
+    if (legsSymbols.length > 0) return legsSymbols;
+  }
+
+  // Fall back to old 3-table logic
   const symbols = new Set();
 
   const tableNames = ["Stocks", "BullCallSpreads", "IronCondors"];
@@ -133,52 +142,62 @@ function plotForSymbol_(ss, symbolRaw) {
 
   const cfg = ensureAndReadConfig_(ss, sheet, symbol);
 
-  // Get ranges from known position tables
-  const stockRanges = [];
-  const callSpreadRanges = [];
-  const putSpreadRanges = [];
-
-  const stocksRange = getNamedRangeWithTableFallback_(ss, "Stocks");
-  if (stocksRange) stockRanges.push(stocksRange);
-
-  const bcsRange = getNamedRangeWithTableFallback_(ss, "BullCallSpreads");
-  if (bcsRange) callSpreadRanges.push(bcsRange);
-
-  const icRange = getNamedRangeWithTableFallback_(ss, "IronCondors");
-
-  if (stockRanges.length === 0 && callSpreadRanges.length === 0 && !icRange) {
-    writeStatus_(sheet, `No position tables found. Create named ranges:\n  - Stocks or StocksTable\n  - BullCallSpreads or BullCallSpreadsTable\n  - IronCondors or IronCondorsTable`);
-    return;
-  }
-
-  clearStatus_(sheet);
-
   // ── Parse positions ────────────────────────────────────────────────
-  const shares = [];
-  const meta = { currentPrice: null };
+  let shares = [];
+  let bullCallSpreads = [];
+  let bullPutSpreads = [];
+  let bearCallSpreads = [];
 
-  for (const rng of stockRanges) {
-    shares.push(...parseSharesFromTableForSymbol_(rng.getValues(), symbol, meta));
-  }
+  const legsRange = getNamedRangeWithTableFallback_(ss, "Legs");
+  if (legsRange) {
+    // Unified Legs table path
+    const legsRows = legsRange.getValues();
+    const parsed = parsePositionsForSymbol_(legsRows, symbol);
+    shares = parsed.shares;
+    bullCallSpreads = parsed.bullCallSpreads;
+    bullPutSpreads = parsed.bullPutSpreads;
+    bearCallSpreads = parsed.bearCallSpreads;
 
-  const bullCallSpreads = [];
-  for (const rng of callSpreadRanges) {
-    bullCallSpreads.push(...parseSpreadsFromTableForSymbol_(rng.getValues(), symbol, "CALL"));
-  }
+    // Auto-fill strategy column
+    updateLegsSheetStrategy_(legsRange.getSheet(), legsRange, legsRows);
 
-  const bullPutSpreads = [];
-  for (const rng of putSpreadRanges) {
-    bullPutSpreads.push(...parseSpreadsFromTableForSymbol_(rng.getValues(), symbol, "PUT"));
-  }
+    clearStatus_(sheet);
+  } else {
+    // Fall back to old 3-table logic
+    const stockRanges = [];
+    const callSpreadRanges = [];
+    const putSpreadRanges = [];
 
-  // Bear call spreads (from iron condors)
-  const bearCallSpreads = [];
+    const stocksRange = getNamedRangeWithTableFallback_(ss, "Stocks");
+    if (stocksRange) stockRanges.push(stocksRange);
 
-  // Parse iron condors
-  if (icRange) {
-    const icPositions = parseIronCondorsFromTableForSymbol_(icRange.getValues(), symbol);
-    bearCallSpreads.push(...icPositions.bearCallSpreads);
-    bullPutSpreads.push(...icPositions.bullPutSpreads);
+    const bcsRange = getNamedRangeWithTableFallback_(ss, "BullCallSpreads");
+    if (bcsRange) callSpreadRanges.push(bcsRange);
+
+    const icRange = getNamedRangeWithTableFallback_(ss, "IronCondors");
+
+    if (stockRanges.length === 0 && callSpreadRanges.length === 0 && !icRange) {
+      writeStatus_(sheet, `No position tables found. Create named ranges:\n  - Legs or LegsTable\n  - Stocks or StocksTable\n  - BullCallSpreads or BullCallSpreadsTable\n  - IronCondors or IronCondorsTable`);
+      return;
+    }
+
+    clearStatus_(sheet);
+
+    const meta = { currentPrice: null };
+    for (const rng of stockRanges) {
+      shares.push(...parseSharesFromTableForSymbol_(rng.getValues(), symbol, meta));
+    }
+    for (const rng of callSpreadRanges) {
+      bullCallSpreads.push(...parseSpreadsFromTableForSymbol_(rng.getValues(), symbol, "CALL"));
+    }
+    for (const rng of putSpreadRanges) {
+      bullPutSpreads.push(...parseSpreadsFromTableForSymbol_(rng.getValues(), symbol, "PUT"));
+    }
+    if (icRange) {
+      const icPositions = parseIronCondorsFromTableForSymbol_(icRange.getValues(), symbol);
+      bearCallSpreads.push(...icPositions.bearCallSpreads);
+      bullPutSpreads.push(...icPositions.bullPutSpreads);
+    }
   }
 
   const totalSpreads = bullCallSpreads.length + bullPutSpreads.length + bearCallSpreads.length;
