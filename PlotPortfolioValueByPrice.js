@@ -50,6 +50,25 @@ function PlotPortfolioValueByPrice() {
     return;
   }
 
+  const html = HtmlService.createHtmlOutputFromFile("SelectSymbols")
+    .setWidth(350)
+    .setHeight(400);
+  SpreadsheetApp.getUi().showModalDialog(html, "Plot Portfolio Value by Price");
+}
+
+/**
+ * Returns the list of available symbols. Called by the dialog on load.
+ */
+function getAvailableSymbols() {
+  const ss = SpreadsheetApp.getActive();
+  return getUniqueSymbolsFromPositions_(ss);
+}
+
+/**
+ * Plots charts for the selected symbols. Called by the dialog OK button.
+ */
+function plotSelectedSymbols(symbols) {
+  const ss = SpreadsheetApp.getActive();
   for (const symbol of symbols) {
     plotForSymbol_(ss, symbol);
   }
@@ -157,9 +176,6 @@ function plotForSymbol_(ss, symbolRaw) {
     bullCallSpreads = parsed.bullCallSpreads;
     bullPutSpreads = parsed.bullPutSpreads;
     bearCallSpreads = parsed.bearCallSpreads;
-
-    // Auto-fill strategy column
-    updateLegsSheetStrategy_(legsRange.getSheet(), legsRange, legsRows);
 
     clearStatus_(sheet);
   } else {
@@ -564,15 +580,93 @@ function extractChartTitle_(chart) {
   }
 }
 /* =========================================================
+   Smart price-range defaults based on symbol's positions
+   ========================================================= */
+
+/**
+ * Computes sensible min/max/step defaults from Legs table data.
+ * Falls back to 350/900/5 when no position data is available.
+ */
+function computeSmartDefaults_(ss, symbol) {
+  const fallback = { minPrice: 350, maxPrice: 900, step: 5 };
+
+  const legsRange = getNamedRangeWithTableFallback_(ss, "Legs");
+  if (!legsRange) return fallback;
+
+  const rows = legsRange.getValues();
+  if (!rows || rows.length < 2) return fallback;
+
+  const headers = rows[0];
+  const idxSym = findColumn_(headers, ["symbol", "ticker"]);
+  const idxStrike = findColumn_(headers, ["strike", "strikeprice"]);
+  const idxPrice = findColumn_(headers, ["price", "cost", "entry", "premium", "basis", "costbasis", "avgprice", "pricepaid"]);
+  const idxType = findColumn_(headers, ["type", "optiontype", "callput", "cp", "putcall", "legtype"]);
+
+  if (idxSym < 0 || idxPrice < 0) return fallback;
+
+  // Collect reference prices: stock basis and option strikes
+  const refPrices = [];
+  let lastSym = "";
+
+  for (let r = 1; r < rows.length; r++) {
+    const rawSym = String(rows[r][idxSym] ?? "").trim().toUpperCase();
+    if (rawSym) lastSym = rawSym;
+    if (lastSym !== symbol) continue;
+
+    const strike = idxStrike >= 0 ? parseNumber_(rows[r][idxStrike]) : NaN;
+    const price = parseNumber_(rows[r][idxPrice]);
+    const type = idxType >= 0 ? parseOptionType_(rows[r][idxType]) : null;
+    const isStock = type === null && !Number.isFinite(strike);
+
+    if (isStock && Number.isFinite(price) && price > 0) {
+      // Stock basis — primary reference
+      refPrices.push(price);
+    }
+    if (Number.isFinite(strike) && strike > 0) {
+      refPrices.push(strike);
+    }
+  }
+
+  if (refPrices.length === 0) return fallback;
+
+  const minRef = Math.min(...refPrices);
+  const maxRef = Math.max(...refPrices);
+
+  // Range: 20% below min to 200% of max, giving room to see outcomes
+  let minPrice = Math.floor(minRef * 0.2);
+  let maxPrice = Math.ceil(maxRef * 2.0);
+
+  // Pick step based on range width
+  const range = maxPrice - minPrice;
+  let step;
+  if (range < 50) step = 1;
+  else if (range < 200) step = 2;
+  else step = 5;
+
+  // Round min/max to nice multiples of step
+  minPrice = Math.floor(minPrice / step) * step;
+  maxPrice = Math.ceil(maxPrice / step) * step;
+
+  // Ensure we have at least some range
+  if (minPrice >= maxPrice) {
+    minPrice = Math.floor(minRef * 0.5 / step) * step;
+    maxPrice = Math.ceil(maxRef * 1.5 / step) * step;
+  }
+
+  return { minPrice, maxPrice, step };
+}
+
+/* =========================================================
    Config table – now in K:L, default tableStartRow = 85
    Includes descriptions/labels in-column K.
    ========================================================= */
 
 function ensureAndReadConfig_(ss, sheet, symbol) {
+  const smart = computeSmartDefaults_(ss, symbol);
   const defaults = {
-    minPrice: 350,
-    maxPrice: 900,
-    step: 5,
+    minPrice: smart.minPrice,
+    maxPrice: smart.maxPrice,
+    step: smart.step,
     tableStartRow: 85, // default is 85
     tableStartCol: 1,
     chartTitle: `${symbol} Portfolio Value by Price`,

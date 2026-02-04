@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; }
+    h3 { margin-top: 0; }
+    .symbols { margin: 12px 0; max-height: 240px; overflow-y: auto; }
+    .symbols label { display: block; padding: 4px 0; cursor: pointer; }
+    .buttons { margin-top: 12px; text-align: right; }
+    .buttons button { margin-left: 8px; padding: 6px 16px; }
+    .toggle { margin-bottom: 8px; }
+    .toggle a { cursor: pointer; color: #1a73e8; text-decoration: underline; margin-right: 12px; font-size: 13px; }
+    #loading { color: #666; }
+  </style>
+</head>
+<body>
+  <h3>Select symbols to plot</h3>
+  <div id="loading">Loading symbols...</div>
+  <div id="content" style="display:none">
+    <div class="toggle">
+      <a id="selectAll">Select All</a>
+      <a id="deselectAll">Deselect All</a>
+    </div>
+    <div class="symbols" id="symbols"></div>
+    <div class="buttons">
+      <button id="cancelBtn">Cancel</button>
+      <button id="okBtn">OK</button>
+    </div>
+  </div>
+
+  <script>
+    function populateSymbols(symbols) {
+      var container = document.getElementById('symbols');
+      symbols.forEach(function(sym) {
+        var label = document.createElement('label');
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = sym;
+        cb.checked = true;
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(' ' + sym));
+        container.appendChild(label);
+      });
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('content').style.display = '';
+    }
+
+    function getChecked() {
+      var boxes = document.querySelectorAll('#symbols input[type=checkbox]');
+      var selected = [];
+      for (var i = 0; i < boxes.length; i++) {
+        if (boxes[i].checked) selected.push(boxes[i].value);
+      }
+      return selected;
+    }
+
+    document.getElementById('selectAll').addEventListener('click', function() {
+      var boxes = document.querySelectorAll('#symbols input[type=checkbox]');
+      for (var i = 0; i < boxes.length; i++) boxes[i].checked = true;
+    });
+
+    document.getElementById('deselectAll').addEventListener('click', function() {
+      var boxes = document.querySelectorAll('#symbols input[type=checkbox]');
+      for (var i = 0; i < boxes.length; i++) boxes[i].checked = false;
+    });
+
+    document.getElementById('okBtn').addEventListener('click', function() {
+      var selected = getChecked();
+      if (selected.length === 0) {
+        alert('Select at least one symbol.');
+        return;
+      }
+      document.getElementById('okBtn').disabled = true;
+      document.getElementById('okBtn').textContent = 'Plotting...';
+      google.script.run
+        .withSuccessHandler(function() { google.script.host.close(); })
+        .withFailureHandler(function(err) {
+          alert('Error: ' + err.message);
+          document.getElementById('okBtn').disabled = false;
+          document.getElementById('okBtn').textContent = 'OK';
+        })
+        .plotSelectedSymbols(selected);
+    });
+
+    document.getElementById('cancelBtn').addEventListener('click', function() {
+      google.script.host.close();
+    });
+
+    // Load symbols on open
+    google.script.run
+      .withSuccessHandler(populateSymbols)
+      .withFailureHandler(function(err) {
+        document.getElementById('loading').textContent = 'Error: ' + err.message;
+      })
+      .getAvailableSymbols();
+  </script>
+</body>
+</html>
