@@ -747,11 +747,13 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
         }
       } else {
         // Handle 2-leg spread or single leg
-        const numLegs = (spread.lowerStrike != null ? 1 : 0) + (spread.upperStrike != null ? 1 : 0);
-        if (numLegs === 0) continue;
+        const hasLong = spread.lowerStrike != null;
+        const hasShort = spread.upperStrike != null;
+        if (!hasLong && !hasShort) continue;
+        const isFirstRow = [true]; // track whether next row gets symbol/group
 
-        // Long leg (first row)
-        if (spread.lowerStrike != null) {
+        // Long leg
+        if (hasLong) {
           const row = new Array(headers.length).fill("");
           if (idxSym >= 0) row[idxSym] = spread.ticker;
           if (idxGroup >= 0) row[idxGroup] = nextGroup;
@@ -762,16 +764,23 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
           if (idxPrice >= 0) row[idxPrice] = roundTo_(spread.lowerPrice, 2);
           if (idxClosed >= 0) row[idxClosed] = getClosingPrice(spread.ticker, spread.expiration, spread.lowerStrike, spread.optionType);
           rows.push(row);
+          isFirstRow[0] = false;
         }
 
-        // Short leg (second row)
-        if (spread.upperStrike != null) {
+        // Short leg
+        if (hasShort) {
           const row = new Array(headers.length).fill("");
-          // Symbol and Group only on first row (blank for carry-forward)
+          if (isFirstRow[0]) {
+            // Naked short — this is the first (only) row, needs symbol/group
+            if (idxSym >= 0) row[idxSym] = spread.ticker;
+            if (idxGroup >= 0) row[idxGroup] = nextGroup;
+          }
           if (idxStrike >= 0) row[idxStrike] = spread.upperStrike;
           if (idxType >= 0) row[idxType] = spread.optionType;
           if (idxExp >= 0) row[idxExp] = spread.expiration;
-          if (idxQty >= 0) row[idxQty] = -spread.qty;
+          // For 2-leg spread, qty is positive (long side) so negate for short.
+          // For naked short (no long leg), qty is already negative — use directly.
+          if (idxQty >= 0) row[idxQty] = hasLong ? -spread.qty : spread.qty;
           if (idxPrice >= 0) row[idxPrice] = roundTo_(spread.upperPrice, 2);
           if (idxClosed >= 0) row[idxClosed] = getClosingPrice(spread.ticker, spread.expiration, spread.upperStrike, spread.optionType);
           rows.push(row);
@@ -833,12 +842,66 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
         }
       }
 
+      // Check if all legs are closed
+      const allClosed = idxClosed >= 0 && rows.every(r => r[idxClosed] !== "");
+
       // Alternate group colors: odd = pale yellow, even = white
       const bgColor = (nextGroup % 2 === 1) ? "#fff2cc" : "#ffffff";
-      sheet.getRange(firstRow, startCol, rows.length, headers.length).setBackground(bgColor);
+      const groupRange = sheet.getRange(firstRow, startCol, rows.length, headers.length);
+      groupRange.setBackground(bgColor);
+
+      // Dim closed positions: light gray text
+      if (allClosed) {
+        groupRange.setFontColor("#999999");
+      }
 
       lastRow = lastLegRow;
       nextGroup++;
     }
+
+    // Write summary rows after all data
+    const summaryStart = lastRow + 2; // blank row then summary
+    const dataRange = `2:${lastRow}`; // data rows (excluding header)
+    const invCol = idxInvestment >= 0 ? colLetter(idxInvestment) : "I";
+    const gainCol = idxGain >= 0 ? colLetter(idxGain) : "L";
+
+    const summaryRows = [
+      { label: "Open Investment", formula: `=SUMPRODUCT(($${closedCol}${dataRange}="")*$${invCol}${dataRange})` },
+      { label: "Realized Gain", formula: `=SUMPRODUCT(($${closedCol}${dataRange}<>"")*$${gainCol}${dataRange})` },
+      { label: "Unrealized Gain", formula: `=SUMPRODUCT(($${closedCol}${dataRange}="")*$${gainCol}${dataRange})` },
+      { label: "Total Gain", formula: `=$${gainCol}${summaryStart + 1}+$${gainCol}${summaryStart + 2}` },
+    ];
+
+    for (let i = 0; i < summaryRows.length; i++) {
+      const row = summaryStart + i;
+      sheet.getRange(row, startCol).setValue(summaryRows[i].label).setFontWeight("bold");
+      sheet.getRange(row, startCol + idxGain).setFormula(summaryRows[i].formula);
+    }
+
+    // Put Open Investment in the Investment column
+    sheet.getRange(summaryStart, startCol + idxGain).clearContent();
+    sheet.getRange(summaryStart, startCol + idxInvestment)
+      .setFormula(`=SUMPRODUCT(($${closedCol}${dataRange}="")*$${invCol}${dataRange})`)
+      .setFontWeight("bold");
+    sheet.getRange(summaryStart, startCol).setValue("Open").setFontWeight("bold");
+
+    // Realized row: show closed investment too
+    sheet.getRange(summaryStart + 1, startCol + idxInvestment)
+      .setFormula(`=SUMPRODUCT(($${closedCol}${dataRange}<>"")*$${invCol}${dataRange})`)
+      .setFontWeight("bold");
+    sheet.getRange(summaryStart + 1, startCol).setValue("Realized").setFontWeight("bold");
+
+    // Unrealized row
+    sheet.getRange(summaryStart + 2, startCol).setValue("Unrealized").setFontWeight("bold");
+
+    // Total row
+    sheet.getRange(summaryStart + 3, startCol).setValue("Total").setFontWeight("bold");
+    sheet.getRange(summaryStart + 3, startCol + idxInvestment)
+      .setFormula(`=$${invCol}${summaryStart}+$${invCol}${summaryStart + 1}`)
+      .setFontWeight("bold");
+
+    // Format summary area
+    const summaryRange = sheet.getRange(summaryStart, startCol, 4, headers.length);
+    summaryRange.setBackground("#d9ead3"); // light green
   }
 }

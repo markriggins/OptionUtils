@@ -475,6 +475,9 @@ function detectPositionType_(legs) {
   if (legs.length === 1) {
     const leg = legs[0];
     if (!leg.type || leg.type === "Stock" || !Number.isFinite(leg.strike)) return "stock";
+    const direction = leg.qty >= 0 ? "long" : "short";
+    if (leg.type === "Call") return direction + "-call";
+    if (leg.type === "Put") return direction + "-put";
     return null;
   }
 
