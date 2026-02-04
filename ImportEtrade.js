@@ -576,6 +576,12 @@ function makeSpreadKey_(legs) {
  */
 function makeSpreadKeyFromOrder_(spread) {
   const exp = normalizeExpiration_(spread.expiration) || spread.expiration;
+
+  if (spread.type === "iron-condor" && spread.legs) {
+    const strikes = spread.legs.map(l => l.strike).sort((a, b) => a - b);
+    return `${spread.ticker}|${exp}|${strikes.join("/")}|IC`;
+  }
+
   const strikes = [spread.lowerStrike, spread.upperStrike].filter(s => s != null).sort((a, b) => a - b);
   return `${spread.ticker}|${exp}|${strikes.join("/")}|${spread.optionType}`;
 }
@@ -618,17 +624,8 @@ function mergeSpreads_(existingPositions, newSpreads) {
         processedKeys.add(key);
       }
     } else {
-      // New spread
-      newLegs.push({
-        ticker: spread.ticker,
-        expiration: spread.expiration,
-        lowerStrike: spread.lowerStrike,
-        upperStrike: spread.upperStrike,
-        optionType: spread.optionType,
-        qty: spread.qty,
-        lowerPrice: spread.lowerPrice,
-        upperPrice: spread.upperPrice,
-      });
+      // New spread — preserve full structure (including iron condor legs)
+      newLegs.push(spread);
     }
   }
 
@@ -659,6 +656,9 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
     // Add filter to the data range
     const filterRange = sheet.getRange("A:M");
     filterRange.createFilter();
+
+    // Set wrap to clip
+    sheet.getRange("A:M").setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
   }
 
   const range = getNamedRangeWithTableFallback_(ss, "Legs");
@@ -723,7 +723,8 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
       // Helper to get closing price for a leg
       const getClosingPrice = (ticker, expiration, strike, optionType) => {
         const key = `${ticker}|${expiration}|${strike}|${optionType}`;
-        return closingPrices.get(key) || "";
+        const val = closingPrices.get(key);
+        return val != null ? val : "";
       };
 
       // Handle iron condor (4 legs)
@@ -813,9 +814,10 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
         sheet.getRange(firstRow, startCol + idxGain).setFormula(formula);
       }
 
-      // Link formula
+      // Link formula: HYPERLINK with "OptionStrat" display text
       if (idxLink >= 0) {
-        const formula = `=buildOptionStratUrlFromLegs($${symCol}$1:$${symCol}${firstRow}, $${strikeCol}${firstRow}:$${strikeCol}${lastLegRow}, $${typeCol}${firstRow}:$${typeCol}${lastLegRow}, $${expCol}${firstRow}:$${expCol}${lastLegRow}, $${qtyCol}${firstRow}:$${qtyCol}${lastLegRow})`;
+        const urlFormula = `buildOptionStratUrlFromLegs($${symCol}$1:$${symCol}${firstRow}, $${strikeCol}${firstRow}:$${strikeCol}${lastLegRow}, $${typeCol}${firstRow}:$${typeCol}${lastLegRow}, $${expCol}${firstRow}:$${expCol}${lastLegRow}, $${qtyCol}${firstRow}:$${qtyCol}${lastLegRow})`;
+        const formula = `=HYPERLINK(${urlFormula}, "OptionStrat")`;
         sheet.getRange(firstRow, startCol + idxLink).setFormula(formula);
       }
 
