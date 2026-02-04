@@ -48,7 +48,7 @@ function importEtradeTransactions(fileName, folderPath) {
   const csvContent = file.getBlob().getDataAsString();
 
   // Parse CSV
-  const transactions = parseEtradeCsv_(csvContent, lastImportDate);
+  const { transactions, stockTxns } = parseEtradeCsv_(csvContent, lastImportDate);
   Logger.log(`Parsed ${transactions.length} new transactions after ${lastImportDate || 'beginning'}`);
 
   if (transactions.length === 0) {
@@ -61,7 +61,7 @@ function importEtradeTransactions(fileName, folderPath) {
   Logger.log(`Paired into ${spreads.length} spread orders`);
 
   // Build map of closing prices by leg key
-  const closingPrices = buildClosingPricesMap_(transactions);
+  const closingPrices = buildClosingPricesMap_(transactions, stockTxns);
   Logger.log(`Found closing prices for ${closingPrices.size} legs`);
 
   // Read existing Legs table
@@ -140,11 +140,14 @@ function setImportConfig_(ss, config) {
 
 /**
  * Parses E*Trade CSV content into transaction objects.
- * Filters to option opens after lastImportDate.
+ * Returns { transactions, stockTxns }.
+ * transactions: option opens, closes, exercises, assignments after lastImportDate
+ * stockTxns: stock Bought/Sold for matching exercise/assignment to market price
  */
 function parseEtradeCsv_(csvContent, lastImportDate) {
   const lines = csvContent.split(/\r?\n/);
   const transactions = [];
+  const stockTxns = [];
 
   // Find header row
   let headerIdx = -1;
@@ -154,7 +157,13 @@ function parseEtradeCsv_(csvContent, lastImportDate) {
       break;
     }
   }
-  if (headerIdx < 0) return [];
+  if (headerIdx < 0) return { transactions, stockTxns };
+
+  const optionTypes = [
+    "Bought To Open", "Sold Short",
+    "Sold To Close", "Bought To Cover",
+    "Option Assigned", "Option Exercised",
+  ];
 
   // Parse rows
   for (let i = headerIdx + 1; i < lines.length; i++) {
@@ -166,12 +175,23 @@ function parseEtradeCsv_(csvContent, lastImportDate) {
 
     const [dateStr, txnType, secType, symbol, qtyStr, amountStr, priceStr, commStr] = cols;
 
-    // Filter to option opens only
-    if (secType !== "OPTN") continue;
-    if (!["Bought To Open", "Sold Short", "Sold To Close", "Bought To Cover"].includes(txnType)) continue;
-
     // Filter by date
     if (lastImportDate && dateStr <= lastImportDate) continue;
+
+    // Stock transactions (for exercise/assignment matching)
+    if (secType === "EQ" && (txnType === "Bought" || txnType === "Sold")) {
+      stockTxns.push({
+        date: dateStr,
+        ticker: symbol.trim().toUpperCase(),
+        qty: parseFloat(qtyStr) || 0,
+        price: parseFloat(priceStr) || 0,
+      });
+      continue;
+    }
+
+    // Option transactions
+    if (secType !== "OPTN") continue;
+    if (!optionTypes.includes(txnType)) continue;
 
     // Parse option symbol: "TSLA Dec 15 '28 $400 Call"
     const parsed = parseEtradeOptionSymbol_(symbol);
@@ -188,11 +208,13 @@ function parseEtradeCsv_(csvContent, lastImportDate) {
       price: parseFloat(priceStr) || 0,
       amount: parseFloat(amountStr) || 0,
       isOpen: txnType === "Bought To Open" || txnType === "Sold Short",
-      isClose: txnType === "Sold To Close" || txnType === "Bought To Cover",
+      isClosed: txnType === "Sold To Close" || txnType === "Bought To Cover",
+      isExercised: txnType === "Option Exercised",
+      isAssigned: txnType === "Option Assigned",
     });
   }
 
-  return transactions;
+  return { transactions, stockTxns };
 }
 
 /**
@@ -378,31 +400,91 @@ function pairTransactionsIntoSpreads_(transactions) {
 /**
  * Builds a map of closing prices from close transactions.
  * Key: "TICKER|EXPIRATION|STRIKE|TYPE" -> price
+ *
+ * Handles:
+ * 1. Sold To Close / Bought To Cover → use transaction price
+ * 2. Option Exercised / Option Assigned → compute intrinsic from stock transactions
+ * 3. Expired worthless (expiration < today, no close) → set to 0
+ *
  * For multiple closes of same leg, uses weighted average.
  */
-function buildClosingPricesMap_(transactions) {
+function buildClosingPricesMap_(transactions, stockTxns) {
+  const result = new Map();
   const closes = new Map(); // key -> { totalQty, totalValue }
 
+  // 1. Normal closes (Sold To Close, Bought To Cover)
   for (const txn of transactions) {
-    if (!txn.isClose) continue;
+    if (!txn.isClosed) continue;
 
     const key = `${txn.ticker}|${txn.expiration}|${txn.strike}|${txn.optionType}`;
     const qty = Math.abs(txn.qty);
     const value = qty * txn.price;
 
-    if (!closes.has(key)) {
-      closes.set(key, { totalQty: 0, totalValue: 0 });
-    }
+    if (!closes.has(key)) closes.set(key, { totalQty: 0, totalValue: 0 });
     const entry = closes.get(key);
     entry.totalQty += qty;
     entry.totalValue += value;
   }
 
-  // Convert to average prices
-  const result = new Map();
   for (const [key, { totalQty, totalValue }] of closes) {
     if (totalQty > 0) {
       result.set(key, roundTo_(totalValue / totalQty, 2));
+    }
+  }
+
+  // 2. Exercise/Assignment → compute intrinsic from stock transactions
+  // Group stock txns by date + ticker to find market price reference
+  const stockByDateTicker = new Map(); // "date|ticker" -> [prices]
+  for (const stk of (stockTxns || [])) {
+    const key = `${stk.date}|${stk.ticker}`;
+    if (!stockByDateTicker.has(key)) stockByDateTicker.set(key, []);
+    stockByDateTicker.get(key).push(stk.price);
+  }
+
+  for (const txn of transactions) {
+    if (!txn.isExercised && !txn.isAssigned) continue;
+
+    const key = `${txn.ticker}|${txn.expiration}|${txn.strike}|${txn.optionType}`;
+    if (result.has(key)) continue; // Already have a closing price
+
+    // Find stock transactions on same date for same ticker
+    const stkKey = `${txn.date}|${txn.ticker}`;
+    const stockPrices = stockByDateTicker.get(stkKey) || [];
+
+    if (stockPrices.length > 0) {
+      // Use highest stock price as market price proxy
+      // (for paired exercise/assignment, this gives correct spread P&L)
+      const marketPrice = Math.max(...stockPrices);
+
+      let intrinsic;
+      if (txn.optionType === "Call") {
+        intrinsic = Math.max(0, marketPrice - txn.strike);
+      } else {
+        intrinsic = Math.max(0, txn.strike - marketPrice);
+      }
+      result.set(key, roundTo_(intrinsic, 2));
+    }
+    // If no stock transactions found, leave blank (user fills manually)
+  }
+
+  // 3. Expired worthless: if expiration < today and no close, set to 0
+  const today = new Date();
+  const openLegs = new Set();
+  for (const txn of transactions) {
+    if (!txn.isOpen) continue;
+    const key = `${txn.ticker}|${txn.expiration}|${txn.strike}|${txn.optionType}`;
+    openLegs.add(key);
+  }
+
+  for (const legKey of openLegs) {
+    if (result.has(legKey)) continue; // Already have closing price
+
+    // Parse expiration from key
+    const parts = legKey.split("|");
+    const expStr = parts[1]; // e.g., "12/19/2025"
+    const expDate = new Date(expStr);
+    if (!isNaN(expDate) && expDate < today) {
+      result.set(legKey, 0); // Expired worthless
     }
   }
 
@@ -718,9 +800,16 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
         sheet.getRange(firstRow, startCol + idxInvestment).setFormula(formula);
       }
 
-      // Gain formula
+      // Gain formula: use Closed if available, otherwise Rec Close
       if (idxGain >= 0 && idxRecClose >= 0) {
-        const formula = `=SUMPRODUCT($${qtyCol}${firstRow}:$${qtyCol}${lastLegRow}, $${recCloseCol}${firstRow}:$${recCloseCol}${lastLegRow} - $${priceCol}${firstRow}:$${priceCol}${lastLegRow}) * 100`;
+        let closeRef;
+        if (idxClosed >= 0) {
+          // IF(Closed<>"", Closed, RecClose) per leg
+          closeRef = `IF($${closedCol}${firstRow}:$${closedCol}${lastLegRow}<>"", $${closedCol}${firstRow}:$${closedCol}${lastLegRow}, $${recCloseCol}${firstRow}:$${recCloseCol}${lastLegRow})`;
+        } else {
+          closeRef = `$${recCloseCol}${firstRow}:$${recCloseCol}${lastLegRow}`;
+        }
+        const formula = `=SUMPRODUCT($${qtyCol}${firstRow}:$${qtyCol}${lastLegRow}, ${closeRef} - $${priceCol}${firstRow}:$${priceCol}${lastLegRow}) * 100`;
         sheet.getRange(firstRow, startCol + idxGain).setFormula(formula);
       }
 
@@ -730,12 +819,15 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
         sheet.getRange(firstRow, startCol + idxLink).setFormula(formula);
       }
 
-      // Rec Close formula for each leg
+      // Rec Close formula for each leg (skip if Closed is already populated)
       if (idxRecClose >= 0) {
         for (let i = 0; i < rows.length; i++) {
           const legRow = firstRow + i;
-          const formula = `=recommendClose($${symCol}$1:$${symCol}${legRow}, $${expCol}${legRow}, $${strikeCol}${legRow}, $${typeCol}${legRow}, $${qtyCol}${legRow}, 60)`;
-          sheet.getRange(legRow, startCol + idxRecClose).setFormula(formula);
+          const hasClosed = idxClosed >= 0 && rows[i][idxClosed] !== "";
+          if (!hasClosed) {
+            const formula = `=recommendClose($${symCol}$1:$${symCol}${legRow}, $${expCol}${legRow}, $${strikeCol}${legRow}, $${typeCol}${legRow}, $${qtyCol}${legRow}, 60)`;
+            sheet.getRange(legRow, startCol + idxRecClose).setFormula(formula);
+          }
         }
       }
 
