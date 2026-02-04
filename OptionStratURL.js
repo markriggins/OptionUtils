@@ -32,11 +32,10 @@ function testbuildOptionStratUrl () {
  * @param {Range} typeRange - Type column (Call/Put) for the group
  * @param {Range} expirationRange - Expiration column for the group
  * @param {Range} qtyRange - Qty column for the group (positive=long, negative=short)
- * @param {Array} [_labels] - Optional; ignored, for spreadsheet readability
  * @return {string} OptionStrat URL
  * @customfunction
  */
-function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange, _labels) {
+function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange) {
   // Find symbol (with upward lookup if range)
   let symbol = symbolRange;
   if (Array.isArray(symbolRange)) {
@@ -80,7 +79,12 @@ function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expira
     "bull-call-spread": "bull-call-spread",
     "bull-put-spread": "bull-put-spread",
     "iron-condor": "iron-condor",
+    "iron-butterfly": "iron-butterfly",
     "bear-call-spread": "bear-call-spread",
+    "long-call": "long-call",
+    "short-call": "short-call",
+    "long-put": "long-put",
+    "short-put": "short-put",
   };
   const strategy = strategyMap[posType] || "custom";
 

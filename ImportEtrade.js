@@ -7,10 +7,8 @@
  * - Pairs consecutive opens on same date into spreads
  * - Merges into existing Legs positions (weighted avg price)
  * - Adds new spreads as new groups
- * - Tracks LastImportDate to avoid duplicates
+ * - Per-group LastTxnDate deduplication in Legs table
  */
-
-const ETRADE_CONFIG_RANGE = "ImportConfig"; // Named range for config (LastImportDate, etc.)
 
 /**
  * Imports E*Trade transactions from a CSV file in Google Drive.
@@ -21,14 +19,7 @@ const ETRADE_CONFIG_RANGE = "ImportConfig"; // Named range for config (LastImpor
  */
 function importEtradeTransactions(fileName, folderPath) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-
-  // Get config
-  const config = getImportConfig_(ss);
-  const lastImportDate = config.lastImportDate;
-
-  // Find CSV file in Drive folder
-  const csvName = fileName || "DownloadTxnHistory.csv";
-  const path = folderPath || "Investing/Data";
+  const path = folderPath || "Investing/Data/Etrade";
 
   // Navigate to folder
   const root = DriveApp.getRootFolder();
@@ -38,113 +29,106 @@ function importEtradeTransactions(fileName, folderPath) {
     folder = getFolder_(folder, part);
   }
 
-  // Find file in folder
-  const files = folder.getFilesByName(csvName);
-  if (!files.hasNext()) {
-    SpreadsheetApp.getUi().alert(`File not found: ${csvName}\n\nUpload the E*Trade transaction CSV to Google Drive under /${path}/`);
-    return;
-  }
-  const file = files.next();
-  const csvContent = file.getBlob().getDataAsString();
-
-  // Parse CSV
-  const { transactions, stockTxns } = parseEtradeCsv_(csvContent, lastImportDate);
-  Logger.log(`Parsed ${transactions.length} new transactions after ${lastImportDate || 'beginning'}`);
-
-  if (transactions.length === 0) {
-    SpreadsheetApp.getUi().alert("No new transactions to import.");
-    return;
-  }
-
-  // Pair into spreads (opens only)
-  const spreads = pairTransactionsIntoSpreads_(transactions);
-  Logger.log(`Paired into ${spreads.length} spread orders`);
-
-  // Build map of closing prices by leg key
-  const closingPrices = buildClosingPricesMap_(transactions, stockTxns);
-  Logger.log(`Found closing prices for ${closingPrices.size} legs`);
-
-  // Read existing Legs table
+  // Read existing Legs table to determine if this is a fresh import
   const legsRange = getNamedRangeWithTableFallback_(ss, "Legs");
   let existingLegs = new Map();
   let headers = [];
+  const hasLegsTable = !!legsRange;
   if (legsRange) {
     const rows = legsRange.getValues();
     headers = rows[0];
     existingLegs = parseLegsTable_(rows);
   }
 
-  // Merge spreads into existing positions
-  const { updatedLegs, newLegs } = mergeSpreads_(existingLegs, spreads);
+  // Find transaction CSV files
+  const txnFiles = fileName
+    ? findFilesByName_(folder, fileName)
+    : findFilesByPrefix_(folder, "DownloadTxnHistory");
+
+  if (txnFiles.length === 0) {
+    SpreadsheetApp.getUi().alert(`No DownloadTxnHistory CSVs found.\n\nUpload E*Trade transaction CSVs to Google Drive under /${path}/`);
+    return;
+  }
+
+  // If Legs table exists, process only the most recent CSV; otherwise process all
+  const csvFiles = hasLegsTable ? [txnFiles[0]] : txnFiles;
+  Logger.log(`Processing ${csvFiles.length} of ${txnFiles.length} transaction CSV(s) (Legs table ${hasLegsTable ? "exists" : "not found"})`);
+
+  // Parse transactions from selected CSVs
+  let transactions = [];
+  let stockTxns = [];
+  for (const file of csvFiles) {
+    const csvContent = file.getBlob().getDataAsString();
+    const result = parseEtradeCsv_(csvContent);
+    transactions = transactions.concat(result.transactions);
+    stockTxns = stockTxns.concat(result.stockTxns);
+    Logger.log(`  ${file.getName()}: ${result.transactions.length} transactions`);
+  }
+
+  if (transactions.length === 0) {
+    SpreadsheetApp.getUi().alert("No transactions found in CSV(s).");
+    return;
+  }
+
+  // Parse stock positions from most recent PortfolioDownload CSV
+  const stockPositions = parsePortfolioStocks_(folder, path);
+  Logger.log(`Found ${stockPositions.length} stock positions from portfolio`);
+
+  // Pair into spreads (opens only)
+  const spreads = [...stockPositions, ...pairTransactionsIntoSpreads_(transactions)];
+  Logger.log(`Paired into ${spreads.length} spread orders (including stocks)`);
+
+  // Build map of closing prices by leg key
+  const closingPrices = buildClosingPricesMap_(transactions, stockTxns);
+  Logger.log(`Found closing prices for ${closingPrices.size} legs`);
+
+  // Merge spreads into existing positions (per-group dedup via LastTxnDate)
+  const { updatedLegs, newLegs, skippedCount } = mergeSpreads_(existingLegs, spreads);
 
   // Write back to Legs table
   writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices);
 
-  // Update LastImportDate
-  const maxDate = transactions.reduce((max, t) => t.date > max ? t.date : max, lastImportDate || "");
-  setImportConfig_(ss, { lastImportDate: maxDate });
-
   // Report
+  const fileNames = csvFiles.map(f => f.getName()).join(", ");
   SpreadsheetApp.getUi().alert(
     `Import Complete\n\n` +
-    `Transactions: ${transactions.length}\n` +
+    `Files: ${fileNames}\n` +
+    `Transactions parsed: ${transactions.length}\n` +
     `Spread orders: ${spreads.length}\n` +
+    `New positions: ${newLegs.length}\n` +
     `Updated positions: ${updatedLegs.length}\n` +
-    `New positions: ${newLegs.length}`
+    `Skipped (already imported): ${skippedCount}`
   );
 }
 
 /**
- * Gets import config from named range.
+ * Finds all files in a folder whose name starts with prefix, sorted newest first by name.
  */
-function getImportConfig_(ss) {
-  const range = ss.getRangeByName(ETRADE_CONFIG_RANGE);
-  if (!range) return { lastImportDate: null };
-
-  const values = range.getValues();
-  const config = {};
-  for (const row of values) {
-    const key = String(row[0] || "").trim();
-    const val = row[1];
-    if (key === "LastImportDate") {
-      config.lastImportDate = val instanceof Date
-        ? Utilities.formatDate(val, Session.getScriptTimeZone(), "MM/dd/yy")
-        : String(val || "").trim();
-    }
-  }
-  return config;
+function findFilesByPrefix_(folder, prefix) {
+  const iter = folder.searchFiles(`title contains '${prefix}' and mimeType = 'text/csv'`);
+  const files = [];
+  while (iter.hasNext()) files.push(iter.next());
+  files.sort((a, b) => b.getName().localeCompare(a.getName()));
+  return files;
 }
 
 /**
- * Sets import config in named range.
+ * Finds all files in a folder with an exact name.
  */
-function setImportConfig_(ss, config) {
-  let range = ss.getRangeByName(ETRADE_CONFIG_RANGE);
-  if (!range) {
-    // Create config range on a Config sheet
-    let sheet = ss.getSheetByName("Config");
-    if (!sheet) sheet = ss.insertSheet("Config");
-    range = sheet.getRange("A1:B2");
-    ss.setNamedRange(ETRADE_CONFIG_RANGE, range);
-    range.setValues([["Setting", "Value"], ["LastImportDate", ""]]);
-  }
-
-  const values = range.getValues();
-  for (let i = 0; i < values.length; i++) {
-    if (String(values[i][0]).trim() === "LastImportDate") {
-      values[i][1] = config.lastImportDate || "";
-    }
-  }
-  range.setValues(values);
+function findFilesByName_(folder, name) {
+  const iter = folder.getFilesByName(name);
+  const files = [];
+  while (iter.hasNext()) files.push(iter.next());
+  return files;
 }
 
 /**
  * Parses E*Trade CSV content into transaction objects.
  * Returns { transactions, stockTxns }.
- * transactions: option opens, closes, exercises, assignments after lastImportDate
+ * transactions: option opens, closes, exercises, assignments
  * stockTxns: stock Bought/Sold for matching exercise/assignment to market price
  */
-function parseEtradeCsv_(csvContent, lastImportDate) {
+function parseEtradeCsv_(csvContent) {
   const lines = csvContent.split(/\r?\n/);
   const transactions = [];
   const stockTxns = [];
@@ -165,6 +149,13 @@ function parseEtradeCsv_(csvContent, lastImportDate) {
     "Option Assigned", "Option Exercised",
   ];
 
+  // New-format types: "Bought"/"Sold" with OPENING/CLOSING in Description
+  const newFormatTypes = ["Bought", "Sold"];
+
+  // Find Description column index from header
+  const headerCols = parseCsvLine_(lines[headerIdx]);
+  const descIdx = headerCols.findIndex(h => h.trim().toLowerCase() === "description");
+
   // Parse rows
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -174,9 +165,7 @@ function parseEtradeCsv_(csvContent, lastImportDate) {
     if (cols.length < 8) continue;
 
     const [dateStr, txnType, secType, symbol, qtyStr, amountStr, priceStr, commStr] = cols;
-
-    // Filter by date
-    if (lastImportDate && dateStr <= lastImportDate) continue;
+    const desc = descIdx >= 0 && cols.length > descIdx ? cols[descIdx] : "";
 
     // Stock transactions (for exercise/assignment matching)
     if (secType === "EQ" && (txnType === "Bought" || txnType === "Sold")) {
@@ -191,11 +180,31 @@ function parseEtradeCsv_(csvContent, lastImportDate) {
 
     // Option transactions
     if (secType !== "OPTN") continue;
-    if (!optionTypes.includes(txnType)) continue;
 
-    // Parse option symbol: "TSLA Dec 15 '28 $400 Call"
-    const parsed = parseEtradeOptionSymbol_(symbol);
+    // Determine if old format or new format
+    const isOldFormat = optionTypes.includes(txnType);
+    const isNewFormat = newFormatTypes.includes(txnType);
+    if (!isOldFormat && !isNewFormat) continue;
+
+    // Parse option symbol: try human-readable first, then OCC format
+    const parsed = parseEtradeOptionSymbol_(symbol) || parseOccOptionSymbol_(symbol);
     if (!parsed) continue;
+
+    // Determine open/close/exercise/assigned
+    let isOpen, isClosed, isExercised, isAssigned;
+    if (isOldFormat) {
+      isOpen = txnType === "Bought To Open" || txnType === "Sold Short";
+      isClosed = txnType === "Sold To Close" || txnType === "Bought To Cover";
+      isExercised = txnType === "Option Exercised";
+      isAssigned = txnType === "Option Assigned";
+    } else {
+      // New format: check Description for OPENING/CLOSING
+      const descUpper = desc.toUpperCase();
+      isOpen = descUpper.includes("OPENING");
+      isClosed = descUpper.includes("CLOSING");
+      isExercised = descUpper.includes("EXERCIS");
+      isAssigned = descUpper.includes("ASSIGN");
+    }
 
     transactions.push({
       date: dateStr,
@@ -207,10 +216,10 @@ function parseEtradeCsv_(csvContent, lastImportDate) {
       qty: parseFloat(qtyStr) || 0,
       price: parseFloat(priceStr) || 0,
       amount: parseFloat(amountStr) || 0,
-      isOpen: txnType === "Bought To Open" || txnType === "Sold Short",
-      isClosed: txnType === "Sold To Close" || txnType === "Bought To Cover",
-      isExercised: txnType === "Option Exercised",
-      isAssigned: txnType === "Option Assigned",
+      isOpen,
+      isClosed,
+      isExercised,
+      isAssigned,
     });
   }
 
@@ -266,6 +275,33 @@ function parseEtradeOptionSymbol_(symbol) {
     expiration,
     strike: parseFloat(strike),
     type: type.charAt(0).toUpperCase() + type.slice(1).toLowerCase(), // "Call" or "Put"
+  };
+}
+
+/**
+ * Parses OCC-format option symbol like "TSLA--281215C00500000"
+ * Format: TICKER + padding + YYMMDD + C/P + 8-digit strike (price * 1000)
+ * Returns { ticker, expiration, strike, type } or null
+ */
+function parseOccOptionSymbol_(symbol) {
+  const match = symbol.match(/^([A-Z]+)\W*(\d{6})([CP])(\d{8})$/i);
+  if (!match) return null;
+
+  const [, ticker, dateStr, typeChar, strikeStr] = match;
+
+  const yy = parseInt(dateStr.slice(0, 2), 10);
+  const mm = parseInt(dateStr.slice(2, 4), 10);
+  const dd = parseInt(dateStr.slice(4, 6), 10);
+  const fullYear = 2000 + yy;
+
+  const strike = parseInt(strikeStr, 10) / 1000;
+  const type = typeChar.toUpperCase() === "C" ? "Call" : "Put";
+
+  return {
+    ticker: ticker.toUpperCase(),
+    expiration: `${mm}/${dd}/${fullYear}`,
+    strike,
+    type,
   };
 }
 
@@ -505,12 +541,14 @@ function parseLegsTable_(rows) {
   const idxExp = findColumn_(headers, ["expiration", "exp"]);
   const idxQty = findColumn_(headers, ["qty", "quantity"]);
   const idxPrice = findColumn_(headers, ["price", "cost"]);
+  const idxLastTxnDate = findColumn_(headers, ["lasttxndate", "last txn date"]);
 
-  const positions = new Map(); // key -> { legs, groupNum }
+  const positions = new Map(); // key -> { legs, groupNum, lastTxnDate }
 
   let lastSym = "";
   let lastGroup = "";
   let currentLegs = [];
+  let currentLastTxnDate = "";
 
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
@@ -523,10 +561,19 @@ function parseLegsTable_(rows) {
       // Save previous group
       if (currentLegs.length > 0) {
         const key = makeSpreadKey_(currentLegs);
-        if (key) positions.set(key, { legs: currentLegs, groupNum: lastGroup });
+        if (key) positions.set(key, { legs: currentLegs, groupNum: lastGroup, lastTxnDate: currentLastTxnDate });
       }
       lastGroup = rawGroup;
       currentLegs = [];
+      // Read LastTxnDate from the first row of each new group
+      if (idxLastTxnDate >= 0) {
+        const rawDate = row[idxLastTxnDate];
+        currentLastTxnDate = rawDate instanceof Date
+          ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "MM/dd/yy")
+          : String(rawDate || "").trim();
+      } else {
+        currentLastTxnDate = "";
+      }
     }
 
     const strike = idxStrike >= 0 ? parseNumber_(row[idxStrike]) : NaN;
@@ -535,11 +582,12 @@ function parseLegsTable_(rows) {
     const qty = idxQty >= 0 ? parseNumber_(row[idxQty]) : NaN;
     const price = idxPrice >= 0 ? parseNumber_(row[idxPrice]) : NaN;
 
-    if (Number.isFinite(strike) && Number.isFinite(qty)) {
+    const isStock = type === "Stock" || (!Number.isFinite(strike) && Number.isFinite(qty) && !type);
+    if ((Number.isFinite(strike) || isStock) && Number.isFinite(qty)) {
       currentLegs.push({
         symbol: lastSym,
-        strike,
-        type,
+        strike: Number.isFinite(strike) ? strike : null,
+        type: isStock ? "Stock" : type,
         expiration: exp,
         qty,
         price,
@@ -551,7 +599,7 @@ function parseLegsTable_(rows) {
   // Save last group
   if (currentLegs.length > 0) {
     const key = makeSpreadKey_(currentLegs);
-    if (key) positions.set(key, { legs: currentLegs, groupNum: lastGroup });
+    if (key) positions.set(key, { legs: currentLegs, groupNum: lastGroup, lastTxnDate: currentLastTxnDate });
   }
 
   return positions;
@@ -564,6 +612,12 @@ function makeSpreadKey_(legs) {
   if (legs.length === 0) return null;
 
   const ticker = legs[0].symbol;
+
+  // Stock positions
+  if (legs.length === 1 && (legs[0].type === "Stock" || !Number.isFinite(legs[0].strike))) {
+    return `${ticker}|STOCK`;
+  }
+
   const exp = normalizeExpiration_(legs[0].expiration) || legs[0].expiration;
   const strikes = legs.map(l => l.strike).sort((a, b) => a - b);
   const type = legs[0].type || "Call";
@@ -575,6 +629,10 @@ function makeSpreadKey_(legs) {
  * Creates spread key from a spread order.
  */
 function makeSpreadKeyFromOrder_(spread) {
+  if (spread.type === "stock") {
+    return `${spread.ticker}|STOCK`;
+  }
+
   const exp = normalizeExpiration_(spread.expiration) || spread.expiration;
 
   if (spread.type === "iron-condor" && spread.legs) {
@@ -588,18 +646,28 @@ function makeSpreadKeyFromOrder_(spread) {
 
 /**
  * Merges new spreads into existing positions.
+ * Skips spreads whose date is not newer than the group's LastTxnDate.
+ * Returns { updatedLegs, newLegs, skippedCount }.
  */
 function mergeSpreads_(existingPositions, newSpreads) {
   const updatedLegs = [];
   const newLegs = [];
   const processedKeys = new Set();
+  let skippedCount = 0;
 
   for (const spread of newSpreads) {
     const key = makeSpreadKeyFromOrder_(spread);
 
     if (existingPositions.has(key)) {
-      // Merge into existing
       const existing = existingPositions.get(key);
+
+      // Per-group dedup: skip if spread's date is not newer than LastTxnDate
+      if (existing.lastTxnDate && spread.date && spread.date <= existing.lastTxnDate) {
+        skippedCount++;
+        continue;
+      }
+
+      // Merge into existing
       const longLeg = existing.legs.find(l => l.qty > 0);
       const shortLeg = existing.legs.find(l => l.qty < 0);
 
@@ -619,6 +687,11 @@ function mergeSpreads_(existingPositions, newSpreads) {
         shortLeg.qty = -(totalQty);
       }
 
+      // Track the newest date for this group
+      if (spread.date > (existing.lastTxnDate || "")) {
+        existing.lastTxnDate = spread.date;
+      }
+
       if (!processedKeys.has(key)) {
         updatedLegs.push(existing);
         processedKeys.add(key);
@@ -629,7 +702,7 @@ function mergeSpreads_(existingPositions, newSpreads) {
     }
   }
 
-  return { updatedLegs, newLegs };
+  return { updatedLegs, newLegs, skippedCount };
 }
 
 /**
@@ -646,19 +719,19 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
     let sheet = ss.getSheetByName("Legs");
     if (!sheet) sheet = ss.insertSheet("Legs");
 
-    headers = ["Symbol", "Group", "Strategy", "Strike", "Type", "Expiration", "Qty", "Price", "Investment", "Rec Close", "Closed", "Gain", "Link"];
+    headers = ["Symbol", "Group", "Strategy", "Strike", "Type", "Expiration", "Qty", "Price", "Investment", "Rec Close", "Closed", "Gain", "LastTxnDate", "Link"];
     const headerRange = sheet.getRange(1, 1, 1, headers.length);
     headerRange.setValues([headers]);
     headerRange.setBackground("#93c47d"); // Green header
     headerRange.setFontWeight("bold");
-    ss.setNamedRange("LegsTable", sheet.getRange("A:M"));
+    ss.setNamedRange("LegsTable", sheet.getRange("A:N"));
 
     // Add filter to the data range
-    const filterRange = sheet.getRange("A:M");
+    const filterRange = sheet.getRange("A:N");
     filterRange.createFilter();
 
     // Set wrap to clip
-    sheet.getRange("A:M").setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+    sheet.getRange("A:N").setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
   }
 
   const range = getNamedRangeWithTableFallback_(ss, "Legs");
@@ -679,6 +752,7 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
   const idxRecClose = findColumn_(headers, ["recclose", "rec close"]);
   const idxClosed = findColumn_(headers, ["closed", "actualclose", "closedat"]);
   const idxGain = findColumn_(headers, ["gain"]);
+  const idxLastTxnDate = findColumn_(headers, ["lasttxndate", "last txn date"]);
   const idxLink = findColumn_(headers, ["link"]);
 
   // Column letters for formulas
@@ -700,6 +774,10 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
         if (idxQty >= 0) sheet.getRange(rowNum, startCol + idxQty).setValue(leg.qty);
         if (idxPrice >= 0) sheet.getRange(rowNum, startCol + idxPrice).setValue(roundTo_(leg.price, 2));
       }
+    }
+    // Update LastTxnDate on the first row of the group
+    if (idxLastTxnDate >= 0 && pos.lastTxnDate && pos.legs.length > 0 && pos.legs[0].row != null) {
+      sheet.getRange(startRow + pos.legs[0].row, startCol + idxLastTxnDate).setValue(pos.lastTxnDate);
     }
   }
 
@@ -727,8 +805,18 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
         return val != null ? val : "";
       };
 
+      // Handle stock position (single row, no strike/expiration)
+      if (spread.type === "stock") {
+        const row = new Array(headers.length).fill("");
+        if (idxSym >= 0) row[idxSym] = spread.ticker;
+        if (idxGroup >= 0) row[idxGroup] = nextGroup;
+        if (idxType >= 0) row[idxType] = "Stock";
+        if (idxQty >= 0) row[idxQty] = spread.qty;
+        if (idxPrice >= 0) row[idxPrice] = roundTo_(spread.price, 2);
+        rows.push(row);
+      }
       // Handle iron condor (4 legs)
-      if (spread.type === "iron-condor" && spread.legs) {
+      else if (spread.type === "iron-condor" && spread.legs) {
         for (let i = 0; i < spread.legs.length; i++) {
           const leg = spread.legs[i];
           const row = new Array(headers.length).fill("");
@@ -789,6 +877,11 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
 
       if (rows.length === 0) continue;
 
+      // Set LastTxnDate on the first row of the group
+      if (idxLastTxnDate >= 0 && spread.date) {
+        rows[0][idxLastTxnDate] = spread.date;
+      }
+
       const firstRow = lastRow + 1;
       const lastLegRow = firstRow + rows.length - 1;
 
@@ -796,48 +889,61 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
       sheet.getRange(firstRow, startCol, rows.length, headers.length).setValues(rows);
 
       // Write formulas on first row of group
+      const isStock = spread.type === "stock";
       const rangeStr = `${firstRow}:${lastLegRow}`;
 
       // Strategy formula
       if (idxStrategy >= 0) {
-        const formula = `=detectStrategy($${strikeCol}${firstRow}:$${strikeCol}${lastLegRow}, $${typeCol}${firstRow}:$${typeCol}${lastLegRow}, $${qtyCol}${firstRow}:$${qtyCol}${lastLegRow})`;
-        sheet.getRange(firstRow, startCol + idxStrategy).setFormula(formula);
+        if (isStock) {
+          sheet.getRange(firstRow, startCol + idxStrategy).setValue("Stock");
+        } else {
+          const formula = `=detectStrategy($${strikeCol}${firstRow}:$${strikeCol}${lastLegRow}, $${typeCol}${firstRow}:$${typeCol}${lastLegRow}, $${qtyCol}${firstRow}:$${qtyCol}${lastLegRow})`;
+          sheet.getRange(firstRow, startCol + idxStrategy).setFormula(formula);
+        }
       }
 
-      // Investment formula
+      // Investment formula (stocks: no *100 multiplier)
       if (idxInvestment >= 0) {
-        const formula = `=SUMPRODUCT($${qtyCol}${firstRow}:$${qtyCol}${lastLegRow}, $${priceCol}${firstRow}:$${priceCol}${lastLegRow}) * 100`;
+        const multiplier = isStock ? "" : " * 100";
+        const formula = `=SUMPRODUCT($${qtyCol}${firstRow}:$${qtyCol}${lastLegRow}, $${priceCol}${firstRow}:$${priceCol}${lastLegRow})${multiplier}`;
         sheet.getRange(firstRow, startCol + idxInvestment).setFormula(formula);
       }
 
       // Gain formula: use Closed if available, otherwise Rec Close
+      // Stocks: no *100 multiplier
       if (idxGain >= 0 && idxRecClose >= 0) {
         let closeRef;
         if (idxClosed >= 0) {
-          // IF(Closed<>"", Closed, RecClose) per leg
           closeRef = `IF($${closedCol}${firstRow}:$${closedCol}${lastLegRow}<>"", $${closedCol}${firstRow}:$${closedCol}${lastLegRow}, $${recCloseCol}${firstRow}:$${recCloseCol}${lastLegRow})`;
         } else {
           closeRef = `$${recCloseCol}${firstRow}:$${recCloseCol}${lastLegRow}`;
         }
-        const formula = `=SUMPRODUCT($${qtyCol}${firstRow}:$${qtyCol}${lastLegRow}, ${closeRef} - $${priceCol}${firstRow}:$${priceCol}${lastLegRow}) * 100`;
+        const multiplier = isStock ? "" : " * 100";
+        const formula = `=SUMPRODUCT($${qtyCol}${firstRow}:$${qtyCol}${lastLegRow}, ${closeRef} - $${priceCol}${firstRow}:$${priceCol}${lastLegRow})${multiplier}`;
         sheet.getRange(firstRow, startCol + idxGain).setFormula(formula);
       }
 
-      // Link formula: HYPERLINK with "OptionStrat" display text
-      if (idxLink >= 0) {
+      // Link formula: HYPERLINK with "OptionStrat" display text (skip for stocks)
+      if (idxLink >= 0 && !isStock) {
         const urlFormula = `buildOptionStratUrlFromLegs($${symCol}$1:$${symCol}${firstRow}, $${strikeCol}${firstRow}:$${strikeCol}${lastLegRow}, $${typeCol}${firstRow}:$${typeCol}${lastLegRow}, $${expCol}${firstRow}:$${expCol}${lastLegRow}, $${qtyCol}${firstRow}:$${qtyCol}${lastLegRow})`;
         const formula = `=HYPERLINK(${urlFormula}, "OptionStrat")`;
         sheet.getRange(firstRow, startCol + idxLink).setFormula(formula);
       }
 
-      // Rec Close formula for each leg (skip if Closed is already populated)
+      // Rec Close formula for each leg
       if (idxRecClose >= 0) {
         for (let i = 0; i < rows.length; i++) {
           const legRow = firstRow + i;
           const hasClosed = idxClosed >= 0 && rows[i][idxClosed] !== "";
           if (!hasClosed) {
-            const formula = `=recommendClose($${symCol}$1:$${symCol}${legRow}, $${expCol}${legRow}, $${strikeCol}${legRow}, $${typeCol}${legRow}, $${qtyCol}${legRow}, 60)`;
-            sheet.getRange(legRow, startCol + idxRecClose).setFormula(formula);
+            if (isStock) {
+              // Use GOOGLEFINANCE for stock current price
+              const formula = `=GOOGLEFINANCE("${spread.ticker}")`;
+              sheet.getRange(legRow, startCol + idxRecClose).setFormula(formula);
+            } else {
+              const formula = `=recommendClose($${symCol}$1:$${symCol}${legRow}, $${expCol}${legRow}, $${strikeCol}${legRow}, $${typeCol}${legRow}, $${qtyCol}${legRow}, 60)`;
+              sheet.getRange(legRow, startCol + idxRecClose).setFormula(formula);
+            }
           }
         }
       }
@@ -861,47 +967,127 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
 
     // Write summary rows after all data
     const summaryStart = lastRow + 2; // blank row then summary
-    const dataRange = `2:${lastRow}`; // data rows (excluding header)
     const invCol = idxInvestment >= 0 ? colLetter(idxInvestment) : "I";
     const gainCol = idxGain >= 0 ? colLetter(idxGain) : "L";
+    const dr = (col) => `$${col}$2:$${col}$${lastRow}`; // proper range reference
 
-    const summaryRows = [
-      { label: "Open Investment", formula: `=SUMPRODUCT(($${closedCol}${dataRange}="")*$${invCol}${dataRange})` },
-      { label: "Realized Gain", formula: `=SUMPRODUCT(($${closedCol}${dataRange}<>"")*$${gainCol}${dataRange})` },
-      { label: "Unrealized Gain", formula: `=SUMPRODUCT(($${closedCol}${dataRange}="")*$${gainCol}${dataRange})` },
-      { label: "Total Gain", formula: `=$${gainCol}${summaryStart + 1}+$${gainCol}${summaryStart + 2}` },
-    ];
-
-    for (let i = 0; i < summaryRows.length; i++) {
-      const row = summaryStart + i;
-      sheet.getRange(row, startCol).setValue(summaryRows[i].label).setFontWeight("bold");
-      sheet.getRange(row, startCol + idxGain).setFormula(summaryRows[i].formula);
-    }
-
-    // Put Open Investment in the Investment column
-    sheet.getRange(summaryStart, startCol + idxGain).clearContent();
-    sheet.getRange(summaryStart, startCol + idxInvestment)
-      .setFormula(`=SUMPRODUCT(($${closedCol}${dataRange}="")*$${invCol}${dataRange})`)
+    // Realized row: gain for closed positions
+    sheet.getRange(summaryStart, startCol).setValue("Realized").setFontWeight("bold");
+    sheet.getRange(summaryStart, startCol + idxGain)
+      .setFormula(`=SUMPRODUCT((${dr(closedCol)}<>"")*${dr(gainCol)})`)
       .setFontWeight("bold");
-    sheet.getRange(summaryStart, startCol).setValue("Open").setFontWeight("bold");
 
-    // Realized row: show closed investment too
-    sheet.getRange(summaryStart + 1, startCol + idxInvestment)
-      .setFormula(`=SUMPRODUCT(($${closedCol}${dataRange}<>"")*$${invCol}${dataRange})`)
+    // Unrealized row: gain for open positions
+    sheet.getRange(summaryStart + 1, startCol).setValue("Unrealized").setFontWeight("bold");
+    sheet.getRange(summaryStart + 1, startCol + idxGain)
+      .setFormula(`=SUMPRODUCT((${dr(closedCol)}="")*${dr(gainCol)})`)
       .setFontWeight("bold");
-    sheet.getRange(summaryStart + 1, startCol).setValue("Realized").setFontWeight("bold");
 
-    // Unrealized row
-    sheet.getRange(summaryStart + 2, startCol).setValue("Unrealized").setFontWeight("bold");
-
-    // Total row
-    sheet.getRange(summaryStart + 3, startCol).setValue("Total").setFontWeight("bold");
-    sheet.getRange(summaryStart + 3, startCol + idxInvestment)
-      .setFormula(`=$${invCol}${summaryStart}+$${invCol}${summaryStart + 1}`)
+    // Total row: open investment + total gain
+    sheet.getRange(summaryStart + 2, startCol).setValue("Total").setFontWeight("bold");
+    sheet.getRange(summaryStart + 2, startCol + idxInvestment)
+      .setFormula(`=SUMPRODUCT((${dr(closedCol)}="")*${dr(invCol)})`)
+      .setFontWeight("bold");
+    sheet.getRange(summaryStart + 2, startCol + idxGain)
+      .setFormula(`=$${gainCol}$${summaryStart}+$${gainCol}$${summaryStart + 1}`)
       .setFontWeight("bold");
 
     // Format summary area
-    const summaryRange = sheet.getRange(summaryStart, startCol, 4, headers.length);
+    const summaryRange = sheet.getRange(summaryStart, startCol, 3, headers.length);
     summaryRange.setBackground("#d9ead3"); // light green
   }
+
+  // Apply number formats to all data rows (always, even with no new legs)
+  const lastDataRow = sheet.getLastRow();
+  if (lastDataRow >= 2) {
+    const dataRowCount = lastDataRow - 1; // rows 2 through lastDataRow
+    const fmtCols = [
+      { idx: idxQty, fmt: "#,##0" },
+      { idx: idxPrice, fmt: "#,##0.00" },
+      { idx: idxInvestment, fmt: "#,##0.00" },
+      { idx: idxRecClose, fmt: "#,##0.00" },
+      { idx: idxClosed, fmt: "#,##0.00" },
+      { idx: idxGain, fmt: "#,##0.00" },
+      { idx: idxLastTxnDate, fmt: "mm/dd/yy" },
+    ];
+    for (const { idx, fmt } of fmtCols) {
+      if (idx >= 0) {
+        sheet.getRange(2, startCol + idx, dataRowCount, 1).setNumberFormat(fmt);
+      }
+    }
+  }
+}
+
+/**
+ * Parses stock positions from PortfolioDownload.csv in the same folder.
+ * Returns spread-like objects with type="stock" for each stock holding.
+ *
+ * @param {Folder} folder - Google Drive folder containing the CSV
+ * @param {string} path - Folder path (for logging)
+ * @returns {Object[]} Array of stock position objects
+ */
+function parsePortfolioStocks_(folder, path) {
+  const matches = findFilesByPrefix_(folder, "PortfolioDownload");
+  if (matches.length === 0) {
+    Logger.log("No PortfolioDownload CSV found in " + path);
+    return [];
+  }
+
+  // Use most recent file
+  const csv = matches[0].getBlob().getDataAsString();
+  const lines = csv.split(/\r?\n/);
+
+  // Find the data header row ("Symbol,Last Price $,...")
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith("Symbol,Last Price")) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx < 0) return [];
+
+  const headers = parseCsvLine_(lines[headerIdx]);
+  const idxSym = headers.findIndex(h => h === "Symbol");
+  const idxQty = headers.findIndex(h => h === "Quantity");
+  const idxPricePaid = headers.findIndex(h => h.startsWith("Price Paid"));
+
+  if (idxSym < 0 || idxQty < 0 || idxPricePaid < 0) return [];
+
+  const stocks = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    const cols = parseCsvLine_(line);
+    const symbol = (cols[idxSym] || "").trim().toUpperCase();
+
+    // Skip non-stock rows
+    if (!symbol) continue;
+    if (symbol === "CASH" || symbol === "TOTAL") continue;
+
+    // Skip option symbols (contain spaces, e.g. "TSLA Jun 16 '28 $350 Call")
+    if (symbol.includes(" ")) continue;
+
+    // Skip CUSIP-like symbols (contain 3+ consecutive digits)
+    if (/\d{3,}/.test(symbol)) continue;
+
+    const qty = parseFloat(cols[idxQty]) || 0;
+    const pricePaid = parseFloat(cols[idxPricePaid]) || 0;
+
+    if (qty === 0) continue;
+
+    stocks.push({
+      type: "stock",
+      ticker: symbol,
+      qty: qty,
+      price: roundTo_(pricePaid, 2),
+      expiration: null,
+      lowerStrike: null,
+      upperStrike: null,
+      optionType: "Stock",
+    });
+  }
+
+  return stocks;
 }

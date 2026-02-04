@@ -716,7 +716,8 @@ function getSymbolsFromLegsTable_(rows) {
     if (lastSym) symbols.add(lastSym);
   }
 
-  return Array.from(symbols).sort();
+  const skip = new Set(["REALIZED", "UNREALIZED", "TOTAL"]);
+  return Array.from(symbols).filter(s => !skip.has(s)).sort();
 }
 
 /**

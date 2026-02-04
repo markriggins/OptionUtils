@@ -265,20 +265,50 @@ function plotForSymbol_(ss, symbolRaw) {
     }
   });
 
+  // ── Build strategy groups (only non-empty types) ────────────────────
+  const strategyGroupDefs = [
+    { name: "Bull Call Spreads", spreads: bullCallSpreads },
+    { name: "Bull Put Spreads", spreads: bullPutSpreads },
+    { name: "Bear Call Spreads", spreads: bearCallSpreads },
+  ];
+  const strategyGroups = strategyGroupDefs.filter(g => g.spreads.length > 0);
+  const strategyLabels = strategyGroups.map(g => g.name);
+
+  // Strategy-level investment denominators (sum of individual investments within each group)
+  let spreadIdx = 0;
+  const strategyInvestments = strategyGroups.map(g => {
+    let sum = 0;
+    for (let i = 0; i < g.spreads.length; i++) {
+      sum += spreadInvestments[spreadIdx++];
+    }
+    return sum;
+  });
+
   // ── Build data table ────────────────────────────────────────────────
-  // Structure: Price, Shares $, [each spread $], Total $, Shares % ROI, [each spread % ROI]
+  // Structure: Price | Shares $ | [strategy $] | Total $ | Shares % ROI | [strategy % ROI] | [individual spread $] | [individual spread % ROI]
   const spreadLabels = allSpreads.map(sp => sp.label);
   const spreadRoiLabels = allSpreads.map(sp => sp.label + " %");
-  const headerRow = ["Price ($)", "Shares $", ...spreadLabels, "Total $", "Shares % ROI", ...spreadRoiLabels];
+  const strategyRoiLabels = strategyLabels.map(l => l + " %");
+  const headerRow = [
+    "Price ($)", "Shares $",
+    ...strategyLabels.map(l => l + " $"),
+    "Total $",
+    "Shares % ROI",
+    ...strategyRoiLabels,
+    ...spreadLabels,
+    ...spreadRoiLabels,
+  ];
   const table = [headerRow];
 
   // Column indexes for chart building
   const colPrice = 0;
   const colShares = 1;
-  const colFirstSpread = 2;
-  const colTotal = 2 + spreadLabels.length;
+  const colFirstStrategy = 2;
+  const colTotal = 2 + strategyLabels.length;
   const colSharesRoi = colTotal + 1;
-  const colFirstSpreadRoi = colSharesRoi + 1;
+  const colFirstStrategyRoi = colSharesRoi + 1;
+  const colFirstSpread = colFirstStrategyRoi + strategyLabels.length;
+  const colFirstSpreadRoi = colFirstSpread + spreadLabels.length;
 
   for (let S = cfg.minPrice; S <= cfg.maxPrice + 1e-9; S += cfg.step) {
     // Calculate portfolio VALUE at price S (not P/L)
@@ -339,6 +369,24 @@ function plotForSymbol_(ss, symbolRaw) {
     const sharesPL = sharesValue - sharesCost;
     const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
 
+    // Calculate strategy-level values by summing individual spreads per group
+    const strategyValues = [];
+    let sIdx = 0;
+    for (const g of strategyGroups) {
+      let groupVal = 0;
+      for (let i = 0; i < g.spreads.length; i++) {
+        groupVal += individualSpreadValues[sIdx++];
+      }
+      strategyValues.push(roundTo_(groupVal, 2));
+    }
+
+    // Calculate strategy-level ROIs
+    const strategyROIs = strategyValues.map((val, idx) => {
+      const inv = strategyInvestments[idx];
+      if (inv <= 0) return 0;
+      return roundTo_((val - inv) / inv, 4);
+    });
+
     // Calculate individual spread ROIs
     const individualSpreadROIs = individualSpreadValues.map((val, idx) => {
       const investment = spreadInvestments[idx];
@@ -350,9 +398,11 @@ function plotForSymbol_(ss, symbolRaw) {
     table.push([
       roundTo_(S, 2),
       roundTo_(sharesValue, 2),
-      ...individualSpreadValues,
+      ...strategyValues,
       roundTo_(totalValue, 2),
       roundTo_(sharesROI, 4),
+      ...strategyROIs,
+      ...individualSpreadValues,
       ...individualSpreadROIs,
     ]);
   }
@@ -368,14 +418,41 @@ function plotForSymbol_(ss, symbolRaw) {
   sheet.getRange(startRow, startCol, table.length, table[0].length).setValues(table);
   sheet.autoResizeColumns(startCol, table[0].length);
 
-  // Format ROI columns as percent
+  // Format data columns
   if (table.length > 1) {
+    const dataRows = table.length - 1;
+    const commaFmt = "#,##0";
+
+    // Price column
+    sheet.getRange(startRow + 1, startCol + colPrice, dataRows, 1).setNumberFormat(commaFmt);
+
+    // Shares $ column
+    sheet.getRange(startRow + 1, startCol + colShares, dataRows, 1).setNumberFormat(commaFmt);
+
+    // Strategy $ columns
+    if (strategyLabels.length > 0) {
+      sheet.getRange(startRow + 1, startCol + colFirstStrategy, dataRows, strategyLabels.length).setNumberFormat(commaFmt);
+    }
+
+    // Total $ column
+    sheet.getRange(startRow + 1, startCol + colTotal, dataRows, 1).setNumberFormat(commaFmt);
+
+    // Individual spread $ columns
+    if (spreadLabels.length > 0) {
+      sheet.getRange(startRow + 1, startCol + colFirstSpread, dataRows, spreadLabels.length).setNumberFormat(commaFmt);
+    }
+
     // Shares % ROI column
-    sheet.getRange(startRow + 1, startCol + colSharesRoi, table.length - 1, 1).setNumberFormat("0.00%");
+    sheet.getRange(startRow + 1, startCol + colSharesRoi, dataRows, 1).setNumberFormat("0.00%");
+
+    // Strategy ROI columns
+    if (strategyLabels.length > 0) {
+      sheet.getRange(startRow + 1, startCol + colFirstStrategyRoi, dataRows, strategyLabels.length).setNumberFormat("0.00%");
+    }
 
     // Individual spread ROI columns
     if (spreadLabels.length > 0) {
-      sheet.getRange(startRow + 1, startCol + colFirstSpreadRoi, table.length - 1, spreadLabels.length).setNumberFormat("0.00%");
+      sheet.getRange(startRow + 1, startCol + colFirstSpreadRoi, dataRows, spreadLabels.length).setNumberFormat("0.00%");
     }
   }
 
@@ -387,11 +464,14 @@ function plotForSymbol_(ss, symbolRaw) {
     headerRow,
     spreadLabels,
     spreadRoiLabels,
+    strategyLabels,
     colPrice,
     colShares,
-    colFirstSpread,
+    colFirstStrategy,
     colTotal,
     colSharesRoi,
+    colFirstStrategyRoi,
+    colFirstSpread,
     colFirstSpreadRoi,
   });
 }
@@ -402,7 +482,8 @@ function plotForSymbol_(ss, symbolRaw) {
 
 function ensureFourCharts_(sheet, symbol, cfg, args) {
   const { startRow, startCol, tableRows, headerRow, spreadLabels, spreadRoiLabels,
-          colPrice, colShares, colFirstSpread, colTotal, colSharesRoi, colFirstSpreadRoi } = args;
+          strategyLabels, colPrice, colShares, colFirstStrategy, colTotal, colSharesRoi,
+          colFirstStrategyRoi, colFirstSpread, colFirstSpreadRoi } = args;
 
   const dollarTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " ($)";
   const pctTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " (%)";
@@ -431,7 +512,12 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
     }
   }
 
+  // Chart size: wide enough for legend, tall enough to cover 25 rows
+  const chartWidth = 900;
+  const chartHeight = 500;
+
   function rebuildChartPreserveBox_(oldChart, newBuilder, defaultRow, defaultCol) {
+    newBuilder = newBuilder.setOption("width", chartWidth).setOption("height", chartHeight);
     if (!oldChart) {
       sheet.insertChart(newBuilder.setPosition(defaultRow, defaultCol, 0, 0).build());
       return;
@@ -446,7 +532,7 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
     sheet.insertChart(newBuilder.setPosition(anchorRow, anchorCol, offsetX, offsetY).build());
   }
 
-  // --- Build $ chart: Price, Shares $, [each spread $], Total $ ---
+  // --- Build $ chart: Price, Shares $, [strategy $], Total $ ---
   const priceColRange = sheet.getRange(startRow, startCol + colPrice, tableRows, 1);
   const sharesColRange = sheet.getRange(startRow, startCol + colShares, tableRows, 1);
   const totalColRange = sheet.getRange(startRow, startCol + colTotal, tableRows, 1);
@@ -457,29 +543,31 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
     .addRange(priceColRange)
     .addRange(sharesColRange);
 
-  // Add each spread $ column
-  if (spreadLabels && spreadLabels.length > 0) {
-    const spreadsRange = sheet.getRange(startRow, startCol + colFirstSpread, tableRows, spreadLabels.length);
-    dollarBuilder = dollarBuilder.addRange(spreadsRange);
+  // Add strategy $ columns
+  if (strategyLabels && strategyLabels.length > 0) {
+    const strategyRange = sheet.getRange(startRow, startCol + colFirstStrategy, tableRows, strategyLabels.length);
+    dollarBuilder = dollarBuilder.addRange(strategyRange);
   }
 
   dollarBuilder = dollarBuilder
     .addRange(totalColRange)
     .setOption("title", dollarTitle)
     .setOption("hAxis", { title: `${symbol} Price ($)` })
+    .setOption("hAxis.format", "#,##0")
     .setOption("vAxis", { title: "Portfolio Value ($)" })
+    .setOption("vAxis.format", "#,##0")
     .setOption("legend", { position: "right" })
     .setOption("curveType", "none");
 
-  // Series labels: Shares $, [spread labels], Total $
+  // Series labels: Shares $, [strategy labels $], Total $
   const dollarSeries = { 0: { labelInLegend: "Shares $" } };
-  for (let i = 0; i < spreadLabels.length; i++) {
-    dollarSeries[i + 1] = { labelInLegend: spreadLabels[i] };
+  for (let i = 0; i < strategyLabels.length; i++) {
+    dollarSeries[i + 1] = { labelInLegend: strategyLabels[i] + " $" };
   }
-  dollarSeries[spreadLabels.length + 1] = { labelInLegend: "Total $" };
+  dollarSeries[strategyLabels.length + 1] = { labelInLegend: "Total $" };
   dollarBuilder = dollarBuilder.setOption("series", dollarSeries);
 
-  // --- Build % chart: Price, Shares % ROI, [each spread % ROI] ---
+  // --- Build % chart: Price, Shares % ROI, [strategy % ROI] ---
   const sharesRoiRange = sheet.getRange(startRow, startCol + colSharesRoi, tableRows, 1);
 
   let pctBuilder = sheet
@@ -488,23 +576,25 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
     .addRange(priceColRange)
     .addRange(sharesRoiRange);
 
-  // Add each spread ROI column
-  if (spreadLabels && spreadLabels.length > 0) {
-    const spreadsRoiRange = sheet.getRange(startRow, startCol + colFirstSpreadRoi, tableRows, spreadLabels.length);
-    pctBuilder = pctBuilder.addRange(spreadsRoiRange);
+  // Add strategy ROI columns
+  if (strategyLabels && strategyLabels.length > 0) {
+    const strategyRoiRange = sheet.getRange(startRow, startCol + colFirstStrategyRoi, tableRows, strategyLabels.length);
+    pctBuilder = pctBuilder.addRange(strategyRoiRange);
   }
 
   pctBuilder = pctBuilder
     .setOption("title", pctTitle)
     .setOption("hAxis", { title: `${symbol} Price ($)` })
-    .setOption("vAxis", { title: "% Return (ROI)", format: "percent" })
+    .setOption("hAxis.format", "#,##0")
+    .setOption("vAxis", { title: "% Return (ROI)" })
+    .setOption("vAxis.format", "percent")
     .setOption("legend", { position: "right" })
     .setOption("curveType", "none");
 
-  // Series labels: Shares % ROI, [spread labels]
+  // Series labels: Shares % ROI, [strategy labels %]
   const pctSeries = { 0: { labelInLegend: "Shares % ROI" } };
-  for (let i = 0; i < spreadLabels.length; i++) {
-    pctSeries[i + 1] = { labelInLegend: spreadLabels[i] };
+  for (let i = 0; i < strategyLabels.length; i++) {
+    pctSeries[i + 1] = { labelInLegend: strategyLabels[i] + " %" };
   }
   pctBuilder = pctBuilder.setOption("series", pctSeries);
 
@@ -522,7 +612,9 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
       .addRange(spreadsRange)
       .setOption("title", spreadsTitle)
       .setOption("hAxis", { title: `${symbol} Price ($)` })
+      .setOption("hAxis.format", "#,##0")
       .setOption("vAxis", { title: "Spread Value ($)" })
+      .setOption("vAxis.format", "#,##0")
       .setOption("legend", { position: "right" })
       .setOption("curveType", "none");
 
@@ -542,7 +634,9 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
       .addRange(spreadsRoiRange)
       .setOption("title", spreadsRoiTitle)
       .setOption("hAxis", { title: `${symbol} Price ($)` })
-      .setOption("vAxis", { title: "% Return (ROI)", format: "percent" })
+      .setOption("hAxis.format", "#,##0")
+      .setOption("vAxis", { title: "% Return (ROI)" })
+      .setOption("vAxis.format", "percent")
       .setOption("legend", { position: "right" })
       .setOption("curveType", "none");
 
@@ -554,13 +648,14 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
   }
 
   // Create / rebuild while preserving chart placement
+  // Each chart spans 25 rows, with 1 gap row between them
   rebuildChartPreserveBox_(dollarChart, dollarBuilder, 1, 1);
-  rebuildChartPreserveBox_(pctChart, pctBuilder, 15, 1);
+  rebuildChartPreserveBox_(pctChart, pctBuilder, 27, 1);
   if (spreadsBuilder) {
-    rebuildChartPreserveBox_(spreadsChart, spreadsBuilder, 29, 1);
+    rebuildChartPreserveBox_(spreadsChart, spreadsBuilder, 53, 1);
   }
   if (spreadsRoiBuilder) {
-    rebuildChartPreserveBox_(spreadsRoiChart, spreadsRoiBuilder, 43, 1);
+    rebuildChartPreserveBox_(spreadsRoiChart, spreadsRoiBuilder, 79, 1);
   }
 }
 
@@ -667,7 +762,7 @@ function ensureAndReadConfig_(ss, sheet, symbol) {
     minPrice: smart.minPrice,
     maxPrice: smart.maxPrice,
     step: smart.step,
-    tableStartRow: 85, // default is 85
+    tableStartRow: 200, // default is 200
     tableStartCol: 1,
     chartTitle: `${symbol} Portfolio Value by Price`,
   };
