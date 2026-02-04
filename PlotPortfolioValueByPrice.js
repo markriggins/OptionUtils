@@ -250,12 +250,19 @@ function plotForSymbol_(ss, symbolRaw) {
   });
 
   // ── Build data table ────────────────────────────────────────────────
-  // Base headers + individual spread value columns + individual spread ROI columns
-  const baseHeaders = ["Price ($)", "Shares $", "Options $", "Total $", "Shares % ROI", "Options % ROI"];
+  // Structure: Price, Shares $, [each spread $], Total $, Shares % ROI, [each spread % ROI]
   const spreadLabels = allSpreads.map(sp => sp.label);
   const spreadRoiLabels = allSpreads.map(sp => sp.label + " %");
-  const headerRow = [...baseHeaders, ...spreadLabels, ...spreadRoiLabels];
+  const headerRow = ["Price ($)", "Shares $", ...spreadLabels, "Total $", "Shares % ROI", ...spreadRoiLabels];
   const table = [headerRow];
+
+  // Column indexes for chart building
+  const colPrice = 0;
+  const colShares = 1;
+  const colFirstSpread = 2;
+  const colTotal = 2 + spreadLabels.length;
+  const colSharesRoi = colTotal + 1;
+  const colFirstSpreadRoi = colSharesRoi + 1;
 
   for (let S = cfg.minPrice; S <= cfg.maxPrice + 1e-9; S += cfg.step) {
     // Calculate portfolio VALUE at price S (not P/L)
@@ -265,9 +272,6 @@ function plotForSymbol_(ss, symbolRaw) {
     for (const sh of shares) {
       sharesValue += S * sh.qty;
     }
-
-    // Options value = intrinsic value at expiration
-    let optionsValue = 0;
 
     // Track individual spread values
     const individualSpreadValues = [];
@@ -282,7 +286,6 @@ function plotForSymbol_(ss, symbolRaw) {
       const intrinsic = clamp_(S - sp.kLong, 0, width);
       const valuePerSpread = intrinsic * 100; // intrinsic value in dollars
       const totalValue = valuePerSpread * sp.qty;
-      optionsValue += totalValue;
       individualSpreadValues.push(roundTo_(totalValue, 2));
     }
 
@@ -296,7 +299,6 @@ function plotForSymbol_(ss, symbolRaw) {
       const loss = clamp_(sp.kShort - S, 0, width);
       const valuePerSpread = (width - loss) * 100; // what you keep
       const totalValue = valuePerSpread * sp.qty;
-      optionsValue += totalValue;
       individualSpreadValues.push(roundTo_(totalValue, 2));
     }
 
@@ -311,18 +313,15 @@ function plotForSymbol_(ss, symbolRaw) {
       const loss = clamp_(S - sp.kLong, 0, width);
       const valuePerSpread = (width - loss) * 100; // what you keep
       const totalValue = valuePerSpread * sp.qty;
-      optionsValue += totalValue;
       individualSpreadValues.push(roundTo_(totalValue, 2));
     }
 
+    const optionsValue = individualSpreadValues.reduce((sum, v) => sum + v, 0);
     const totalValue = sharesValue + optionsValue;
 
-    // ROI still based on P/L
+    // ROI based on P/L
     const sharesPL = sharesValue - sharesCost;
-    const optionsPL = optionsValue - bullCallInvest - bullPutRisk - bearCallRisk;
-
     const sharesROI = sharesCost > 0 ? (sharesPL / sharesCost) : 0;
-    const optionsROI = optionsDenom > 0 ? (optionsPL / optionsDenom) : 0;
 
     // Calculate individual spread ROIs
     const individualSpreadROIs = individualSpreadValues.map((val, idx) => {
@@ -335,26 +334,19 @@ function plotForSymbol_(ss, symbolRaw) {
     table.push([
       roundTo_(S, 2),
       roundTo_(sharesValue, 2),
-      roundTo_(optionsValue, 2),
+      ...individualSpreadValues,
       roundTo_(totalValue, 2),
       roundTo_(sharesROI, 4),
-      roundTo_(optionsROI, 4),
-      ...individualSpreadValues,
       ...individualSpreadROIs,
     ]);
   }
-
-  // For vline series bounds on $ chart (use Total $)
-  const totalYs = table.slice(1).map(r => toNum_(r[3])).filter(n => Number.isFinite(n));
-  const minY = totalYs.length ? Math.min(...totalYs) : 0;
-  const maxY = totalYs.length ? Math.max(...totalYs) : 0;
 
   // ── Write to sheet ──────────────────────────────────────────────────
   const startRow = cfg.tableStartRow; // default 50
   const startCol = cfg.tableStartCol;
 
   // Clear only the data output area (avoid nuking config)
-  sheet.getRange(startRow - 1, startCol, 3000, 30).clearContent();
+  sheet.getRange(startRow - 1, startCol, 3000, 50).clearContent();
 
   sheet.getRange(startRow - 1, startCol).setValue("Data (generated)").setFontWeight("bold");
   sheet.getRange(startRow, startCol, table.length, table[0].length).setValues(table);
@@ -362,17 +354,16 @@ function plotForSymbol_(ss, symbolRaw) {
 
   // Format ROI columns as percent
   if (table.length > 1) {
-    // columns: Price=0, Shares$=1, Options$=2, Total$=3, Shares%=4, Options%=5
-    sheet.getRange(startRow + 1, startCol + 4, table.length - 1, 2).setNumberFormat("0.00%");
+    // Shares % ROI column
+    sheet.getRange(startRow + 1, startCol + colSharesRoi, table.length - 1, 1).setNumberFormat("0.00%");
 
-    // Format individual spread ROI columns as percent (after spread value columns)
+    // Individual spread ROI columns
     if (spreadLabels.length > 0) {
-      const spreadRoiStartCol = startCol + baseHeaders.length + spreadLabels.length;
-      sheet.getRange(startRow + 1, spreadRoiStartCol, table.length - 1, spreadLabels.length).setNumberFormat("0.00%");
+      sheet.getRange(startRow + 1, startCol + colFirstSpreadRoi, table.length - 1, spreadLabels.length).setNumberFormat("0.00%");
     }
   }
 
-  // ── Charts: ensure FOUR charts exist (create missing; refresh existing preserving box) ──────────────────
+  // ── Charts: ensure charts exist ──────────────────────────────────────
   ensureFourCharts_(sheet, symbol, cfg, {
     startRow,
     startCol,
@@ -380,7 +371,12 @@ function plotForSymbol_(ss, symbolRaw) {
     headerRow,
     spreadLabels,
     spreadRoiLabels,
-    baseHeaderCount: baseHeaders.length,
+    colPrice,
+    colShares,
+    colFirstSpread,
+    colTotal,
+    colSharesRoi,
+    colFirstSpreadRoi,
   });
 }
 
@@ -389,7 +385,8 @@ function plotForSymbol_(ss, symbolRaw) {
    ========================================================= */
 
 function ensureFourCharts_(sheet, symbol, cfg, args) {
-  const { startRow, startCol, tableRows, headerRow, spreadLabels, spreadRoiLabels, baseHeaderCount } = args;
+  const { startRow, startCol, tableRows, headerRow, spreadLabels, spreadRoiLabels,
+          colPrice, colShares, colFirstSpread, colTotal, colSharesRoi, colFirstSpreadRoi } = args;
 
   const dollarTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " ($)";
   const pctTitle = (cfg.chartTitle || `${symbol} Portfolio Value by Price`) + " (%)";
@@ -418,15 +415,6 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
     }
   }
 
-  // Ranges:
-  // Dollars chart uses contiguous 4 columns: Price, Shares$, Options$, Total$
-  const dollarRange = sheet.getRange(startRow, startCol, tableRows, 4);
-
-  // Percent chart uses: Price + (Shares% ROI) + (Options% ROI)
-  const priceColRange = sheet.getRange(startRow, startCol, tableRows, 1);
-  const sharesPctRange = sheet.getRange(startRow, startCol + 4, tableRows, 1);
-  const optionsPctRange = sheet.getRange(startRow, startCol + 5, tableRows, 1);
-
   function rebuildChartPreserveBox_(oldChart, newBuilder, defaultRow, defaultCol) {
     if (!oldChart) {
       sheet.insertChart(newBuilder.setPosition(defaultRow, defaultCol, 0, 0).build());
@@ -442,50 +430,74 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
     sheet.insertChart(newBuilder.setPosition(anchorRow, anchorCol, offsetX, offsetY).build());
   }
 
-  // --- Build $ chart builder ---
+  // --- Build $ chart: Price, Shares $, [each spread $], Total $ ---
+  const priceColRange = sheet.getRange(startRow, startCol + colPrice, tableRows, 1);
+  const sharesColRange = sheet.getRange(startRow, startCol + colShares, tableRows, 1);
+  const totalColRange = sheet.getRange(startRow, startCol + colTotal, tableRows, 1);
+
   let dollarBuilder = sheet
     .newChart()
     .setChartType(Charts.ChartType.LINE)
-    .addRange(dollarRange)
+    .addRange(priceColRange)
+    .addRange(sharesColRange);
+
+  // Add each spread $ column
+  if (spreadLabels && spreadLabels.length > 0) {
+    const spreadsRange = sheet.getRange(startRow, startCol + colFirstSpread, tableRows, spreadLabels.length);
+    dollarBuilder = dollarBuilder.addRange(spreadsRange);
+  }
+
+  dollarBuilder = dollarBuilder
+    .addRange(totalColRange)
     .setOption("title", dollarTitle)
     .setOption("hAxis", { title: `${symbol} Price ($)` })
     .setOption("vAxis", { title: "Portfolio Value ($)" })
     .setOption("legend", { position: "right" })
     .setOption("curveType", "none");
 
-  // Ensure series labels come from header row:
-  const dollarSeries = {
-    0: { labelInLegend: headerRow[1] },
-    1: { labelInLegend: headerRow[2] },
-    2: { labelInLegend: headerRow[3] },
-  };
-
+  // Series labels: Shares $, [spread labels], Total $
+  const dollarSeries = { 0: { labelInLegend: "Shares $" } };
+  for (let i = 0; i < spreadLabels.length; i++) {
+    dollarSeries[i + 1] = { labelInLegend: spreadLabels[i] };
+  }
+  dollarSeries[spreadLabels.length + 1] = { labelInLegend: "Total $" };
   dollarBuilder = dollarBuilder.setOption("series", dollarSeries);
 
-  // --- Build % chart builder ---
+  // --- Build % chart: Price, Shares % ROI, [each spread % ROI] ---
+  const sharesRoiRange = sheet.getRange(startRow, startCol + colSharesRoi, tableRows, 1);
+
   let pctBuilder = sheet
     .newChart()
     .setChartType(Charts.ChartType.LINE)
     .addRange(priceColRange)
-    .addRange(sharesPctRange)
-    .addRange(optionsPctRange)
+    .addRange(sharesRoiRange);
+
+  // Add each spread ROI column
+  if (spreadLabels && spreadLabels.length > 0) {
+    const spreadsRoiRange = sheet.getRange(startRow, startCol + colFirstSpreadRoi, tableRows, spreadLabels.length);
+    pctBuilder = pctBuilder.addRange(spreadsRoiRange);
+  }
+
+  pctBuilder = pctBuilder
     .setOption("title", pctTitle)
     .setOption("hAxis", { title: `${symbol} Price ($)` })
     .setOption("vAxis", { title: "% Return (ROI)", format: "percent" })
     .setOption("legend", { position: "right" })
-    .setOption("curveType", "none")
-    .setOption("series", {
-      0: { labelInLegend: headerRow[4] },
-      1: { labelInLegend: headerRow[5] },
-    });
+    .setOption("curveType", "none");
 
-  // --- Build individual spreads value chart builder ---
+  // Series labels: Shares % ROI, [spread labels]
+  const pctSeries = { 0: { labelInLegend: "Shares % ROI" } };
+  for (let i = 0; i < spreadLabels.length; i++) {
+    pctSeries[i + 1] = { labelInLegend: spreadLabels[i] };
+  }
+  pctBuilder = pctBuilder.setOption("series", pctSeries);
+
+  // --- Build individual spreads value chart (unchanged) ---
   let spreadsBuilder = null;
   let spreadsRoiBuilder = null;
 
   if (spreadLabels && spreadLabels.length > 0) {
-    // Individual spread value columns start after base headers
-    const spreadsRange = sheet.getRange(startRow, startCol + baseHeaderCount, tableRows, spreadLabels.length);
+    const spreadsRange = sheet.getRange(startRow, startCol + colFirstSpread, tableRows, spreadLabels.length);
 
     spreadsBuilder = sheet
       .newChart()
@@ -498,16 +510,14 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
       .setOption("legend", { position: "right" })
       .setOption("curveType", "none");
 
-    // Set series labels from spread labels
     const spreadsSeries = {};
     for (let i = 0; i < spreadLabels.length; i++) {
       spreadsSeries[i] = { labelInLegend: spreadLabels[i] };
     }
     spreadsBuilder = spreadsBuilder.setOption("series", spreadsSeries);
 
-    // --- Build individual spreads ROI chart builder ---
-    // ROI columns start after spread value columns
-    const spreadsRoiRange = sheet.getRange(startRow, startCol + baseHeaderCount + spreadLabels.length, tableRows, spreadLabels.length);
+    // --- Build individual spreads ROI chart (unchanged) ---
+    const spreadsRoiRange = sheet.getRange(startRow, startCol + colFirstSpreadRoi, tableRows, spreadLabels.length);
 
     spreadsRoiBuilder = sheet
       .newChart()
@@ -520,7 +530,6 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
       .setOption("legend", { position: "right" })
       .setOption("curveType", "none");
 
-    // Set series labels (without the " %" suffix for cleaner legend)
     const spreadsRoiSeries = {};
     for (let i = 0; i < spreadLabels.length; i++) {
       spreadsRoiSeries[i] = { labelInLegend: spreadLabels[i] };
@@ -529,11 +538,6 @@ function ensureFourCharts_(sheet, symbol, cfg, args) {
   }
 
   // Create / rebuild while preserving chart placement
-  // Default positions if missing:
-  //   $ chart: top-left
-  //   % chart: below it
-  //   spreads $ chart: below % chart
-  //   spreads ROI chart: below spreads $ chart
   rebuildChartPreserveBox_(dollarChart, dollarBuilder, 1, 1);
   rebuildChartPreserveBox_(pctChart, pctBuilder, 15, 1);
   if (spreadsBuilder) {

@@ -394,7 +394,7 @@ function recommendIronCondorCloseDebit(
  * @param {number} qty - Position quantity (positive=long, negative=short)
  * @param {number} avgMinutesToExecute - Patience: 0=aggressive, 60=patient
  * @param {Array} [_labels] - Optional; ignored, for spreadsheet readability
- * @return {number} Credit (positive) if closing long, Debit (negative) if closing short, or error string
+ * @return {number} Always positive premium price to close the leg, or error string
  * @customfunction
  */
 function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecute, _labels) {
@@ -403,8 +403,8 @@ function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecu
    *   Spreadsheet: =recommendClose("TSLA", "2028-06-16", 450, "Call", 7, 60)
    *   Spreadsheet: =recommendClose($A$1:$A3, "2028-06-16", 450, "Call", -7, 60)  // range for merged/grouped symbols
    *
-   * Closing a LONG position (qty > 0): SELL to close → returns credit (positive)
-   * Closing a SHORT position (qty < 0): BUY to close → returns debit (negative)
+   * Always returns positive premium value for consistent Gain formula:
+   *   Gain = SUMPRODUCT(Qty, RecClose - Price) * 100
    */
   const parsed = normalizeLegInputs_(symbol, expiration, strike, type, qty, avgMinutesToExecute);
   if (parsed.error) return parsed.error;
@@ -415,13 +415,13 @@ function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecu
   if (!hasBidAsk_(quote)) return "#No Data:" + sym + " " + exp + " " + k + " " + optType;
 
   if (position > 0) {
-    // Long position: SELL to close → credit (positive)
+    // Long position: SELL to close → return sell price
     const sellLimit = getRealisticSellPrice_(quote, alpha);
     return roundTo_(sellLimit, 2);
   } else {
-    // Short position: BUY to close → debit (negative)
+    // Short position: BUY to close → return buy price (positive, for consistent Gain formula)
     const buyLimit = getRealisticBuyPrice_(quote, alpha);
-    return roundTo_(-buyLimit, 2);
+    return roundTo_(buyLimit, 2);
   }
 }
 

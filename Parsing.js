@@ -495,7 +495,16 @@ function detectPositionType_(legs) {
   if (legs.length === 4) {
     const calls = legs.filter(l => l.type === "Call");
     const puts = legs.filter(l => l.type === "Put");
-    if (calls.length === 2 && puts.length === 2) return "iron-condor";
+    if (calls.length === 2 && puts.length === 2) {
+      // Distinguish iron-butterfly vs iron-condor
+      // Iron butterfly: short put and short call have the same strike
+      const shortCall = calls.find(l => l.qty < 0);
+      const shortPut = puts.find(l => l.qty < 0);
+      if (shortCall && shortPut && shortCall.strike === shortPut.strike) {
+        return "iron-butterfly";
+      }
+      return "iron-condor";
+    }
     return null;
   }
 
@@ -970,6 +979,20 @@ function test_detectPositionType_ironCondor() {
     "IC: 2 puts + 2 calls"
   );
   Logger.log("All detectPositionType iron condor tests passed");
+}
+
+function test_detectPositionType_ironButterfly() {
+  assertEqual(
+    detectPositionType_([
+      { strike: 350, type: "Put", qty: 5 },
+      { strike: 400, type: "Put", qty: -5 },
+      { strike: 400, type: "Call", qty: -5 },
+      { strike: 450, type: "Call", qty: 5 },
+    ]),
+    "iron-butterfly",
+    "IB: short put and short call at same strike"
+  );
+  Logger.log("All detectPositionType iron butterfly tests passed");
 }
 
 function test_parsePositionsForSymbol_stock() {

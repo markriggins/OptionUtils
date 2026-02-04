@@ -12,7 +12,8 @@ function onOpen() {
     .addItem('PlotPortfolioValueByPrice', 'PlotPortfolioValueByPrice')
     .addItem('Run SpreadFinder', 'runSpreadFinder')
     .addItem('View SpreadFinder Graphs', 'showSpreadFinderGraphs')
-
+    .addSeparator()
+    .addItem('Import Transactions from E*Trade', 'importEtradeTransactions')
     .addToUi();
 }
 
