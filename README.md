@@ -57,8 +57,9 @@ This is beta code, so please keep your expectations low.  But I wrote it for mys
 ![Authorization Dialog](images/authorization-dialog.png)
 
 6. You will be prompted for Authorization from Google. Which for now, can read any/all files in your google drive so you can upload more option prices and your own portfolios;  which is a bit scary.  But the source code is available here: https://github.com/markriggins/OptionUtils
-If enough users are interested in using it, I can add a file chooser to the app so you can pickup specific files from your local hard drive and no Google permissions will be necessary.  or each option, it gives a recommended price for purchasing it, and for selling it, which has proven to be useful.  Paying full Ask can be expensive, but super low bidding can be ineffective. 
+If enough users are interested in using it, I can add a file chooser to the app so you can pickup specific files from your local hard drive and no Google permissions will be necessary.  
 7. Once authorized re-run Initialize/Clear Project and look for more detailed instructions in the README sheet
+8. For each option, it gives a recommended price for purchasing it, and for selling it, which has proven to be useful.  Paying full Ask can be expensive, but super low bidding can be ineffective.
 
 ---
 
@@ -69,38 +70,9 @@ The library architecture means:
 - Your spreadsheet has thin wrapper stubs that delegate to the library
 - When the library is updated, you automatically get the latest version (after reload)
 
-### Why Stubs Are Needed
-
-Google Apps Script has limitations that require local wrapper functions:
-- **Custom functions** (cell formulas like `=XLookupByKeys(...)`) must be defined locally
-- **Triggers** (`onOpen`, `onEdit`) must be defined locally
-- **Dialog callbacks** (`google.script.run`) must call local functions
-
-The stubs in `Code.gs` simply forward calls to `SpreadFinder.functionName()`.
-
----
-
-## Features
-
-### Portfolio Value Charts
-
-For each symbol, generates a `<SYMBOL>PortfolioValueByPrice` tab with:
-- Config table for price range settings
-- Data table with value calculations
-- Four charts: Portfolio $ value, Portfolio % ROI, Individual spreads $, Individual spreads %
-
-### SpreadFinder
-
-Scans option prices to find attractive bull call spread opportunities:
-1. Run **OptionTools > Run SpreadFinder** to analyze spreads
-2. Run **OptionTools > View SpreadFinder Graphs** for interactive charts
-3. Click a bubble to see details; double-click to open in OptionStrat
-
-Configure filters on the SpreadFinderConfig sheet (symbol, strike range, min ROI, etc.) then re-run to see filtered results.
-
 ### Custom Functions
 
-Use these in cell formulas:
+The following functions are defined for use in Google Sheets:
 
 | Function | Description |
 |----------|-------------|
@@ -123,88 +95,15 @@ Use these in cell formulas:
 4. Save to Google Drive under `<DataFolder>/OptionPrices/`
 5. Run **OptionTools > Refresh Option Prices**
 
-### Transactions from E*Trade
+### Portfolio and Transactions from E*Trade
 
-1. Download transaction CSV from E*Trade
+1. Download transaction and portfolio CSV files from E*Trade
 2. Save to Google Drive under `<DataFolder>/Etrade/`
 3. Run **OptionTools > Import Portfolio from E*Trade**
 
----
-
-## Supported Positions
-
-That tab contains:
-- A per-symbol Config table
-- A generated data table
-- A line chart of **Price vs Portfolio Value**
-
-### Supported positions
+## Supported positions
 - Common stock
 - Bull call spreads
-
-### Tables vs Named Ranges (important)
-
-Google Sheets **Tables** are not readable by Apps Script.
-
-**Convention used:**
-- Table name: `BullCallSpreads`
-- Named range: `BullCallSpreadsTable`
-
-The script:
-1. Tries `BullCallSpreads`
-2. Falls back to `BullCallSpreadsTable`
-
-If a Table exists but the Named Range does not, the script tells you exactly what to create.
-
----
-
-## Menus and Triggers
-
-`onOpen.js` wires menu items into the spreadsheet UI.
-
-`PlotPortfolioValueByPrice` also installs an `onEdit(e)` trigger that:
-- Rebuilds only when a Config table is edited
-- Ignores all other edits
-
----
-
-## Design Philosophy
-
-- **Spreadsheets are the source of truth**
-- **Scripts accelerate, not obscure**
-- **Explicit > magical**
-- **Performance matters**
-- **Fill realism matters**
-
-This repo is opinionated — deliberately.
-
----
-
-## Apps Script Library
-
-Available as a Google Apps Script library:
-
-- **Library name:** SpreadFinder
-- **Script ID:** `1qvAlZ99zluKSr3ws4NsxH8xXo1FncbWzu6Yq6raBumHdCLpLDaKveM0T`
-- **URL:** https://script.google.com/macros/library/d/1qvAlZ99zluKSr3ws4NsxH8xXo1FncbWzu6Yq6raBumHdCLpLDaKveM0T/58
-
----
-
-## Development
-
-### Pushing Changes to the Library
-
-```bash
-# Push local changes to Apps Script
-clasp push
-
-# Pull changes from Apps Script
-clasp pull
-```
-
-### Testing
-
-Run `runAllTests()` or individual `test_*` functions in the Apps Script editor.
 
 ---
 
@@ -220,4 +119,4 @@ Use it, fork it, adapt it, improve it.
 
 **Mark Riggins**
 
-Built to support real-world option portfolios where Google Sheets remains the fastest modeling surface.
+Built to support real-world option portfolios where Google Sheets can be a convenient tool for modeling.
