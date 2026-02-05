@@ -57,12 +57,15 @@ function calculateExpectedGain(longMid, shortMid, longStrike, shortStrike, short
 function runSpreadFinder() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  // Ensure config and results sheets exist
+  // Ensure config sheet exists, load config
   const configSheet = ensureSpreadFinderConfigSheet_(ss);
-  const sheet = ensureSpreadsSheet_(ss);
-
-  // Load config from config sheet
   const config = loadSpreadFinderConfig_(configSheet);
+
+  // Name results sheet after symbol(s)
+  const spreadsSheetName = config.symbols && config.symbols.length > 0
+    ? config.symbols.join(",") + "Spreads"
+    : SPREADS_SHEET;
+  const sheet = ensureSpreadsSheet_(ss, spreadsSheetName);
   Logger.log("SpreadFinder config: " + JSON.stringify(config));
 
   // Load option data
@@ -115,6 +118,7 @@ function runSpreadFinder() {
     const expDate = new Date(s.expiration);
     // Mark conflicts as held (but keep them in results)
     s.held = conflicts.has(`${s.symbol}|${s.lowerStrike}|${s.expiration}`);
+    if (config.symbols && !config.symbols.includes(s.symbol)) return false;
     return s.debit > 0 &&
       s.debit <= config.maxDebit &&
       s.roi >= config.minROI &&
@@ -161,6 +165,7 @@ function ensureSpreadFinderConfigSheet_(ss) {
   // Always recreate config to ensure latest settings
   const configData = [
     ["Setting", "Value", "Description"],
+    ["symbol", "TSLA", "Comma-separated symbols to analyze (blank=all)"],
     ["minSpreadWidth", 20, "Minimum spread width in dollars"],
     ["maxSpreadWidth", 150, "Maximum spread width in dollars"],
     ["minOpenInterest", 10, "Minimum open interest for both legs"],
@@ -212,10 +217,11 @@ function ensureSpreadFinderConfigSheet_(ss) {
 /**
  * Ensures the Spreads results sheet exists.
  */
-function ensureSpreadsSheet_(ss) {
-  let sheet = ss.getSheetByName(SPREADS_SHEET);
+function ensureSpreadsSheet_(ss, name) {
+  name = name || SPREADS_SHEET;
+  let sheet = ss.getSheetByName(name);
   if (!sheet) {
-    sheet = ss.insertSheet(SPREADS_SHEET);
+    sheet = ss.insertSheet(name);
   }
   return sheet;
 }
@@ -270,6 +276,15 @@ function loadSpreadFinderConfig_(sheet) {
   if (!config.outlookFuturePrice || !config.outlookConfidence) {
     config.outlookFuturePrice = 0;
     config.outlookConfidence = 0;
+  }
+
+  // Read symbol filter (string, not in numeric defaults)
+  for (const row of data) {
+    const setting = (row[0] || "").toString().trim();
+    const value = (row[1] || "").toString().trim();
+    if (setting === "symbol" && value) {
+      config.symbols = value.split(",").map(s => s.trim().toUpperCase()).filter(s => s);
+    }
   }
 
   // Calculate min/max expiration dates
@@ -800,7 +815,12 @@ function showSpreadFinderGraphs() {
  function getSpreadFinderGraphData() {
    Logger.log("getSpreadFinderGraphData");
    const ss = SpreadsheetApp.getActiveSpreadsheet();
-   const sheet = ss.getSheetByName(SPREADS_SHEET);
+   const configSheet = ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
+   const config = configSheet ? loadSpreadFinderConfig_(configSheet) : {};
+   const spreadsSheetName = config.symbols && config.symbols.length > 0
+     ? config.symbols.join(",") + "Spreads"
+     : SPREADS_SHEET;
+   const sheet = ss.getSheetByName(spreadsSheetName);
    const lastRow = sheet.getLastRow();
    const headerRow = 2; // Row 1=timestamp, Row 2=headers
    const startRow = 3;  // Row 3+=data
