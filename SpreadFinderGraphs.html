@@ -93,12 +93,12 @@
         </div>
         <div class="modal-body">
             <h3>Understanding the Charts</h3>
-            <p>Each bubble represents a potential <strong>bull call spread</strong> you could purchase. The bubbles are color-coded by "fitness score" to help you quickly identify the best opportunities:</p>
+            <p>Each bubble represents a potential <strong>bull call spread</strong> you could purchase. The bubbles are color-coded by fitness score percentile to help you quickly identify the best opportunities:</p>
             <ul>
-                <li><span class="color-sample color-green"></span><strong>Dark Green (large)</strong> — Fitness ≥ 4.0 — Best opportunities with favorable liquidity and tight bid/ask spreads</li>
-                <li><span class="color-sample color-light-green"></span><strong>Light Green</strong> — Fitness 3.0–4.0 — Good opportunities</li>
-                <li><span class="color-sample color-yellow"></span><strong>Yellow</strong> — Fitness 2.0–3.0 — Moderate opportunities</li>
-                <li><span class="color-sample color-red"></span><strong>Red</strong> — Fitness < 2.0 — Lower quality (poor liquidity or wide spreads)</li>
+                <li><span class="color-sample color-green"></span><strong>Dark Green (large)</strong> — Top 10% — Best opportunities with favorable liquidity and tight bid/ask spreads</li>
+                <li><span class="color-sample color-light-green"></span><strong>Light Green</strong> — Top 10–40% — Good opportunities</li>
+                <li><span class="color-sample color-yellow"></span><strong>Yellow</strong> — Top 40–75% — Moderate opportunities</li>
+                <li><span class="color-sample color-red"></span><strong>Red</strong> — Bottom 25% — Lower quality (poor liquidity or wide spreads)</li>
             </ul>
 
             <h3>Selecting a Spread</h3>
@@ -185,6 +185,7 @@
 
     google.charts.load('current', {'packages':['corechart']});
     var rawData = [], chartD, chartS, dtD, dtS, strikeYMode = 'roi';
+    var fitnessPercentiles = { p90: 4, p60: 3, p25: 2 }; // Default thresholds, recalculated from data
 
     // FIX: title removed here to stop double titles
     var baseOpts = {
@@ -237,8 +238,19 @@
       if (r.held) {
         return 'point { size: 5; fill-color: #9e9e9e; opacity: 0.35; stroke-width: 1; stroke-color: #757575; }';
       }
-      var color = r.fitness >= 4.0 ? '#2e7d32' : (r.fitness >= 3.0 ? '#66bb6a' : (r.fitness >= 2.0 ? '#ffeb3b' : '#f44336'));
-      return 'point { size: ' + (r.fitness >= 4.0 ? 9 : 4) + '; fill-color: ' + color + '; stroke-width: 1; stroke-color: #333; }';
+      // Use percentile-based thresholds: top 10% = dark green large, next 30% = light green, next 35% = yellow, bottom 25% = red
+      var f = r.fitness;
+      var color, size;
+      if (f >= fitnessPercentiles.p90) {
+        color = '#2e7d32'; size = 9; // Dark green, large - top 10%
+      } else if (f >= fitnessPercentiles.p60) {
+        color = '#66bb6a'; size = 5; // Light green - next 30%
+      } else if (f >= fitnessPercentiles.p25) {
+        color = '#ffeb3b'; size = 4; // Yellow - next 35%
+      } else {
+        color = '#f44336'; size = 4; // Red - bottom 25%
+      }
+      return 'point { size: ' + size + '; fill-color: ' + color + '; stroke-width: 1; stroke-color: #333; }';
     }
 
     function buildStrikeTable(dataArray) {
@@ -261,9 +273,28 @@
       redrawChart('strike');
     }
 
+    function calculatePercentile(arr, p) {
+      if (arr.length === 0) return 0;
+      var sorted = arr.slice().sort(function(a, b) { return a - b; });
+      var idx = (p / 100) * (sorted.length - 1);
+      var lower = Math.floor(idx);
+      var upper = Math.ceil(idx);
+      if (lower === upper) return sorted[lower];
+      return sorted[lower] + (idx - lower) * (sorted[upper] - sorted[lower]);
+    }
+
     function draw(dataArray) {
       rawData = dataArray;
       if (!dataArray || dataArray.length === 0) return;
+
+      // Calculate fitness percentile thresholds from actual data
+      var fitnessValues = dataArray.filter(function(r) { return !r.held; }).map(function(r) { return r.fitness; });
+      if (fitnessValues.length > 0) {
+        fitnessPercentiles.p90 = calculatePercentile(fitnessValues, 90); // Top 10%
+        fitnessPercentiles.p60 = calculatePercentile(fitnessValues, 60); // Top 40%
+        fitnessPercentiles.p25 = calculatePercentile(fitnessValues, 25); // Top 75%
+      }
+
       dtD = new google.visualization.DataTable();
       dtD.addColumn('number', 'X'); dtD.addColumn('number', 'ROI');
       dtD.addColumn({type: 'string', role: 'tooltip'}); dtD.addColumn({type: 'string', role: 'style'});
