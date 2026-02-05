@@ -17,10 +17,6 @@ TransactionDate,TransactionType,SecurityType,Symbol,Quantity,Amount,Price,Commis
 01/22/26,Bought To Cover,OPTN,TSLA Feb 06 '26 $450 Put,1,-1909.51,19.09,0.51,TSLA Feb 06 '26 $450 Put
 01/22/26,Bought To Cover,OPTN,TSLA Feb 06 '26 $450 Call,1,-1767.51,17.67,0.51,TSLA Feb 06 '26 $450 Call
 01/22/26,Sold To Close,OPTN,TSLA Feb 06 '26 $580 Call,-1,29.49,0.3,0.51,TSLA Feb 06 '26 $580 Call
-01/21/26,Bought To Cover,OPTN,AMZN Feb 06 '26 $260 Call,10,-1026.64,1.02,6.64,AMZN Feb 06 '26 $260 Call
-01/21/26,Sold To Close,OPTN,AMZN Feb 06 '26 $275 Call,-10,313.33,0.32,6.64,AMZN Feb 06 '26 $275 Call
-01/21/26,Sold To Close,OPTN,AMZN Feb 06 '26 $220 Put,-10,5993.33,6,6.64,AMZN Feb 06 '26 $220 Put
-01/21/26,Bought To Cover,OPTN,AMZN Feb 06 '26 $235 Put,10,-13276.64,13.27,6.64,AMZN Feb 06 '26 $235 Put
 01/20/26,Bought To Open,OPTN,TSLA Dec 15 '28 $300 Call,7,-156454.65,223.5,4.65,TSLA Dec 15 '28 $300 Call
 01/20/26,Sold Short,OPTN,TSLA Dec 15 '28 $440 Call,-7,116545.33,166.5,4.65,TSLA Dec 15 '28 $440 Call
 01/16/26,Bought To Open,OPTN,TSLA Dec 15 '28 $400 Call,8,-150445.31,188.05,5.31,TSLA Dec 15 '28 $400 Call
@@ -28,11 +24,7 @@ TransactionDate,TransactionType,SecurityType,Symbol,Quantity,Amount,Price,Commis
 01/14/26,Bought To Open,OPTN,TSLA Dec 15 '28 $400 Call,5,-94878.32,189.75,3.32,TSLA Dec 15 '28 $400 Call
 01/14/26,Sold Short,OPTN,TSLA Dec 15 '28 $550 Call,-5,72371.66,144.75,3.32,TSLA Dec 15 '28 $550 Call
 01/12/26,Sold Short,OPTN,TSLA Dec 15 '28 $450 Call,-7,122019.33,174.32,4.65,TSLA Dec 15 '28 $450 Call
-01/12/26,Sold Short,OPTN,AMZN Feb 06 '26 $235 Put,-10,4953.33,4.96,6.64,AMZN Feb 06 '26 $235 Put
-01/12/26,Bought To Open,OPTN,AMZN Feb 06 '26 $220 Put,10,-1916.64,1.91,6.64,AMZN Feb 06 '26 $220 Put
 01/12/26,Bought To Open,OPTN,TSLA Dec 15 '28 $350 Call,7,-147928.65,211.32,4.65,TSLA Dec 15 '28 $350 Call
-01/12/26,Sold Short,OPTN,AMZN Feb 06 '26 $260 Call,-10,5383.33,5.39,6.64,AMZN Feb 06 '26 $260 Call
-01/12/26,Bought To Open,OPTN,AMZN Feb 06 '26 $275 Call,10,-2146.64,2.14,6.64,AMZN Feb 06 '26 $275 Call
 01/09/26,Sold Short,OPTN,TSLA Dec 15 '28 $700 Call,-2,23412.66,117.07,1.33,TSLA Dec 15 '28 $700 Call
 01/09/26,Bought To Open,OPTN,TSLA Dec 15 '28 $500 Call,2,-32215.33,161.07,1.33,TSLA Dec 15 '28 $500 Call
 01/09/26,Sold Short,OPTN,TSLA Dec 15 '28 $550 Call,-8,116066.66,145.09,5.31,TSLA Dec 15 '28 $550 Call
