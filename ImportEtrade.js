@@ -19,7 +19,7 @@
  */
 function importEtradeTransactions(fileName, folderPath) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const path = folderPath || "Investing/Data/Etrade";
+  const path = folderPath || getConfigValue_(ss, "DataFolder", "OptionUtils/DATA") + "/Etrade";
 
   // Navigate to folder
   const root = DriveApp.getRootFolder();
@@ -50,19 +50,32 @@ function importEtradeTransactions(fileName, folderPath) {
     return;
   }
 
-  // If Legs table exists, process only the most recent CSV; otherwise process all
-  const csvFiles = hasLegsTable ? [txnFiles[0]] : txnFiles;
-  Logger.log(`Processing ${csvFiles.length} of ${txnFiles.length} transaction CSV(s) (Legs table ${hasLegsTable ? "exists" : "not found"})`);
+  // Process all transaction CSVs, dedup across file boundaries (overlapping date ranges)
+  Logger.log(`Processing ${txnFiles.length} transaction CSV(s)`);
 
-  // Parse transactions from selected CSVs
   let transactions = [];
   let stockTxns = [];
-  for (const file of csvFiles) {
+  const seenTxns = new Set();
+  const seenStockTxns = new Set();
+
+  for (const file of txnFiles) {
     const csvContent = file.getBlob().getDataAsString();
     const result = parseEtradeCsv_(csvContent);
-    transactions = transactions.concat(result.transactions);
-    stockTxns = stockTxns.concat(result.stockTxns);
-    Logger.log(`  ${file.getName()}: ${result.transactions.length} transactions`);
+    let txnAdded = 0, txnDupes = 0;
+    for (const txn of result.transactions) {
+      const key = `${txn.date}|${txn.txnType}|${txn.ticker}|${txn.expiration}|${txn.strike}|${txn.optionType}|${txn.qty}|${txn.price}|${txn.amount}`;
+      if (seenTxns.has(key)) { txnDupes++; continue; }
+      seenTxns.add(key);
+      transactions.push(txn);
+      txnAdded++;
+    }
+    for (const stk of result.stockTxns) {
+      const key = `${stk.date}|${stk.ticker}|${stk.qty}|${stk.price}|${stk.amount}`;
+      if (seenStockTxns.has(key)) continue;
+      seenStockTxns.add(key);
+      stockTxns.push(stk);
+    }
+    Logger.log(`  ${file.getName()}: ${txnAdded} transactions (${txnDupes} dupes skipped)`);
   }
 
   if (transactions.length === 0) {
@@ -89,7 +102,7 @@ function importEtradeTransactions(fileName, folderPath) {
   writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices);
 
   // Report
-  const fileNames = csvFiles.map(f => f.getName()).join(", ");
+  const fileNames = txnFiles.map(f => f.getName()).join(", ");
   SpreadsheetApp.getUi().alert(
     `Import Complete\n\n` +
     `Files: ${fileNames}\n` +
@@ -247,6 +260,22 @@ function parseCsvLine_(line) {
   }
   result.push(current.trim());
   return result;
+}
+
+/**
+ * Converts an expiration (Date or string) to the M/D/YYYY format used by closing price keys.
+ */
+function formatExpirationForKey_(exp) {
+  if (exp instanceof Date) {
+    return `${exp.getMonth() + 1}/${exp.getDate()}/${exp.getFullYear()}`;
+  }
+  const s = String(exp || "").trim();
+  // Already in M/D/YYYY format
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) return s;
+  // yyyy-MM-dd → M/D/YYYY
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return `${parseInt(m[2], 10)}/${parseInt(m[3], 10)}/${m[1]}`;
+  return s;
 }
 
 /**
@@ -773,6 +802,19 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
         const rowNum = startRow + leg.row;
         if (idxQty >= 0) sheet.getRange(rowNum, startCol + idxQty).setValue(leg.qty);
         if (idxPrice >= 0) sheet.getRange(rowNum, startCol + idxPrice).setValue(roundTo_(leg.price, 2));
+
+        // Write closing price if available and not already filled
+        if (idxClosed >= 0 && leg.symbol && leg.expiration && leg.strike && leg.type && leg.type !== "Stock") {
+          const existingVal = sheet.getRange(rowNum, startCol + idxClosed).getValue();
+          if (existingVal === "" || existingVal == null) {
+            const expStr = formatExpirationForKey_(leg.expiration);
+            const key = `${leg.symbol}|${expStr}|${leg.strike}|${leg.type}`;
+            const closePrice = closingPrices.get(key);
+            if (closePrice != null) {
+              sheet.getRange(rowNum, startCol + idxClosed).setValue(closePrice);
+            }
+          }
+        }
       }
     }
     // Update LastTxnDate on the first row of the group

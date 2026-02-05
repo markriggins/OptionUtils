@@ -152,7 +152,11 @@ function refreshOptionPrices() {
  *   filesSkippedNoExp: number
  * }
  */
-function findInputFiles_(path = "Investing/Data/OptionPrices") {
+function findInputFiles_(path) {
+  if (!path) {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    path = getConfigValue_(ss, "DataFolder", "OptionUtils/DATA") + "/OptionPrices";
+  }
   // ---- Locate folder ----
   const root = DriveApp.getRootFolder();
   let opFolder = root;

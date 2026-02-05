@@ -1,0 +1,3 @@
+TransactionDate,TransactionType,SecurityType,Symbol,Quantity,Amount,Price,Commission,Description
+02/04/2026,Bought To Open,OPTN,TSLA Dec 15 '28 $500 Call,10,127900.00,127.90,0.00,OPENING
+02/04/2026,Sold Short,OPTN,TSLA Dec 15 '28 $600 Call,-10,-105900.00,105.90,0.00,OPENING
