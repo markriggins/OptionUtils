@@ -115,7 +115,7 @@
             <h3>Key Metrics</h3>
             <ul>
                 <li><strong>ROI</strong> — Maximum return if stock closes above upper strike at expiration</li>
-                <li><strong>Expected ROI</strong> — Probability-weighted ROI using a prob-of-touch model</li>
+                <li><strong>Expected ROI</strong> — Probability-weighted ROI based on the chance the stock reaches the upper strike. Accounts for both: (1) expiring fully in-the-money at max profit, or (2) price touching the upper strike earlier, allowing you to exit early yet still capture ~80% of gains</li>
                 <li><strong>Fitness</strong> — Combined score considering ROI, liquidity, and bid/ask tightness</li>
                 <li><strong>Tightness</strong> — Bid/ask spread as % of mid price (lower = easier fills)</li>
             </ul>
@@ -134,7 +134,7 @@
 
     <div class="chart-card">
         <div class="chart-header">
-            <span class="chart-title" data-help="Controls&#10;• Zoom: click-drag area&#10;• Pan: arrow keys&#10;• Reset: right-click">Strike vs <span id="strike-y-label">ROI</span></span>
+            <span class="chart-title" data-help="Controls&#10;• Zoom: click-drag area&#10;• Pan: arrow keys&#10;• Reset: right-click">Strike vs <span id="strike-y-label">ExpROI</span></span>
             <button class="toggle-btn" onclick="toggleStrikeY()">ROI / ExpROI</button>
             <button class="toggle-btn" onclick="toggleChart('chart_strike')">Hide/Show</button>
         </div>
@@ -155,7 +155,7 @@
             <div class="metric-box" data-help="Cost to enter."><span class="label">Debit</span><span id="det-debit" class="value"></span></div>
             <div class="metric-box" data-help="Width minus Debit."><span class="label">Max Profit</span><span id="det-maxp" class="value"></span></div>
             <div class="metric-box" data-help="Max profit / debit cost. Higher = more return per dollar risked."><span class="label">ROI</span><span id="det-roi" class="value"></span></div>
-            <div class="metric-box" data-help="Probability-weighted ROI using prob-of-touch model."><span class="label">Exp ROI</span><span id="det-eroi" class="value"></span></div>
+            <div class="metric-box" data-help="Expected ROI based on the probability that the stock price will reach the upper strike before expiration. This accounts for: (1) the chance the spread expires fully in-the-money at max profit, or (2) the price touches the upper strike earlier, allowing you to exit early yet still capture ~80% of gains. Higher = better risk-adjusted return."><span class="label">Exp ROI</span><span id="det-eroi" class="value"></span></div>
             <div class="metric-box" data-help="Days to expire."><span class="label">DTE</span><span id="det-dte" class="value"></span></div>
             <div class="metric-box" data-help="Implied volatility of the lower (long) leg."><span class="label">IV</span><span id="det-iv" class="value"></span></div>
             <div class="metric-box" data-help="Buy-side Delta."><span class="label">L-Delta</span><span id="det-ld" class="value"></span></div>
@@ -184,7 +184,7 @@
     });
 
     google.charts.load('current', {'packages':['corechart']});
-    var rawData = [], chartD, chartS, dtD, dtS, strikeYMode = 'roi';
+    var rawData = [], chartD, chartS, dtD, dtS, strikeYMode = 'expectedROI';
     var fitnessPercentiles = { p90: 4, p60: 3, p25: 2 }; // Default thresholds, recalculated from data
 
     // FIX: title removed here to stop double titles
