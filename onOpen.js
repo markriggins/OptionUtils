@@ -169,8 +169,8 @@ function initializeProject() {
 }
 
 /**
- * Creates a sample Portfolio sheet with a TSLA bull call spread.
- * Use this to explore the portfolio modeling features before importing real data.
+ * Loads sample portfolio data from the sample CSV files in GitHub.
+ * Downloads the sample files if not present, then imports them.
  */
 function loadSamplePortfolio() {
   const ss = SpreadsheetApp.getActive();
@@ -185,41 +185,58 @@ function loadSamplePortfolio() {
     );
     if (resp !== ui.Button.OK) return;
     ss.deleteSheet(existing);
+    // Also remove the named range
+    const nr = ss.getNamedRanges().find(r => r.getName() === "PortfolioTable");
+    if (nr) nr.remove();
   }
 
-  // Create Portfolio sheet
-  const sheet = ss.insertSheet("Portfolio");
-  const headers = ["Symbol", "Group", "Strategy", "Strike", "Type", "Expiration", "Qty", "Price", "Investment", "Rec Close", "Closed", "Gain", "LastTxnDate", "Link"];
+  // Ensure sample CSV files are downloaded to Drive
+  const dataFolderPath = getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA");
+  let etradeFolder;
+  try {
+    let driveFolder = DriveApp.getRootFolder();
+    for (const part of dataFolderPath.split("/")) {
+      driveFolder = getOrCreateFolder_(driveFolder, part);
+    }
+    etradeFolder = getOrCreateFolder_(driveFolder, "Etrade");
 
-  // Header row
-  const headerRange = sheet.getRange(1, 1, 1, headers.length);
-  headerRange.setValues([headers]);
-  headerRange.setBackground("#93c47d");
-  headerRange.setFontWeight("bold");
+    const sampleFiles = [
+      { name: "PortfolioDownload-sample.csv", path: "DATA/Etrade/PortfolioDownload-sample.csv" },
+      { name: "DownloadTxnHistory-sample.csv", path: "DATA/Etrade/DownloadTxnHistory-sample.csv" },
+    ];
 
-  // Sample data: TSLA bull call spread
-  const sampleData = [
-    ["TSLA", 1, "bull-call-spread", 500, "Call", "12/15/2028", 10, 127.90, "", "", "", "", "", ""],
-    ["",      "", "",                 600, "Call", "12/15/2028", -10, 105.90, "", "", "", "", "", ""],
-  ];
-  sheet.getRange(2, 1, sampleData.length, headers.length).setValues(sampleData);
+    for (const sf of sampleFiles) {
+      // Always refresh sample files to get latest from GitHub
+      const existingFile = findFileByName_(etradeFolder, sf.name);
+      if (existingFile) existingFile.setTrashed(true);
+      const csv = fetchGitHubFile_(sf.path);
+      if (csv) {
+        etradeFolder.createFile(sf.name, csv, MimeType.CSV);
+      } else {
+        throw new Error("Could not download " + sf.name + " from GitHub");
+      }
+    }
+  } catch (e) {
+    ui.alert("Error setting up sample files:\n" + e.message);
+    return;
+  }
 
-  // Named range
-  ss.setNamedRange("PortfolioTable", sheet.getRange("A:N"));
-
-  // Filter
-  sheet.getRange("A:N").createFilter();
-
-  // Clip wrap
-  sheet.getRange("A:N").setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
-
-  // Auto-resize
-  sheet.autoResizeColumns(1, headers.length);
+  // Import the sample portfolio using the standard import function
+  // Pass the specific sample filenames to import
+  try {
+    importEtradePortfolioFromFolder_(etradeFolder, "DownloadTxnHistory-sample.csv", "PortfolioDownload-sample.csv");
+  } catch (e) {
+    ui.alert("Error importing sample portfolio:\n" + e.message);
+    return;
+  }
 
   // Activate the Portfolio sheet
-  ss.setActiveSheet(sheet);
+  const portfolioSheet = ss.getSheetByName("Portfolio");
+  if (portfolioSheet) {
+    ss.setActiveSheet(portfolioSheet);
+  }
 
-  ui.alert("Sample portfolio loaded with a TSLA bull call spread.\n\nTry:\n  OptionTools > View Portfolio Performance Graphs\n\nTo import your real positions:\n  OptionTools > Import Portfolio from E*Trade");
+  ui.alert("Sample portfolio loaded with multiple TSLA positions.\n\nTry:\n  OptionTools > View Portfolio Performance Graphs\n\nTo import your real positions:\n  OptionTools > Import Portfolio from E*Trade");
 }
 
 /**

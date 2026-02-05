@@ -147,13 +147,39 @@ function normalizeSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, av
  */
 
 function normalizeExpiration_(expiration) {
-  if (expiration instanceof Date) {
-    return Utilities.formatDate(expiration, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  // Handle Date objects (also check toString for cross-context Date issues)
+  if (expiration instanceof Date || Object.prototype.toString.call(expiration) === '[object Date]') {
+    // Add 12 hours to avoid timezone boundary issues
+    const d = new Date(expiration.getTime() + 12 * 60 * 60 * 1000);
+    return Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
   }
+
   if (typeof expiration === "string") {
     const s = expiration.trim();
+    // Already in yyyy-MM-dd format
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    // Handle M/D/YYYY or MM/DD/YYYY format
+    const mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (mdyMatch) {
+      const [, m, d, y] = mdyMatch;
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    // Try parsing the string as a date
+    const parsed = new Date(s);
+    if (!isNaN(parsed.getTime())) {
+      const adjusted = new Date(parsed.getTime() + 12 * 60 * 60 * 1000);
+      return Utilities.formatDate(adjusted, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    }
   }
+
+  // Try parsing as a date if it's a number (Excel serial date from Google Sheets)
+  if (typeof expiration === "number") {
+    const d = new Date((expiration - 25569) * 86400 * 1000 + 12 * 60 * 60 * 1000);
+    if (!isNaN(d.getTime())) {
+      return Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    }
+  }
+
   return null;
 }
 

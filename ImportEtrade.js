@@ -174,6 +174,113 @@ function importEtradePortfolio(fileName, folderPath) {
 }
 
 /**
+ * Imports E*Trade portfolio from a specific folder and filenames.
+ * Used by loadSamplePortfolio to import sample data without UI prompts.
+ *
+ * @param {Folder} folder - Google Drive folder containing the CSV files
+ * @param {string} txnFileName - Transaction history CSV filename
+ * @param {string} portfolioFileName - Portfolio CSV filename
+ */
+function importEtradePortfolioFromFolder_(folder, txnFileName, portfolioFileName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Find the specific files
+  const txnFiles = findFilesByName_(folder, txnFileName);
+  const portfolioFiles = findFilesByName_(folder, portfolioFileName);
+
+  if (txnFiles.length === 0) {
+    throw new Error(`Transaction file not found: ${txnFileName}`);
+  }
+
+  // Process transaction CSV
+  let transactions = [];
+  let stockTxns = [];
+
+  for (const file of txnFiles) {
+    const csvContent = file.getBlob().getDataAsString();
+    const result = parseEtradeCsv_(csvContent);
+    transactions.push(...result.transactions);
+    stockTxns.push(...result.stockTxns);
+  }
+
+  if (transactions.length === 0) {
+    throw new Error("No transactions found in " + txnFileName);
+  }
+
+  // Parse stock positions from portfolio CSV
+  let stockPositions = [];
+  if (portfolioFiles.length > 0) {
+    stockPositions = parsePortfolioStocksFromFile_(portfolioFiles[0]);
+  }
+
+  // Pair into spreads
+  const spreads = [...stockPositions, ...pairTransactionsIntoSpreads_(transactions)];
+
+  // Build closing prices map
+  const closingPrices = buildClosingPricesMap_(transactions, stockTxns);
+
+  // Write to Portfolio table (fresh, no merge)
+  writePortfolioTable_(ss, [], [], spreads, closingPrices);
+
+  Logger.log(`Sample portfolio imported: ${spreads.length} positions`);
+}
+
+/**
+ * Parses stock positions from a specific PortfolioDownload file.
+ */
+function parsePortfolioStocksFromFile_(file) {
+  const csv = file.getBlob().getDataAsString();
+  const lines = csv.split(/\r?\n/);
+
+  // Find the data header row
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith("Symbol,Last Price")) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx < 0) return [];
+
+  const headers = parseCsvLine_(lines[headerIdx]);
+  const idxSym = headers.findIndex(h => h === "Symbol");
+  const idxQty = headers.findIndex(h => h === "Quantity");
+  const idxPricePaid = headers.findIndex(h => h.startsWith("Price Paid"));
+
+  if (idxSym < 0 || idxQty < 0 || idxPricePaid < 0) return [];
+
+  const stocks = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    const cols = parseCsvLine_(line);
+    const symbol = (cols[idxSym] || "").trim().toUpperCase();
+
+    if (!symbol || symbol === "CASH" || symbol === "TOTAL") continue;
+    if (symbol.includes(" ")) continue; // Skip options
+    if (/\d{3,}/.test(symbol)) continue; // Skip CUSIPs
+
+    const qty = parseFloat(cols[idxQty]) || 0;
+    const pricePaid = parseFloat(cols[idxPricePaid]) || 0;
+    if (qty === 0) continue;
+
+    stocks.push({
+      type: "stock",
+      ticker: symbol,
+      qty: qty,
+      price: roundTo_(pricePaid, 2),
+      expiration: null,
+      lowerStrike: null,
+      upperStrike: null,
+      optionType: "Stock",
+    });
+  }
+
+  return stocks;
+}
+
+/**
  * Finds all files in a folder whose name starts with prefix, sorted newest first by name.
  */
 function findFilesByPrefix_(folder, prefix) {
