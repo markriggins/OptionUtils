@@ -8,7 +8,7 @@ A Google Apps Script toolkit for modeling option portfolios in Google Sheets. Tr
 
 ### Option A: Copy the Template Spreadsheet (Recommended)
 
-1. Open the [SpreadFinder Template Spreadsheet](https://docs.google.com/spreadsheets/d/YOUR_TEMPLATE_ID/copy)
+1. Open the [SpreadFinder Template Spreadsheet](https://docs.google.com/spreadsheets/d/1MYMzTpoGlKuAXFyN8eGePmAsZ8R6379zhDoe-JHm7D0/copy)
 2. Click "Make a copy"
 3. The library and stubs are already configured — you're ready to go
 
