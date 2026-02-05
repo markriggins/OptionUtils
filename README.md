@@ -46,6 +46,16 @@ This repo is opinionated — deliberately.
 
 ---
 
+## Apps Script Library
+
+Available as a Google Apps Script library:
+
+- **Library name:** SpreadFinder
+- **Script ID:** `1qvAlZ99zluKSr3ws4NsxH8xXo1FncbWzu6Yq6raBumHdCLpLDaKveM0T`
+- **URL:** https://script.google.com/macros/library/d/1qvAlZ99zluKSr3ws4NsxH8xXo1FncbWzu6Yq6raBumHdCLpLDaKveM0T/58
+
+---
+
 ## License
 
 MIT License.

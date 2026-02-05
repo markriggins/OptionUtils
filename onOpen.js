@@ -125,6 +125,8 @@ function initializeProject() {
     ["Run OptionTools > Run SpreadFinder to scan the OptionPricesUploaded data for attractive bull call spread opportunities. Configure filters (max spread width, min open interest, min ROI, max debit) on the SpreadFinderConfig sheet. Results are written to the Spreads sheet, ranked by ROI. Use OptionTools > View SpreadFinder Graphs for visual analysis."],
     ["--- Config Sheet ---"],
     ["The Config sheet controls where the scripts look for data files on Google Drive. The DataFolder setting (default: OptionUtils/DATA) is the base path. E*Trade CSVs go in <DataFolder>/Etrade/ and option price CSVs go in <DataFolder>/OptionPrices/. Initialize / Clear Project creates these folders and sample CSV files automatically."],
+    ["--- Apps Script Library ---"],
+    ["Available as a Google Apps Script library named SpreadFinder. Script ID: 1qvAlZ99zluKSr3ws4NsxH8xXo1FncbWzu6Yq6raBumHdCLpLDaKveM0T. Source: github.com/markriggins/OptionUtils"],
     ["--- Tips ---"],
     ["Keep your option price CSVs up to date by downloading fresh ones from barchart.com regularly. The Rec Close column on the Legs sheet shows recommended closing prices based on current market data, helping you decide when to take profits or cut losses. Positions with all legs closed are automatically dimmed on the Legs sheet and excluded from portfolio charts."],
   ];
