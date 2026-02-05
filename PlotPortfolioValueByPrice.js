@@ -105,7 +105,7 @@ function onEdit(e) {
 
 function getUniqueSymbolsFromPositions_(ss) {
   // Try Legs table first
-  const legsRange = getNamedRangeWithTableFallback_(ss, "Legs");
+  const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
   if (legsRange) {
     const legsRows = legsRange.getValues();
     const legsSymbols = getSymbolsFromLegsTable_(legsRows);
@@ -167,7 +167,7 @@ function plotForSymbol_(ss, symbolRaw) {
   let bullPutSpreads = [];
   let bearCallSpreads = [];
 
-  const legsRange = getNamedRangeWithTableFallback_(ss, "Legs");
+  const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
   if (legsRange) {
     // Unified Legs table path
     const legsRows = legsRange.getValues();
@@ -193,7 +193,7 @@ function plotForSymbol_(ss, symbolRaw) {
     const icRange = getNamedRangeWithTableFallback_(ss, "IronCondors");
 
     if (stockRanges.length === 0 && callSpreadRanges.length === 0 && !icRange) {
-      writeStatus_(sheet, `No position tables found. Create named ranges:\n  - Legs or LegsTable\n  - Stocks or StocksTable\n  - BullCallSpreads or BullCallSpreadsTable\n  - IronCondors or IronCondorsTable`);
+      writeStatus_(sheet, `No position tables found. Create named ranges:\n  - Portfolio or PortfolioTable\n  - Stocks or StocksTable\n  - BullCallSpreads or BullCallSpreadsTable\n  - IronCondors or IronCondorsTable`);
       return;
     }
 
@@ -685,7 +685,7 @@ function extractChartTitle_(chart) {
 function computeSmartDefaults_(ss, symbol) {
   const fallback = { minPrice: 350, maxPrice: 900, step: 5 };
 
-  const legsRange = getNamedRangeWithTableFallback_(ss, "Legs");
+  const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
   if (!legsRange) return fallback;
 
   const rows = legsRange.getValues();

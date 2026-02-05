@@ -10,91 +10,50 @@ function onOpen() {
   ui.createMenu('OptionTools')
     .addItem('1. Initialize / Clear Project', 'initializeProject')
     .addSeparator()
-    .addItem('2. Refresh Option Prices', 'refreshOptionPrices')
-    .addItem('3. Import Transactions from E*Trade', 'importEtradeTransactions')
+    .addItem('2. Run SpreadFinder', 'runSpreadFinder')
+    .addItem('3. View SpreadFinder Graphs', 'showSpreadFinderGraphs')
     .addSeparator()
-    .addItem('4. PlotPortfolioValueByPrice', 'PlotPortfolioValueByPrice')
-    .addItem('5. Run SpreadFinder', 'runSpreadFinder')
-    .addItem('6. View SpreadFinder Graphs', 'showSpreadFinderGraphs')
+    .addItem('4. Refresh Option Prices', 'refreshOptionPrices')
+    .addItem('5. Import Portfolio from E*Trade', 'importEtradePortfolio')
+    .addItem('6. Load Sample Portfolio', 'loadSamplePortfolio')
+    .addItem('7. View Portfolio Performance Graphs', 'PlotPortfolioValueByPrice')
     .addToUi();
 }
 
 /**
- * Creates a fresh Legs sheet with headers and a sample TSLA bull call spread.
- * If a Legs sheet already exists, prompts for confirmation before clearing.
+ * Initializes the project with README, Config, and option price data.
+ * Deletes all sheets except README and Config.
  */
 function initializeProject() {
   const ss = SpreadsheetApp.getActive();
   const ui = SpreadsheetApp.getUi();
 
-  const existing = ss.getSheetByName("Legs");
-  if (existing) {
+  // Find sheets that will be deleted (everything except README and Config)
+  const keepSheets = ["README", "Config"];
+  const sheetsToDelete = ss.getSheets().filter(s => !keepSheets.includes(s.getName()));
+
+  if (sheetsToDelete.length > 0) {
+    const sheetNames = sheetsToDelete.map(s => "  • " + s.getName()).join("\n");
     const resp = ui.alert(
       "Initialize / Clear Project",
-      "This will delete the existing Legs sheet and all position data.\n\nContinue?",
+      "This will delete the following sheets:\n" + sheetNames + "\n\nContinue?",
       ui.ButtonSet.OK_CANCEL
     );
     if (resp !== ui.Button.OK) return;
-    ss.deleteSheet(existing);
   }
 
-  // Remove any existing Config named ranges
+  // Delete all sheets except README and Config
+  for (const sheet of sheetsToDelete) {
+    ss.deleteSheet(sheet);
+  }
+
+  // Remove any existing named ranges (except Config-related)
   for (const nr of ss.getNamedRanges()) {
-    if (nr.getName().startsWith("Config_")) nr.remove();
+    nr.remove();
   }
 
-  // Remove any existing PortfolioValueByPrice sheets
-  for (const sheet of ss.getSheets()) {
-    if (sheet.getName().endsWith("PortfolioValueByPrice")) {
-      ss.deleteSheet(sheet);
-    }
-  }
-
-  // Create Legs sheet
-  const sheet = ss.insertSheet("Legs");
-  const headers = ["Symbol", "Group", "Strategy", "Strike", "Type", "Expiration", "Qty", "Price", "Investment", "Rec Close", "Closed", "Gain", "LastTxnDate", "Link"];
-
-  // Header row
-  const headerRange = sheet.getRange(1, 1, 1, headers.length);
-  headerRange.setValues([headers]);
-  headerRange.setBackground("#93c47d");
-  headerRange.setFontWeight("bold");
-
-  // Sample data: TSLA bull call spread
-  const sampleData = [
-    ["TSLA", 1, "bull-call-spread", 500, "Call", "12/15/2028", 10, 127.90, "", "", "", "", "", ""],
-    ["",      "", "",                 600, "Call", "12/15/2028", -10, 105.90, "", "", "", "", "", ""],
-  ];
-  sheet.getRange(2, 1, sampleData.length, headers.length).setValues(sampleData);
-
-  // Named range
-  ss.setNamedRange("LegsTable", sheet.getRange("A:N"));
-
-  // Filter
-  sheet.getRange("A:N").createFilter();
-
-  // Clip wrap
-  sheet.getRange("A:N").setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
-
-  // Auto-resize
-  sheet.autoResizeColumns(1, headers.length);
-
-  // Create OptionPricesUploaded sheet if needed
-  let pricesSheet = ss.getSheetByName("OptionPricesUploaded");
-  if (pricesSheet) {
-    pricesSheet.clearContents();
-  } else {
-    pricesSheet = ss.insertSheet("OptionPricesUploaded");
-  }
-  const priceHeaders = ["symbol", "expiration", "strike", "type", "bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness"];
-  const samplePrices = [
-    ["TSLA", new Date(2028, 11, 15), 500, "Call", 127.2, 128.23, 129.25, "54.18%", 0.6313, 206, 1345, "-23.89%"],
-    ["TSLA", new Date(2028, 11, 15), 600, "Call", 105.4, 106.18, 106.95, "54.45%", 0.5558, 99, 508, "-48.67%"],
-  ];
-  pricesSheet.getRange(1, 1, 1, priceHeaders.length).setValues([priceHeaders]);
-  pricesSheet.getRange(1, 1, 1, priceHeaders.length).setFontWeight("bold");
-  pricesSheet.getRange(2, 1, samplePrices.length, priceHeaders.length).setValues(samplePrices);
-  pricesSheet.setFrozenRows(1);
+  // Create OptionPricesUploaded sheet (will be populated by refreshOptionPrices)
+  const pricesSheet = ss.insertSheet("OptionPricesUploaded");
 
   // Create README sheet
   let readmeSheet = ss.getSheetByName("README");
@@ -105,48 +64,54 @@ function initializeProject() {
   }
 
   const readmeRows = [
-    ["OptionUtils - Portfolio Modeling for Option Spreads"],
-    ["This spreadsheet models option portfolios using Google Sheets. It tracks stock positions and option spreads (bull call spreads, bull put spreads, iron condors, iron butterflies), calculates value at every price point, and generates charts showing profit/loss scenarios at expiration."],
-    ["The OptionTools menu provides all available actions. After editing your positions on the Legs sheet, use PlotPortfolioValueByPrice to generate per-symbol charts. The system reads your positions, computes portfolio value across a range of stock prices, and creates four charts: strategy-level dollar value, strategy-level % ROI, individual spread dollar value, and individual spread ROI."],
-    ["--- Getting Started ---"],
-    ["A sample TSLA bull call spread is included on the Legs sheet. Run OptionTools > PlotPortfolioValueByPrice and select TSLA to see it in action. Edit the Legs sheet to add your own positions."],
-    ["--- The Legs Sheet ---"],
-    ["Each position group occupies one or more rows. The first row of a group has the Symbol and Group number; subsequent legs in the same group leave those columns blank. Columns: Symbol, Group, Strategy, Strike, Type (Call/Put/Stock), Expiration, Qty (positive=long, negative=short), Price (entry price per share). The Strategy column is auto-detected. The Closed column tracks closing prices; when all legs in a group have a closing price, the position is excluded from charts."],
-    ["--- Importing Option Prices from Barchart.com ---"],
-    ["Go to barchart.com and navigate to the options page for your symbol (e.g. barchart.com/stocks/quotes/TSLA/options). Select the expiration date you want, choose \"Stacked\" view to see calls and puts together, then click the download/export button to get a CSV file."],
-    ["Save the CSV to your Google Drive under: <DataFolder>/OptionPrices/ (default: SpreadFinder/DATA/OptionPrices/). The filename must contain the symbol and expiration date in the format <symbol>-options-exp-YYYY-MM-DD. Example: tsla-options-exp-2028-12-15-monthly-show-all-stacked-01-15-2026.csv"],
-    ["Then run OptionTools > Refresh Option Prices. The script scans all symbol folders, picks the most recent CSV per expiration, and loads the data into the OptionPricesUploaded sheet. This data is used by SpreadFinder and the Rec Close column on the Legs sheet."],
-    ["--- Importing Transactions from E*Trade ---"],
-    ["Log into E*Trade, go to Accounts > Transaction History, and download the transaction CSV. Save it to your Google Drive under: <DataFolder>/Etrade/ (default: SpreadFinder/DATA/Etrade/). All transaction CSVs go in one folder."],
-    ["Run OptionTools > Import Transactions from E*Trade. The script reads all CSV files in that folder, deduplicates transactions across overlapping date ranges, pairs opening trades into spreads (including iron condors and iron butterflies), and writes them to the Legs sheet. Closing transactions (Sold To Close, Bought To Cover) automatically fill the Closed column with closing prices."],
-    ["--- Visualizing Your Portfolio ---"],
-    ["Run OptionTools > PlotPortfolioValueByPrice, then select which symbols to chart. For each symbol, the script creates a tab with four charts: (1) Portfolio Value by Price ($) showing aggregated strategy curves and total, (2) % Return by Price showing ROI for shares and each strategy type, (3) Individual Spreads ($) showing each spread separately, and (4) Individual Spreads ROI. A config table in columns K-L lets you adjust the price range, step size, and chart title."],
-    ["--- Finding New Spreads with SpreadFinder ---"],
-    ["Run OptionTools > Run SpreadFinder to scan the OptionPricesUploaded data for attractive bull call spread opportunities. Configure filters (max spread width, min open interest, min ROI, max debit) on the SpreadFinderConfig sheet. Results are written to the Spreads sheet, ranked by ROI. Use OptionTools > View SpreadFinder Graphs for visual analysis."],
-    ["--- Config Sheet ---"],
-    ["The Config sheet controls where the scripts look for data files on Google Drive. The DataFolder setting (default: SpreadFinder/DATA) is the base path. E*Trade CSVs go in <DataFolder>/Etrade/ and option price CSVs go in <DataFolder>/OptionPrices/. Initialize / Clear Project creates these folders and sample CSV files automatically."],
+    ["SpreadFinder - Find and Analyze Bull Call Spread Opportunities"],
+    ["SpreadFinder scans option prices to find attractive bull call spread opportunities. It ranks spreads by expected ROI using a probability-of-touch model, filters by liquidity, and displays results in interactive charts. This spreadsheet includes real TSLA option prices for June 2028 and December 2028 LEAP expirations."],
+    [""],
+    ["--- Quick Start ---"],
+    ["  1. Run OptionTools > Initialize / Clear Project to set up sheets and load TSLA option data"],
+    ["  2. Run OptionTools > Run SpreadFinder to analyze spreads (results on TSLASpreads sheet)"],
+    ["  3. Run OptionTools > View SpreadFinder Graphs for visual analysis of Delta vs ROI and Strike vs ROI"],
+    ["--- SpreadFinder Configuration ---"],
+    ["The SpreadFinderConfig sheet controls the analysis parameters: symbol filter, min/max spread width, min open interest, min volume, max debit, min ROI, strike range, and expiration range. Adjust these to narrow down the results to spreads that match your criteria. After changing settings, re-run OptionTools > Run SpreadFinder to see updated results."],
+    ["--- Adding More Option Prices ---"],
+    ["Download option prices from barchart.com: navigate to the options page for your symbol (e.g. barchart.com/stocks/quotes/TSLA/options), select an expiration, choose \"Stacked\" view, and download the CSV. Save it to Google Drive under SpreadFinder/DATA/OptionPrices/ with the filename format: <symbol>-options-exp-YYYY-MM-DD-....csv. Then run OptionTools > Refresh Option Prices to load the data, and re-run OptionTools > Run SpreadFinder to analyze the new prices."],
+    [""],
+    ["--- Portfolio Modeling (Additional Feature) ---"],
+    ["Track your actual positions and visualize profit/loss scenarios. Bull-Call-Spreads, Long Calls and other strategies will be automatically detected and analyzed."],
+    [""],
+    ["To try it with sample data:"],
+    ["  • Run OptionTools > Load Sample Portfolio"],
+    ["  • Run OptionTools > View Portfolio Performance Graphs"],
+    [""],
+    ["To import your real E*Trade positions:"],
+    ["  1. Download your Portfolio CSV and Transaction History CSV from E*Trade"],
+    ["  2. Save both files to Google Drive under SpreadFinder/DATA/Etrade/"],
+    ["  3. Run OptionTools > Import Portfolio from E*Trade"],
+    ["  4. Run OptionTools > View Portfolio Performance Graphs"],
+    [""],
     ["--- Apps Script Library ---"],
     ["Available as a Google Apps Script library named SpreadFinder. Script ID: 1qvAlZ99zluKSr3ws4NsxH8xXo1FncbWzu6Yq6raBumHdCLpLDaKveM0T. Source: github.com/markriggins/OptionUtils"],
-    ["--- Tips ---"],
-    ["Keep your option price CSVs up to date by downloading fresh ones from barchart.com regularly. The Rec Close column on the Legs sheet shows recommended closing prices based on current market data, helping you decide when to take profits or cut losses. Positions with all legs closed are automatically dimmed on the Legs sheet and excluded from portfolio charts."],
   ];
 
   readmeSheet.getRange(1, 1, readmeRows.length, 1).setValues(readmeRows);
 
-  // Title row bold and larger
-  readmeSheet.getRange(1, 1).setFontWeight("bold").setFontSize(18);
+  // Set all content to normal weight, font size 18, wrapped
+  const contentRange = readmeSheet.getRange(1, 1, readmeRows.length, 1);
+  contentRange.setFontWeight("normal").setFontSize(18).setWrap(true);
 
-  // Section headers bold
+  // Title row bold
+  readmeSheet.getRange(1, 1).setFontWeight("bold");
+
+  // Section headers bold (rows starting with "---")
   for (let r = 0; r < readmeRows.length; r++) {
     if (readmeRows[r][0].startsWith("---")) {
-      readmeSheet.getRange(r + 1, 1).setFontWeight("bold").setFontSize(18)
+      readmeSheet.getRange(r + 1, 1).setFontWeight("bold")
         .setValue(readmeRows[r][0].replace(/^--- ?| ?---$/g, ""));
     }
   }
 
-  // Column A: wide enough for readability, wrap text
+  // Column A width
   readmeSheet.setColumnWidth(1, 840);
-  readmeSheet.getRange("A:A").setWrap(true).setFontSize(18);
 
   // Hide other columns
   readmeSheet.hideColumns(2, readmeSheet.getMaxColumns() - 1);
@@ -190,10 +155,71 @@ function initializeProject() {
     Logger.log("Drive sample file setup skipped: " + e.message);
   }
 
+  // Load option prices from the downloaded CSV files
+  try {
+    refreshOptionPrices();
+  } catch (e) {
+    Logger.log("Option price refresh skipped: " + e.message);
+  }
+
   // Activate the README sheet
   ss.setActiveSheet(readmeSheet);
 
-  ui.alert("Project initialized with a sample TSLA bull call spread.\n\nSee the README tab for instructions.\n\nEdit the Legs table with your positions, then use:\n  OptionTools > PlotPortfolioValueByPrice\n  OptionTools > Refresh Option Prices");
+  ui.alert("Project initialized with real TSLA option prices for June 2028 and December 2028 LEAPs.\n\nTry it now:\n  OptionTools > Run SpreadFinder\n  OptionTools > View SpreadFinder Graphs\n\nTo track your own positions:\n  OptionTools > Import Portfolio from E*Trade\n  OptionTools > Load Sample Portfolio");
+}
+
+/**
+ * Creates a sample Portfolio sheet with a TSLA bull call spread.
+ * Use this to explore the portfolio modeling features before importing real data.
+ */
+function loadSamplePortfolio() {
+  const ss = SpreadsheetApp.getActive();
+  const ui = SpreadsheetApp.getUi();
+
+  const existing = ss.getSheetByName("Portfolio");
+  if (existing) {
+    const resp = ui.alert(
+      "Load Sample Portfolio",
+      "A Portfolio sheet already exists. Replace it with sample data?",
+      ui.ButtonSet.OK_CANCEL
+    );
+    if (resp !== ui.Button.OK) return;
+    ss.deleteSheet(existing);
+  }
+
+  // Create Portfolio sheet
+  const sheet = ss.insertSheet("Portfolio");
+  const headers = ["Symbol", "Group", "Strategy", "Strike", "Type", "Expiration", "Qty", "Price", "Investment", "Rec Close", "Closed", "Gain", "LastTxnDate", "Link"];
+
+  // Header row
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setValues([headers]);
+  headerRange.setBackground("#93c47d");
+  headerRange.setFontWeight("bold");
+
+  // Sample data: TSLA bull call spread
+  const sampleData = [
+    ["TSLA", 1, "bull-call-spread", 500, "Call", "12/15/2028", 10, 127.90, "", "", "", "", "", ""],
+    ["",      "", "",                 600, "Call", "12/15/2028", -10, 105.90, "", "", "", "", "", ""],
+  ];
+  sheet.getRange(2, 1, sampleData.length, headers.length).setValues(sampleData);
+
+  // Named range
+  ss.setNamedRange("PortfolioTable", sheet.getRange("A:N"));
+
+  // Filter
+  sheet.getRange("A:N").createFilter();
+
+  // Clip wrap
+  sheet.getRange("A:N").setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+
+  // Auto-resize
+  sheet.autoResizeColumns(1, headers.length);
+
+  // Activate the Portfolio sheet
+  ss.setActiveSheet(sheet);
+
+  ui.alert("Sample portfolio loaded with a TSLA bull call spread.\n\nTry:\n  OptionTools > View Portfolio Performance Graphs\n\nTo import your real positions:\n  OptionTools > Import Portfolio from E*Trade");
 }
 
 /**

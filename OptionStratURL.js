@@ -95,6 +95,9 @@ function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expira
       d = new Date(exp);
     }
     if (isNaN(d.getTime())) return "000000";
+    // Normalize to noon to avoid timezone/DST edge cases
+    d = new Date(d);
+    d.setHours(12, 0, 0, 0);
     return (
       String(d.getFullYear() % 100).padStart(2, "0") +
       String(d.getMonth() + 1).padStart(2, "0") +
@@ -176,10 +179,11 @@ function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
   }
 
   function formatDateCode(date) {
+    const d = new Date(date);
     return (
-      String(date.getFullYear() % 100).padStart(2, "0") +
-      String(date.getMonth() + 1).padStart(2, "0") +
-      String(date.getDate()).padStart(2, "0")
+      String(d.getFullYear() % 100).padStart(2, "0") +
+      String(d.getMonth() + 1).padStart(2, "0") +
+      String(d.getDate()).padStart(2, "0")
     );
   }
 

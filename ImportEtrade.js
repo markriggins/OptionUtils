@@ -1,52 +1,105 @@
 /**
  * ImportEtrade.js
- * Imports E*Trade transaction history into the Legs table.
+ * Imports E*Trade portfolio and transactions into the Portfolio sheet.
  *
  * Features:
- * - Parses E*Trade transaction CSV
+ * - Parses E*Trade transaction CSV and portfolio CSV
  * - Pairs consecutive opens on same date into spreads
- * - Merges into existing Legs positions (weighted avg price)
+ * - Merges into existing Portfolio positions (weighted avg price)
  * - Adds new spreads as new groups
- * - Per-group LastTxnDate deduplication in Legs table
+ * - Per-group LastTxnDate deduplication
  */
 
 /**
- * Imports E*Trade transactions from a CSV file in Google Drive.
- * Call from menu or script.
+ * Imports E*Trade portfolio and transactions from CSV files in Google Drive.
+ * Call from OptionTools menu or script.
  *
- * @param {string} [fileName] - CSV filename in Drive (default: "DownloadTxnHistory.csv")
- * @param {string} [folderPath] - Folder path in Drive (default: "Investing/Data")
+ * @param {string} [fileName] - Transaction CSV filename (default: all "DownloadTxnHistory*.csv" files)
+ * @param {string} [folderPath] - Folder path in Drive (default: "<DataFolder>/Etrade")
  */
-function importEtradeTransactions(fileName, folderPath) {
+function importEtradePortfolio(fileName, folderPath) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const path = folderPath || getConfigValue_(ss, "DataFolder", "OptionUtils/DATA") + "/Etrade";
+  const path = folderPath || getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA") + "/Etrade";
 
   // Navigate to folder
   const root = DriveApp.getRootFolder();
   let folder = root;
   const parts = path.split('/').filter(p => p.trim());
-  for (const part of parts) {
-    folder = getFolder_(folder, part);
+  try {
+    for (const part of parts) {
+      folder = getFolder_(folder, part);
+    }
+  } catch (e) {
+    SpreadsheetApp.getUi().alert(
+      `Folder not found: ${path}\n\n` +
+      `To set up your E*Trade import folder:\n` +
+      `1. Create the folder in Google Drive: ${path}\n` +
+      `2. Upload your E*Trade CSV files there\n\n` +
+      `Or change the DataFolder setting on the Config sheet.`
+    );
+    return;
   }
 
-  // Read existing Legs table to determine if this is a fresh import
-  const legsRange = getNamedRangeWithTableFallback_(ss, "Legs");
-  let existingLegs = new Map();
+  // Check for existing Portfolio sheet (may contain sample data)
+  const existingSheet = ss.getSheetByName("Portfolio");
+  if (existingSheet) {
+    const ui = SpreadsheetApp.getUi();
+    const resp = ui.alert(
+      "Import Portfolio",
+      "A Portfolio sheet already exists. Replace it with imported data?\n\n" +
+      "• OK = Delete existing data and import fresh\n" +
+      "• Cancel = Keep existing data and merge",
+      ui.ButtonSet.OK_CANCEL
+    );
+    if (resp === ui.Button.OK) {
+      ss.deleteSheet(existingSheet);
+      // Also remove the named range
+      const nr = ss.getNamedRanges().find(r => r.getName() === "PortfolioTable");
+      if (nr) nr.remove();
+    }
+  }
+
+  // Read existing Portfolio table (if kept) to merge with imported data
+  const portfolioRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
+  let existingPositions = new Map();
   let headers = [];
-  const hasLegsTable = !!legsRange;
-  if (legsRange) {
-    const rows = legsRange.getValues();
+  if (portfolioRange) {
+    const rows = portfolioRange.getValues();
     headers = rows[0];
-    existingLegs = parseLegsTable_(rows);
+    existingPositions = parsePortfolioTable_(rows);
   }
 
-  // Find transaction CSV files
+  // Find CSV files
   const txnFiles = fileName
     ? findFilesByName_(folder, fileName)
     : findFilesByPrefix_(folder, "DownloadTxnHistory");
+  const portfolioFiles = findFilesByPrefix_(folder, "PortfolioDownload");
+
+  if (txnFiles.length === 0 && portfolioFiles.length === 0) {
+    SpreadsheetApp.getUi().alert(
+      `No E*Trade CSV files found.\n\n` +
+      `To import your portfolio:\n` +
+      `1. Log into E*Trade\n` +
+      `2. Download "Portfolio" CSV (Accounts > Portfolio > Download)\n` +
+      `3. Download "Transaction History" CSV (Accounts > Transactions > Download)\n` +
+      `4. Upload both files to Google Drive:\n` +
+      `   ${path}/\n\n` +
+      `Expected filenames:\n` +
+      `  • PortfolioDownload*.csv\n` +
+      `  • DownloadTxnHistory*.csv`
+    );
+    return;
+  }
 
   if (txnFiles.length === 0) {
-    SpreadsheetApp.getUi().alert(`No DownloadTxnHistory CSVs found.\n\nUpload E*Trade transaction CSVs to Google Drive under /${path}/`);
+    SpreadsheetApp.getUi().alert(
+      `No transaction history CSV found.\n\n` +
+      `Found ${portfolioFiles.length} PortfolioDownload file(s), but no DownloadTxnHistory files.\n\n` +
+      `To download transaction history from E*Trade:\n` +
+      `1. Go to Accounts > Transactions\n` +
+      `2. Select date range and click Download\n` +
+      `3. Upload the CSV to: ${path}/`
+    );
     return;
   }
 
@@ -79,7 +132,13 @@ function importEtradeTransactions(fileName, folderPath) {
   }
 
   if (transactions.length === 0) {
-    SpreadsheetApp.getUi().alert("No transactions found in CSV(s).");
+    const fileNames = txnFiles.map(f => f.getName()).join(", ");
+    SpreadsheetApp.getUi().alert(
+      `No option transactions found in CSV file(s).\n\n` +
+      `Files checked: ${fileNames}\n\n` +
+      `Make sure you downloaded the Transaction History CSV from E*Trade ` +
+      `(Accounts > Transactions > Download), not a different report type.`
+    );
     return;
   }
 
@@ -96,10 +155,10 @@ function importEtradeTransactions(fileName, folderPath) {
   Logger.log(`Found closing prices for ${closingPrices.size} legs`);
 
   // Merge spreads into existing positions (per-group dedup via LastTxnDate)
-  const { updatedLegs, newLegs, skippedCount } = mergeSpreads_(existingLegs, spreads);
+  const { updatedLegs, newLegs, skippedCount } = mergeSpreads_(existingPositions, spreads);
 
-  // Write back to Legs table
-  writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices);
+  // Write back to Portfolio table
+  writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices);
 
   // Report
   const fileNames = txnFiles.map(f => f.getName()).join(", ");
@@ -557,9 +616,9 @@ function buildClosingPricesMap_(transactions, stockTxns) {
 }
 
 /**
- * Parses existing Legs table into position objects.
+ * Parses existing Portfolio table into position objects.
  */
-function parseLegsTable_(rows) {
+function parsePortfolioTable_(rows) {
   if (rows.length < 2) return [];
 
   const headers = rows[0];
@@ -735,25 +794,25 @@ function mergeSpreads_(existingPositions, newSpreads) {
 }
 
 /**
- * Writes the Legs table back to the sheet.
+ * Writes the Portfolio table back to the sheet.
  * @param {Map} [closingPrices] - Map of leg keys to closing prices
  */
-function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
+function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
   closingPrices = closingPrices || new Map();
 
-  const legsRange = getNamedRangeWithTableFallback_(ss, "Legs");
+  const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
   if (!legsRange || headers.length === 0) {
-    Logger.log("Legs table not found, creating new one");
-    // Create new Legs sheet
-    let sheet = ss.getSheetByName("Legs");
-    if (!sheet) sheet = ss.insertSheet("Legs");
+    Logger.log("Portfolio table not found, creating new one");
+    // Create new Portfolio sheet
+    let sheet = ss.getSheetByName("Portfolio");
+    if (!sheet) sheet = ss.insertSheet("Portfolio");
 
     headers = ["Symbol", "Group", "Strategy", "Strike", "Type", "Expiration", "Qty", "Price", "Investment", "Rec Close", "Closed", "Gain", "LastTxnDate", "Link"];
     const headerRange = sheet.getRange(1, 1, 1, headers.length);
     headerRange.setValues([headers]);
     headerRange.setBackground("#93c47d"); // Green header
     headerRange.setFontWeight("bold");
-    ss.setNamedRange("LegsTable", sheet.getRange("A:N"));
+    ss.setNamedRange("PortfolioTable", sheet.getRange("A:N"));
 
     // Add filter to the data range
     const filterRange = sheet.getRange("A:N");
@@ -763,7 +822,7 @@ function writeLegsTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
     sheet.getRange("A:N").setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
   }
 
-  const range = getNamedRangeWithTableFallback_(ss, "Legs");
+  const range = getNamedRangeWithTableFallback_(ss, "Portfolio");
   const sheet = range.getSheet();
   const startRow = range.getRow();
   const startCol = range.getColumn();

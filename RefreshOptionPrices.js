@@ -155,7 +155,7 @@ function refreshOptionPrices() {
 function findInputFiles_(path) {
   if (!path) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    path = getConfigValue_(ss, "DataFolder", "OptionUtils/DATA") + "/OptionPrices";
+    path = getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA") + "/OptionPrices";
   }
   // ---- Locate folder ----
   const root = DriveApp.getRootFolder();

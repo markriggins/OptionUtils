@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OptionUtils is a Google Apps Script project for modeling option portfolios in Google Sheets. It provides custom functions, menu items, and automated charting for analyzing stock positions and option spreads.
+SpreadFinder is a Google Apps Script project for finding and analyzing bull call spread opportunities. It scans option prices, ranks spreads by expected ROI, and provides interactive charts. It also supports portfolio modeling for tracking actual positions imported from E*Trade.
 
 ## Development Commands
 
@@ -27,22 +27,26 @@ clasp pull
 
 **Key Components**:
 
-- `PlotPortfolioValueByPrice.js` - Main entry point. Reads positions from named ranges (Stocks, BullCallSpreads, IronCondors), extracts unique symbols, then generates per-symbol `<SYMBOL>PortfolioValueByPrice` tabs with config tables, data tables, and charts ($ value and % ROI).
+- `SpreadFinder.js` - Scans option prices to find bull call spread opportunities. Ranks by expected ROI using probability-of-touch model. Results written to `<SYMBOL>Spreads` sheet.
 
-- `XLookupByKeys.js` - Multi-key lookup function with three-tier caching (in-memory memo → chunked/gzipped DocumentCache → sheet rebuild). Exposes `XLookupByKeys()` as a custom spreadsheet function.
+- `ImportEtrade.js` - Imports E*Trade portfolio and transaction CSVs into the Portfolio sheet. Pairs transactions into spreads, detects iron condors, and tracks closing prices.
 
-- `refreshOptionPrices.js` - Imports option price CSVs from Google Drive (`Investing/Data/OptionPrices/<symbol>/`) into an `OptionPricesUploaded` sheet. Selects most recent file per expiration.
+- `PlotPortfolioValueByPrice.js` - Reads positions from the Portfolio sheet (or legacy named ranges), generates per-symbol `<SYMBOL>PortfolioValueByPrice` tabs with charts showing $ value and % ROI at expiration.
+
+- `RefreshOptionPrices.js` - Imports option price CSVs from Google Drive (`SpreadFinder/DATA/OptionPrices/`) into the `OptionPricesUploaded` sheet. Selects most recent file per expiration.
+
+- `XLookupByKeys.js` - Multi-key lookup function with three-tier caching. Exposes `XLookupByKeys()` as a custom spreadsheet function.
 
 - `onOpen.js` - Registers the "OptionTools" menu with available actions.
 
 **Data Flow**:
-1. User defines positions in named ranges on the Positions sheet (Stocks, BullCallSpreads, IronCondors)
-2. Each table has a Symbol column to identify which ticker the position belongs to
-3. `PlotPortfolioValueByPrice` extracts unique symbols from position tables, parses positions by symbol, generates price-vs-value data and charts per symbol
+1. User imports positions via "Import Portfolio from E*Trade" or manually edits the Portfolio sheet
+2. SpreadFinder scans OptionPricesUploaded data to find attractive spreads
+3. PlotPortfolioValueByPrice generates charts showing portfolio value across price scenarios
 
 **Named Range Convention**: Google Sheets Tables are not readable by Apps Script. The convention is:
-- Table name: `BullCallSpreads`
-- Named range: `BullCallSpreadsTable`
+- Table name: `Portfolio`
+- Named range: `PortfolioTable`
 
 The script tries the base name first, then appends "Table" as fallback.
 

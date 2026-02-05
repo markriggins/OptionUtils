@@ -169,19 +169,19 @@ function ensureSpreadFinderConfigSheet_(ss) {
     ["minSpreadWidth", 20, "Minimum spread width in dollars"],
     ["maxSpreadWidth", 150, "Maximum spread width in dollars"],
     ["minOpenInterest", 10, "Minimum open interest for both legs"],
-    ["minVolume", 0, "Minimum volume for both legs"],
+    ["minVolume", 5, "Minimum volume for both legs"],
     ["patience", 60, "Minutes for price calculation (0=aggressive, 60=patient)"],
     ["maxDebit", 50, "Maximum debit per share"],
-    ["minROI", 0.5, "Minimum ROI (0.5 = 50% return)"],
+    ["minROI", 2.0, "Minimum ROI (0.5 = 50% return)"],
     ["minStrike", 300, "Minimum lower strike price"],
     ["maxStrike", 700, "Maximum upper strike price"],
     ["minExpirationMonths", 6, "Minimum months until expiration"],
     ["maxExpirationMonths", 36, "Maximum months until expiration"],
     ["", "", ""],
     ["Outlook", "", "Price outlook for boosting fitness"],
-    ["outlookFuturePrice", "", "Target future price (e.g. 700)"],
-    ["outlookDate", "", "Target date (e.g. 2027-01-01)"],
-    ["outlookConfidence", "", "Confidence 0-1 (e.g. 0.7 = 70%)"]
+    ["outlookFuturePrice", "500", "Target future price (e.g. 700)"],
+    ["outlookDate", "3/1/2027", "Target date (e.g. 3/1/2027)"],
+    ["outlookConfidence", "0.6", "Confidence 0-1 (e.g. 0.7 = 70%)"]
   ];
   // Read existing values to preserve user edits
   const existingValues = {};
@@ -526,7 +526,7 @@ function loadHeldPositions_(ss) {
   const held = new Set();
 
   // Try Legs table first
-  const legsRange = getNamedRangeWithTableFallback_(ss, "Legs");
+  const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
   if (legsRange) {
     const rows = legsRange.getValues();
     Logger.log("found Legs table with rows:" + rows.length);
@@ -837,11 +837,23 @@ function showSpreadFinderGraphs() {
 
    return data.map(row => {
      const sym = row[c.Symbol];
-     const expDate = new Date(row[c.Expiration]);
+     // Parse expiration carefully to avoid timezone shifts
+     let expDate = row[c.Expiration];
+     if (expDate instanceof Date) {
+       // Already a Date from spreadsheet - use it directly
+     } else {
+       // String like "2028-06-16" - parse as local date, not UTC
+       const match = String(expDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
+       if (match) {
+         expDate = new Date(+match[1], +match[2] - 1, +match[3], 12, 0, 0);
+       } else {
+         expDate = new Date(expDate);
+       }
+     }
      const lowStrike = row[c.Lower];
      const highStrike = row[c.Upper];
 
-     const osUrl = ""; //buildOptionStratUrl(`${lowStrike}/${highStrike}`, sym, "bull-call-spread", expDate);
+     const osUrl = buildOptionStratUrl(`${lowStrike}/${highStrike}`, sym, "bull-call-spread", expDate);
 
      const diffTime = expDate.getTime() - today.getTime();
      const dte = Math.ceil(diffTime / (1000 * 60 * 60 * 24));

@@ -49,14 +49,78 @@
 
         .os-link { color: #8ab4f8; text-decoration: none; font-weight: bold; border: 1px solid #8ab4f8; padding: 6px 12px; border-radius: 4px; }
         .btn-refresh { background: #1a73e8; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .btn-help { background: none; color: #5f6368; border: 1px solid #dadce0; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-right: 10px; }
+        .btn-help:hover { background: #f1f3f4; }
         .toggle-btn { font-size: 11px; cursor: pointer; color: #1a73e8; border: 1px solid #1a73e8; background: none; border-radius: 4px; padding: 2px 6px; }
+
+        /* Help Modal */
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
+        .modal-overlay.show { display: flex; }
+        .modal-content { background: white; border-radius: 12px; max-width: 600px; max-height: 80vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid #e0e0e0; }
+        .modal-header h2 { margin: 0; color: #202124; font-size: 20px; }
+        .modal-close { background: none; border: none; font-size: 24px; color: #5f6368; cursor: pointer; padding: 0; line-height: 1; }
+        .modal-close:hover { color: #202124; }
+        .modal-body { padding: 24px; color: #3c4043; line-height: 1.6; }
+        .modal-body h3 { color: #202124; margin: 20px 0 10px 0; font-size: 16px; }
+        .modal-body h3:first-child { margin-top: 0; }
+        .modal-body ul { margin: 10px 0; padding-left: 24px; }
+        .modal-body li { margin: 8px 0; }
+        .color-sample { display: inline-block; width: 14px; height: 14px; border-radius: 50%; vertical-align: middle; margin-right: 6px; border: 1px solid #333; }
+        .color-green { background: #2e7d32; }
+        .color-light-green { background: #66bb6a; }
+        .color-yellow { background: #ffeb3b; }
+        .color-red { background: #f44336; }
+        .kbd { background: #f1f3f4; border: 1px solid #dadce0; border-radius: 4px; padding: 2px 6px; font-family: monospace; font-size: 12px; }
     </style>
 </head>
 <body>
 
 <div class="controls">
-    <div style="font-weight:bold; color:#5f6368;">Elite Spread Finder v5.8</div>
-    <button class="btn-refresh" onclick="refreshData()">Sync & Refresh</button>
+    <div style="font-weight:bold; color:#5f6368;">SpreadFinder</div>
+    <div>
+        <button class="btn-help" onclick="showHelp()">Help</button>
+        <button class="btn-refresh" onclick="refreshData()">Sync & Refresh</button>
+    </div>
+</div>
+
+<!-- Help Modal -->
+<div id="help-modal" class="modal-overlay" onclick="hideHelp(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h2>How to Use SpreadFinder</h2>
+            <button class="modal-close" onclick="hideHelp()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <h3>Understanding the Charts</h3>
+            <p>Each bubble represents a potential <strong>bull call spread</strong> you could purchase. The bubbles are color-coded by "fitness score" to help you quickly identify the best opportunities:</p>
+            <ul>
+                <li><span class="color-sample color-green"></span><strong>Dark Green (large)</strong> — Fitness ≥ 4.0 — Best opportunities with favorable liquidity and tight bid/ask spreads</li>
+                <li><span class="color-sample color-light-green"></span><strong>Light Green</strong> — Fitness 3.0–4.0 — Good opportunities</li>
+                <li><span class="color-sample color-yellow"></span><strong>Yellow</strong> — Fitness 2.0–3.0 — Moderate opportunities</li>
+                <li><span class="color-sample color-red"></span><strong>Red</strong> — Fitness < 2.0 — Lower quality (poor liquidity or wide spreads)</li>
+            </ul>
+
+            <h3>Selecting a Spread</h3>
+            <p><strong>Click</strong> any bubble to see its details in the panel below, including strike prices, debit cost, ROI, expected ROI, and liquidity metrics.</p>
+            <p><strong>Double-click</strong> a bubble to open it in <strong>OptionStrat</strong> for visual profit/loss analysis.</p>
+
+            <h3>Chart Controls</h3>
+            <ul>
+                <li><strong>Zoom:</strong> Click and drag to select an area to zoom into</li>
+                <li><strong>Pan:</strong> Use <span class="kbd">←</span> <span class="kbd">→</span> <span class="kbd">↑</span> <span class="kbd">↓</span> arrow keys</li>
+                <li><strong>Reset:</strong> Right-click to reset zoom to default view</li>
+            </ul>
+
+            <h3>Key Metrics</h3>
+            <ul>
+                <li><strong>ROI</strong> — Maximum return if stock closes above upper strike at expiration</li>
+                <li><strong>Expected ROI</strong> — Probability-weighted ROI using a prob-of-touch model</li>
+                <li><strong>Fitness</strong> — Combined score considering ROI, liquidity, and bid/ask tightness</li>
+                <li><strong>Tightness</strong> — Bid/ask spread as % of mid price (lower = easier fills)</li>
+            </ul>
+        </div>
+    </div>
 </div>
 
 <div class="dashboard">
@@ -106,6 +170,19 @@
 </div>
 
 <script type="text/javascript">
+    // Help modal functions
+    function showHelp() {
+        document.getElementById('help-modal').classList.add('show');
+    }
+    function hideHelp(event) {
+        if (!event || event.target === document.getElementById('help-modal')) {
+            document.getElementById('help-modal').classList.remove('show');
+        }
+    }
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') hideHelp();
+    });
+
     google.charts.load('current', {'packages':['corechart']});
     var rawData = [], chartD, chartS, dtD, dtS, strikeYMode = 'roi';
 

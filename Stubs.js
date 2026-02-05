@@ -47,8 +47,12 @@ function PlotPortfolioValueByPrice() {
   SpreadFinder.PlotPortfolioValueByPrice();
 }
 
-function importEtradeTransactions() {
-  SpreadFinder.importEtradeTransactions();
+function importEtradePortfolio() {
+  SpreadFinder.importEtradePortfolio();
+}
+
+function loadSamplePortfolio() {
+  SpreadFinder.loadSamplePortfolio();
 }
 
 function refreshOptionPrices() {
