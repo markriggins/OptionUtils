@@ -536,6 +536,7 @@ function parsePositionsForSymbol_(rows, symbol) {
   const idxExp = findColumn_(headers, ["expiration", "exp", "expiry", "expirationdate", "expdate"]);
   const idxQty = findColumn_(headers, ["qty", "quantity", "contracts", "contract", "count", "shares"]);
   const idxPrice = findColumn_(headers, ["price", "cost", "entry", "premium", "basis", "costbasis", "avgprice", "pricepaid"]);
+  const idxClosed = findColumn_(headers, ["closed", "actualclose", "closedat"]);
 
   // If Strategy and Type resolve to same column, disambiguate: Strategy needs its own column
   // Strategy aliases shouldn't include bare "type" if Type column also uses "type"
@@ -551,7 +552,7 @@ function parsePositionsForSymbol_(rows, symbol) {
   let lastSym = "";
   let lastGroup = "";
 
-  // Collect groups: Map<groupKey, { legs: [...], firstRow: number }>
+  // Collect groups: Map<groupKey, { legs: [...], firstRow: number, closed: boolean, closedCount: number, legCount: number }>
   const groups = new Map();
 
   for (let r = 1; r < rows.length; r++) {
@@ -565,6 +566,20 @@ function parsePositionsForSymbol_(rows, symbol) {
     // Carry-forward group
     const rawGroup = String(row[idxGroup >= 0 ? idxGroup : -1] ?? "").trim();
     if (rawGroup) lastGroup = rawGroup;
+
+    // Track closed status per group
+    const groupKey = `${lastSym}|${lastGroup || r}`;
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, { legs: [], firstRow: r, closedCount: 0, legCount: 0 });
+    }
+    const g = groups.get(groupKey);
+    g.legCount++;
+
+    // Closed column (closing price): non-empty means this leg is closed
+    if (idxClosed >= 0) {
+      const closedVal = String(row[idxClosed] ?? "").trim();
+      if (closedVal !== "") g.closedCount++;
+    }
 
     const qty = parseNumber_(row[idxQty]);
     const price = parseNumber_(row[idxPrice]);
@@ -586,20 +601,18 @@ function parsePositionsForSymbol_(rows, symbol) {
       if (strat === "stock") legType = "Stock";
     }
 
-    const groupKey = `${lastSym}|${lastGroup || r}`;
-    if (!groups.has(groupKey)) {
-      groups.set(groupKey, { legs: [], firstRow: r });
-    }
-
     const leg = { qty, price, strike, type: legType };
     if (idxExp >= 0 && row[idxExp]) leg.expiration = row[idxExp];
     groups.get(groupKey).legs.push(leg);
   }
 
-  // Process each group
-  for (const [, group] of groups) {
+  // Process each group (skip closed)
+  for (const [key, group] of groups) {
     const legs = group.legs;
     const posType = detectPositionType_(legs);
+    // Skip closed groups: all legs have a value in the Closed column
+    const allLegsClosed = idxClosed >= 0 && group.closedCount >= group.legCount && group.legCount > 0;
+    if (allLegsClosed) continue;
 
     if (posType === "stock") {
       const leg = legs[0];

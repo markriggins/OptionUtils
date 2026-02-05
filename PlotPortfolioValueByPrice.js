@@ -218,7 +218,7 @@ function plotForSymbol_(ss, symbolRaw) {
 
   const totalSpreads = bullCallSpreads.length + bullPutSpreads.length + bearCallSpreads.length;
   if (shares.length === 0 && totalSpreads === 0) {
-    writeStatus_(sheet, `Parsed 0 valid rows for ${symbol}.\nCheck headers and numeric values.`);
+    writeStatus_(sheet, `No open positions for ${symbol}.`);
     return;
   }
 
