@@ -8,14 +8,14 @@
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('OptionTools')
-    .addItem('Refresh Option Prices', 'refreshOptionPrices')
-    .addItem('PlotPortfolioValueByPrice', 'PlotPortfolioValueByPrice')
-    .addItem('Run SpreadFinder', 'runSpreadFinder')
-    .addItem('View SpreadFinder Graphs', 'showSpreadFinderGraphs')
+    .addItem('1. Initialize / Clear Project', 'initializeProject')
     .addSeparator()
-    .addItem('Import Transactions from E*Trade', 'importEtradeTransactions')
+    .addItem('2. Refresh Option Prices', 'refreshOptionPrices')
+    .addItem('3. Import Transactions from E*Trade', 'importEtradeTransactions')
     .addSeparator()
-    .addItem('Initialize / Clear Project', 'initializeProject')
+    .addItem('4. PlotPortfolioValueByPrice', 'PlotPortfolioValueByPrice')
+    .addItem('5. Run SpreadFinder', 'runSpreadFinder')
+    .addItem('6. View SpreadFinder Graphs', 'showSpreadFinderGraphs')
     .addToUi();
 }
 
@@ -114,17 +114,17 @@ function initializeProject() {
     ["Each position group occupies one or more rows. The first row of a group has the Symbol and Group number; subsequent legs in the same group leave those columns blank. Columns: Symbol, Group, Strategy, Strike, Type (Call/Put/Stock), Expiration, Qty (positive=long, negative=short), Price (entry price per share). The Strategy column is auto-detected. The Closed column tracks closing prices; when all legs in a group have a closing price, the position is excluded from charts."],
     ["--- Importing Option Prices from Barchart.com ---"],
     ["Go to barchart.com and navigate to the options page for your symbol (e.g. barchart.com/stocks/quotes/TSLA/options). Select the expiration date you want, choose \"Stacked\" view to see calls and puts together, then click the download/export button to get a CSV file."],
-    ["Save the CSV to your Google Drive under: <DataFolder>/OptionPrices/ (default: OptionUtils/DATA/OptionPrices/). The filename must contain the symbol and expiration date in the format <symbol>-options-exp-YYYY-MM-DD. Example: tsla-options-exp-2028-12-15-monthly-show-all-stacked-01-15-2026.csv"],
+    ["Save the CSV to your Google Drive under: <DataFolder>/OptionPrices/ (default: SpreadFinder/DATA/OptionPrices/). The filename must contain the symbol and expiration date in the format <symbol>-options-exp-YYYY-MM-DD. Example: tsla-options-exp-2028-12-15-monthly-show-all-stacked-01-15-2026.csv"],
     ["Then run OptionTools > Refresh Option Prices. The script scans all symbol folders, picks the most recent CSV per expiration, and loads the data into the OptionPricesUploaded sheet. This data is used by SpreadFinder and the Rec Close column on the Legs sheet."],
     ["--- Importing Transactions from E*Trade ---"],
-    ["Log into E*Trade, go to Accounts > Transaction History, and download the transaction CSV. Save it to your Google Drive under: <DataFolder>/Etrade/ (default: OptionUtils/DATA/Etrade/). All transaction CSVs go in one folder."],
+    ["Log into E*Trade, go to Accounts > Transaction History, and download the transaction CSV. Save it to your Google Drive under: <DataFolder>/Etrade/ (default: SpreadFinder/DATA/Etrade/). All transaction CSVs go in one folder."],
     ["Run OptionTools > Import Transactions from E*Trade. The script reads all CSV files in that folder, deduplicates transactions across overlapping date ranges, pairs opening trades into spreads (including iron condors and iron butterflies), and writes them to the Legs sheet. Closing transactions (Sold To Close, Bought To Cover) automatically fill the Closed column with closing prices."],
     ["--- Visualizing Your Portfolio ---"],
     ["Run OptionTools > PlotPortfolioValueByPrice, then select which symbols to chart. For each symbol, the script creates a tab with four charts: (1) Portfolio Value by Price ($) showing aggregated strategy curves and total, (2) % Return by Price showing ROI for shares and each strategy type, (3) Individual Spreads ($) showing each spread separately, and (4) Individual Spreads ROI. A config table in columns K-L lets you adjust the price range, step size, and chart title."],
     ["--- Finding New Spreads with SpreadFinder ---"],
     ["Run OptionTools > Run SpreadFinder to scan the OptionPricesUploaded data for attractive bull call spread opportunities. Configure filters (max spread width, min open interest, min ROI, max debit) on the SpreadFinderConfig sheet. Results are written to the Spreads sheet, ranked by ROI. Use OptionTools > View SpreadFinder Graphs for visual analysis."],
     ["--- Config Sheet ---"],
-    ["The Config sheet controls where the scripts look for data files on Google Drive. The DataFolder setting (default: OptionUtils/DATA) is the base path. E*Trade CSVs go in <DataFolder>/Etrade/ and option price CSVs go in <DataFolder>/OptionPrices/. Initialize / Clear Project creates these folders and sample CSV files automatically."],
+    ["The Config sheet controls where the scripts look for data files on Google Drive. The DataFolder setting (default: SpreadFinder/DATA) is the base path. E*Trade CSVs go in <DataFolder>/Etrade/ and option price CSVs go in <DataFolder>/OptionPrices/. Initialize / Clear Project creates these folders and sample CSV files automatically."],
     ["--- Apps Script Library ---"],
     ["Available as a Google Apps Script library named SpreadFinder. Script ID: 1qvAlZ99zluKSr3ws4NsxH8xXo1FncbWzu6Yq6raBumHdCLpLDaKveM0T. Source: github.com/markriggins/OptionUtils"],
     ["--- Tips ---"],
@@ -134,19 +134,19 @@ function initializeProject() {
   readmeSheet.getRange(1, 1, readmeRows.length, 1).setValues(readmeRows);
 
   // Title row bold and larger
-  readmeSheet.getRange(1, 1).setFontWeight("bold").setFontSize(14);
+  readmeSheet.getRange(1, 1).setFontWeight("bold").setFontSize(18);
 
   // Section headers bold
   for (let r = 0; r < readmeRows.length; r++) {
     if (readmeRows[r][0].startsWith("---")) {
-      readmeSheet.getRange(r + 1, 1).setFontWeight("bold").setFontSize(11)
+      readmeSheet.getRange(r + 1, 1).setFontWeight("bold").setFontSize(18)
         .setValue(readmeRows[r][0].replace(/^--- ?| ?---$/g, ""));
     }
   }
 
-  // Column A: 60 characters wide (~420 pixels), wrap text
-  readmeSheet.setColumnWidth(1, 420);
-  readmeSheet.getRange("A:A").setWrap(true);
+  // Column A: wide enough for readability, wrap text
+  readmeSheet.setColumnWidth(1, 840);
+  readmeSheet.getRange("A:A").setWrap(true).setFontSize(18);
 
   // Hide other columns
   readmeSheet.hideColumns(2, readmeSheet.getMaxColumns() - 1);
@@ -160,11 +160,11 @@ function initializeProject() {
   }
   const configHeaders = ["Setting", "Value"];
   configSheet.getRange(1, 1, 1, 2).setValues([configHeaders]).setFontWeight("bold");
-  configSheet.getRange(2, 1, 1, 2).setValues([["DataFolder", "OptionUtils/DATA"]]);
+  configSheet.getRange(2, 1, 1, 2).setValues([["DataFolder", "SpreadFinder/DATA"]]);
   configSheet.autoResizeColumns(1, 2);
 
   // ---- Create Google Drive folders and sample files from GitHub ----
-  const dataFolderPath = getConfigValue_(ss, "DataFolder", "OptionUtils/DATA");
+  const dataFolderPath = getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA");
   try {
     let driveFolder = DriveApp.getRootFolder();
     for (const part of dataFolderPath.split("/")) {
@@ -176,7 +176,8 @@ function initializeProject() {
     const sampleFiles = [
       { folder: etradeFolder, name: "PortfolioDownload-sample.csv", path: "DATA/Etrade/PortfolioDownload-sample.csv" },
       { folder: etradeFolder, name: "DownloadTxnHistory-sample.csv", path: "DATA/Etrade/DownloadTxnHistory-sample.csv" },
-      { folder: optionPricesFolder, name: "tsla-options-exp-2028-12-15-monthly-show-all-stacked-sample.csv", path: "DATA/OptionPrices/tsla-options-exp-2028-12-15-monthly-show-all-stacked-sample.csv" },
+      { folder: optionPricesFolder, name: "tsla-options-exp-2028-06-16-monthly-show-all-stacked-02-04-2026.csv", path: "DATA/OptionPrices/tsla-options-exp-2028-06-16-monthly-show-all-stacked-02-04-2026.csv" },
+      { folder: optionPricesFolder, name: "tsla-options-exp-2028-12-15-monthly-show-all-stacked-02-04-2026.csv", path: "DATA/OptionPrices/tsla-options-exp-2028-12-15-monthly-show-all-stacked-02-04-2026.csv" },
     ];
 
     for (const sf of sampleFiles) {
@@ -189,8 +190,8 @@ function initializeProject() {
     Logger.log("Drive sample file setup skipped: " + e.message);
   }
 
-  // Activate the Legs sheet
-  ss.setActiveSheet(sheet);
+  // Activate the README sheet
+  ss.setActiveSheet(readmeSheet);
 
   ui.alert("Project initialized with a sample TSLA bull call spread.\n\nSee the README tab for instructions.\n\nEdit the Legs table with your positions, then use:\n  OptionTools > PlotPortfolioValueByPrice\n  OptionTools > Refresh Option Prices");
 }
