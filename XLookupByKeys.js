@@ -338,7 +338,7 @@ function test_XLookupByKeys_missing_row_returns_blanks() {
 function test_XLookupByKeys_all() {
   const globalObj = globalThis;
   const tests = Object.keys(globalObj)
-    .filter(k => typeof globalObj[k] === "function" && k.startsWith("test_XLookupByKeys"))
+    .filter(k => typeof globalObj[k] === "function" && k.startsWith("test_XLookupByKeys") && k !== "test_XLookupByKeys_all")
     .sort();
   Logger.log(`Found ${tests.length} tests`);
   tests.forEach(fn => {

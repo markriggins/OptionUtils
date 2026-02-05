@@ -901,7 +901,10 @@ function test_loadCsvData_columnOrders() {
   const symbol = "TSLA";
   const expDate = new Date(2028, 5, 16);
 
-  // Test 1: Standard order
+  // loadCsvData_ returns 12 columns: [symbol, expDate, strike, type, bid, mid, ask, iv, delta, volume, openInt, moneyness]
+  // When optional columns are missing, they are null
+
+  // Test 1: Standard order (no iv, delta, volume, openInt, moneyness columns)
   const csv1 = [
     ["Strike", "Bid", "Mid", "Ask", "Type"],
     ["450", "203.15", "206.00", "208.85", "Call"],
@@ -909,8 +912,8 @@ function test_loadCsvData_columnOrders() {
   ];
   const rows1 = loadCsvData_(csv1, symbol, expDate);
   assertArrayDeepEqual(rows1, [
-    [symbol, expDate, 450, "Call", 203.15, 206.00, 208.85],
-    [symbol, expDate, 350, "Put", 250.00, 255.00, 260.00]
+    [symbol, expDate, 450, "Call", 203.15, 206.00, 208.85, null, null, null, null, null],
+    [symbol, expDate, 350, "Put", 250.00, 255.00, 260.00, null, null, null, null, null]
   ], "Test 1: Standard order");
 
   // Test 2: Reversed order
@@ -921,8 +924,8 @@ function test_loadCsvData_columnOrders() {
   ];
   const rows2 = loadCsvData_(csv2, symbol, expDate);
   assertArrayDeepEqual(rows2, [
-    [symbol, expDate, 450, "Call", 203.15, 206.00, 208.85],
-    [symbol, expDate, 350, "Put", 250.00, 255.00, 260.00]
+    [symbol, expDate, 450, "Call", 203.15, 206.00, 208.85, null, null, null, null, null],
+    [symbol, expDate, 350, "Put", 250.00, 255.00, 260.00, null, null, null, null, null]
   ], "Test 2: Reversed order");
 
   // Test 3: Mixed case headers, no Mid, alt Type name
@@ -933,8 +936,8 @@ function test_loadCsvData_columnOrders() {
   ];
   const rows3 = loadCsvData_(csv3, symbol, expDate);
   assertArrayDeepEqual(rows3, [
-    [symbol, expDate, 450, "Call", 203.15, null, 208.85],
-    [symbol, expDate, 350, "Put", 250.00, null, 260.00]
+    [symbol, expDate, 450, "Call", 203.15, null, 208.85, null, null, null, null, null],
+    [symbol, expDate, 350, "Put", 250.00, null, 260.00, null, null, null, null, null]
   ], "Test 3: Mixed case, no Mid, alt Type");
 
   // Test 4: Missing required column -> empty
