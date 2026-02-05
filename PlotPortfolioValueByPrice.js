@@ -50,6 +50,12 @@ function PlotPortfolioValueByPrice() {
     return;
   }
 
+  // If only one symbol, skip the dialog and plot directly
+  if (symbols.length === 1) {
+    plotSelectedSymbols(symbols);
+    return;
+  }
+
   const html = HtmlService.createHtmlOutputFromFile("SelectSymbols")
     .setWidth(350)
     .setHeight(400);
