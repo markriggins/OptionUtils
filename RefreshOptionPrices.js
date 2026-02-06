@@ -33,11 +33,13 @@ function refreshOptionPrices() {
   let expGroupsLoaded = 0;
   let filesScanned = 0;
   let filesSkippedNoExp = 0;
+  const filesLoaded = []; // Track loaded files for summary
 
   // ---- Iterate symbol folders and find input files ----
   const fileMap = findInputFiles_();
   filesScanned = fileMap.filesScanned;
   filesSkippedNoExp = fileMap.filesSkippedNoExp;
+  const folderPath = fileMap.folderPath;
 
   // ---- Process selected files ----
   for (const symbol in fileMap.bestBySymbol) {
@@ -48,6 +50,7 @@ function refreshOptionPrices() {
     for (const expStr of expStrs) {
       const entry = bestByExp[expStr];
       const file = entry.file;
+      const fileCreated = new Date(entry.created);
 
       // Parse expStr into a Date (midnight) for sheet storage
       const expDate = parseYyyyMmDdToDateAtMidnight_(expStr);
@@ -63,6 +66,12 @@ function refreshOptionPrices() {
       if (parsedRows.length > 0) {
         allRows.push(...parsedRows);
         expGroupsLoaded++;
+        filesLoaded.push({
+          symbol: symbol,
+          expiration: expStr,
+          filename: file.getName(),
+          uploaded: fileCreated
+        });
       }
     }
 
@@ -71,9 +80,10 @@ function refreshOptionPrices() {
 
   if (allRows.length === 0) {
     let msg = "No valid data found.";
-    msg += `\n\nScanned CSV files: ${filesScanned}`;
+    msg += `\n\nLooked in: ${folderPath}`;
+    msg += `\nScanned CSV files: ${filesScanned}`;
     msg += `\nSkipped (no exp-YYYY-MM-DD in filename): ${filesSkippedNoExp}`;
-    ui.alert(msg);
+    ui.alert("Option Prices", msg, ui.ButtonSet.OK);
     return;
   }
 
@@ -130,12 +140,22 @@ function refreshOptionPrices() {
     Logger.log("Could not force recalculate BullCallSpreads: " + e);
   }
 
-  ss.toast(
-    `Refreshed ${allRows.length} rows from ${symbolCount} symbols\n` +
-      `Loaded latest files for ${expGroupsLoaded} expirations`,
-    "OptionPrices",
-    5
-  );
+  // Build summary of loaded files
+  let summary = `Loaded ${allRows.length} option prices from ${folderPath}\n\n`;
+  summary += `Files loaded (${filesLoaded.length}):\n`;
+
+  // Sort by symbol, then expiration
+  filesLoaded.sort((a, b) => {
+    if (a.symbol !== b.symbol) return a.symbol.localeCompare(b.symbol);
+    return a.expiration.localeCompare(b.expiration);
+  });
+
+  for (const f of filesLoaded) {
+    const uploadDate = Utilities.formatDate(f.uploaded, Session.getScriptTimeZone(), "MMM d, yyyy");
+    summary += `  • ${f.symbol} ${f.expiration} (uploaded ${uploadDate})\n`;
+  }
+
+  ui.alert("Option Prices Refreshed", summary, ui.ButtonSet.OK);
 }
 
 /**
@@ -202,7 +222,7 @@ function findInputFiles_(path) {
 
     const prev = bestBySymbol[symbol][expStr];
     if (!prev || updated > prev.updated) {
-      bestBySymbol[symbol][expStr] = { file, updated };
+      bestBySymbol[symbol][expStr] = { file, updated, created: file.getDateCreated().getTime() };
     }
   }
 
@@ -211,7 +231,7 @@ function findInputFiles_(path) {
     Logger.log(`  ${sym}: ${Object.keys(bestBySymbol[sym]).length} expirations`);
   }
 
-  return { bestBySymbol, filesScanned, filesSkippedNoExp };
+  return { bestBySymbol, filesScanned, filesSkippedNoExp, folderPath: path };
 }
 
 /**
