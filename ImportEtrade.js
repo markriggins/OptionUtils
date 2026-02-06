@@ -162,9 +162,30 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
     return;
   }
 
-  // Parse stock positions from most recent PortfolioDownload CSV
-  const stockPositions = parsePortfolioStocks_(folder, path);
-  Logger.log(`Found ${stockPositions.length} stock positions from portfolio`);
+  // Get stock positions based on import mode
+  let stockPositions = [];
+  if (importMode === "rebuild" || importMode === "fresh") {
+    // For rebuild/fresh: use PortfolioDownload CSV for quantities (source of truth)
+    // Transaction dates come from stockTxns (or NOW if none found)
+    if (portfolioFiles.length > 0) {
+      stockPositions = parsePortfolioStocksFromFile_(portfolioFiles[0], stockTxns);
+      Logger.log(`Found ${stockPositions.length} stock positions from portfolio CSV`);
+    }
+  } else {
+    // For update mode: aggregate only NEW stock transactions (after existing LastTxnDate)
+    const stockCutoffDates = new Map();
+    for (const [key, pos] of existingPositions) {
+      if (key.endsWith("|STOCK")) {
+        const ticker = key.split("|")[0];
+        const cutoff = parseDateFlexible_(pos.lastTxnDate);
+        if (cutoff) {
+          stockCutoffDates.set(ticker, cutoff);
+        }
+      }
+    }
+    stockPositions = aggregateStockTransactions_(stockTxns, stockCutoffDates);
+    Logger.log(`Found ${stockPositions.length} stock positions with new transactions`);
+  }
 
   // Pair into spreads (opens only)
   const rawSpreads = [...stockPositions, ...pairTransactionsIntoSpreads_(transactions)];
@@ -248,6 +269,56 @@ function formatExpShort_(exp) {
 }
 
 /**
+ * Formats a date as MM/DD/YYYY (e.g., 2/6/2026).
+ */
+function formatDateLong_(dateVal) {
+  if (!dateVal) return "";
+  const d = parseDateFlexible_(dateVal);
+  if (!d) return String(dateVal);
+  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+}
+
+/**
+ * Generates a description for a spread like "500/600 bull-call-spread".
+ */
+function generateSpreadDescription_(spread) {
+  if (spread.type === "stock") {
+    return "Stock";
+  }
+
+  if (spread.type === "iron-condor" && spread.legs) {
+    const strikes = spread.legs.map(l => l.strike).sort((a, b) => a - b).join("/");
+    // Detect iron-butterfly (middle strikes are equal) vs iron-condor
+    const sortedStrikes = spread.legs.map(l => l.strike).sort((a, b) => a - b);
+    const isButterfly = sortedStrikes[1] === sortedStrikes[2];
+    return `${strikes} ${isButterfly ? "iron-butterfly" : "iron-condor"}`;
+  }
+
+  // Regular spread
+  const strikes = [spread.lowerStrike, spread.upperStrike].filter(s => s != null);
+  const strikeStr = strikes.sort((a, b) => a - b).join("/");
+
+  // Determine strategy type
+  let strategy;
+  if (spread.lowerStrike && spread.upperStrike) {
+    // Two legs
+    if (spread.optionType === "Call") {
+      strategy = "bull-call-spread";
+    } else {
+      strategy = "bull-put-spread";
+    }
+  } else if (spread.lowerStrike) {
+    // Long only
+    strategy = spread.optionType === "Call" ? "long-call" : "long-put";
+  } else {
+    // Short only
+    strategy = spread.optionType === "Call" ? "short-call" : "short-put";
+  }
+
+  return `${strikeStr} ${strategy}`;
+}
+
+/**
  * Imports E*Trade portfolio from a specific folder and filenames.
  * Used by loadSamplePortfolio to import sample data without UI prompts.
  *
@@ -281,10 +352,11 @@ function importEtradePortfolioFromFolder_(folder, txnFileName, portfolioFileName
     throw new Error("No transactions found in " + txnFileName);
   }
 
-  // Parse stock positions from portfolio CSV
+  // Parse stock positions from portfolio CSV (qty and price are source of truth)
+  // Then add latest transaction date from stockTxns (or NOW if no transactions found)
   let stockPositions = [];
   if (portfolioFiles.length > 0) {
-    stockPositions = parsePortfolioStocksFromFile_(portfolioFiles[0]);
+    stockPositions = parsePortfolioStocksFromFile_(portfolioFiles[0], stockTxns);
   }
 
   // Pair into spreads
@@ -300,9 +372,15 @@ function importEtradePortfolioFromFolder_(folder, txnFileName, portfolioFileName
 }
 
 /**
- * Parses stock positions from a specific PortfolioDownload file.
+ * Parses stock positions from a PortfolioDownload CSV file.
+ * Quantities and prices come from the CSV (source of truth).
+ * Transaction dates come from stockTxns (latest date per ticker, or NOW if none found).
+ *
+ * @param {File} file - The PortfolioDownload CSV file
+ * @param {Object[]} stockTxns - Array of stock transactions from parseEtradeCsv_
+ * @returns {Object[]} Array of stock position objects
  */
-function parsePortfolioStocksFromFile_(file) {
+function parsePortfolioStocksFromFile_(file, stockTxns) {
   const csv = file.getBlob().getDataAsString();
   const lines = csv.split(/\r?\n/);
 
@@ -323,6 +401,9 @@ function parsePortfolioStocksFromFile_(file) {
 
   if (idxSym < 0 || idxQty < 0 || idxPricePaid < 0) return [];
 
+  // Build map of latest transaction date per ticker
+  const latestDateByTicker = buildLatestStockDates_(stockTxns);
+
   const stocks = [];
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -339,11 +420,15 @@ function parsePortfolioStocksFromFile_(file) {
     const pricePaid = parseFloat(cols[idxPricePaid]) || 0;
     if (qty === 0) continue;
 
+    // Use latest transaction date, or NOW if no transactions found
+    const lastDate = latestDateByTicker.get(symbol) || new Date();
+
     stocks.push({
       type: "stock",
       ticker: symbol,
       qty: qty,
       price: roundTo_(pricePaid, 2),
+      date: lastDate,
       expiration: null,
       lowerStrike: null,
       upperStrike: null,
@@ -352,6 +437,33 @@ function parsePortfolioStocksFromFile_(file) {
   }
 
   return stocks;
+}
+
+/**
+ * Builds a map of ticker -> latest transaction date from stock transactions.
+ *
+ * @param {Object[]} stockTxns - Array of stock transactions
+ * @returns {Map<string, Date>} Map of ticker to latest transaction date
+ */
+function buildLatestStockDates_(stockTxns) {
+  const latestByTicker = new Map();
+
+  if (!stockTxns) return latestByTicker;
+
+  for (const txn of stockTxns) {
+    const ticker = txn.ticker;
+    if (!ticker) continue;
+
+    const txnDate = parseDateFlexible_(txn.date);
+    if (!txnDate) continue;
+
+    const existing = latestByTicker.get(ticker);
+    if (!existing || txnDate > existing) {
+      latestByTicker.set(ticker, txnDate);
+    }
+  }
+
+  return latestByTicker;
 }
 
 /**
@@ -420,10 +532,11 @@ function parseEtradeCsv_(csvContent) {
     const [dateStr, txnType, secType, symbol, qtyStr, amountStr, priceStr, commStr] = cols;
     const desc = descIdx >= 0 && cols.length > descIdx ? cols[descIdx] : "";
 
-    // Stock transactions (for exercise/assignment matching)
+    // Stock transactions (for exercise/assignment matching and portfolio aggregation)
     if (secType === "EQ" && (txnType === "Bought" || txnType === "Sold")) {
       stockTxns.push({
         date: dateStr,
+        txnType: txnType,
         ticker: symbol.trim().toUpperCase(),
         qty: parseFloat(qtyStr) || 0,
         price: parseFloat(priceStr) || 0,
@@ -1024,9 +1137,34 @@ function mergeSpreads_(existingPositions, newSpreads) {
     if (existingPositions.has(key)) {
       const existing = existingPositions.get(key);
 
-      // Stock positions don't have transaction dates - skip them on updates
+      // Stock positions: add delta qty and update lastTxnDate
       if (spread.type === "stock") {
-        skippedCount++;
+        // spread.qty is the DELTA (bought - sold) from new transactions
+        if (spread.qty === 0 && !spread.date) {
+          // No new transactions for this stock
+          skippedCount++;
+          continue;
+        }
+
+        // Update quantity by adding the delta
+        const stockLeg = existing.legs[0];
+        if (stockLeg) {
+          stockLeg.qty += spread.qty;
+          // Update price to most recent transaction price
+          if (spread.price) stockLeg.price = spread.price;
+        }
+
+        // Update lastTxnDate
+        if (spread.date) {
+          existing.lastTxnDate = spread.date;
+        }
+
+        existing.updated = true;
+        updatedCount++;
+        for (const leg of existing.legs) {
+          leg.updated = true;
+          updatedLegs.push(leg);
+        }
         continue;
       }
 
@@ -1095,19 +1233,19 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
     let sheet = ss.getSheetByName("Portfolio");
     if (!sheet) sheet = ss.insertSheet("Portfolio");
 
-    headers = ["Symbol", "Group", "Strategy", "Strike", "Type", "Expiration", "Qty", "Price", "Investment", "Rec Close", "Closed", "Gain", "LastTxnDate", "Link"];
+    headers = ["Symbol", "Group", "Description", "Strategy", "Strike", "Type", "Expiration", "Qty", "Price", "Investment", "Rec Close", "Closed", "Gain", "LastTxnDate", "Link"];
     const headerRange = sheet.getRange(1, 1, 1, headers.length);
     headerRange.setValues([headers]);
     headerRange.setBackground("#93c47d"); // Green header
     headerRange.setFontWeight("bold");
-    ss.setNamedRange("PortfolioTable", sheet.getRange("A:N"));
+    ss.setNamedRange("PortfolioTable", sheet.getRange("A:O"));
 
     // Add filter to the data range
-    const filterRange = sheet.getRange("A:N");
+    const filterRange = sheet.getRange("A:O");
     filterRange.createFilter();
 
     // Set wrap to clip
-    sheet.getRange("A:N").setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+    sheet.getRange("A:O").setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
   }
 
   const range = getNamedRangeWithTableFallback_(ss, "Portfolio");
@@ -1118,6 +1256,7 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
   // Find column indexes
   const idxSym = findColumn_(headers, ["symbol", "ticker"]);
   const idxGroup = findColumn_(headers, ["group", "grp"]);
+  const idxDescription = findColumn_(headers, ["description", "desc"]);
   const idxStrategy = findColumn_(headers, ["strategy"]);
   const idxStrike = findColumn_(headers, ["strike"]);
   const idxType = findColumn_(headers, ["type"]);
@@ -1164,9 +1303,9 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
         }
       }
     }
-    // Update LastTxnDate on the first row of the group
+    // Update LastTxnDate on the first row of the group (format as MM/DD/YYYY)
     if (idxLastTxnDate >= 0 && pos.lastTxnDate && pos.legs.length > 0 && pos.legs[0].row != null) {
-      sheet.getRange(startRow + pos.legs[0].row, startCol + idxLastTxnDate).setValue(pos.lastTxnDate);
+      sheet.getRange(startRow + pos.legs[0].row, startCol + idxLastTxnDate).setValue(formatDateLong_(pos.lastTxnDate));
     }
   }
 
@@ -1206,11 +1345,15 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
         return val != null ? val : "";
       };
 
+      // Generate description for this spread (shown on every row for filtering)
+      const spreadDescription = generateSpreadDescription_(spread);
+
       // Handle stock position (single row, no strike/expiration)
       if (spread.type === "stock") {
         const row = new Array(headers.length).fill("");
         if (idxSym >= 0) row[idxSym] = spread.ticker;
         if (idxGroup >= 0) row[idxGroup] = nextGroup;
+        if (idxDescription >= 0) row[idxDescription] = spreadDescription;
         if (idxType >= 0) row[idxType] = "Stock";
         if (idxQty >= 0) row[idxQty] = spread.qty;
         if (idxPrice >= 0) row[idxPrice] = roundTo_(spread.price, 2);
@@ -1226,6 +1369,7 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
             if (idxSym >= 0) row[idxSym] = spread.ticker;
             if (idxGroup >= 0) row[idxGroup] = nextGroup;
           }
+          if (idxDescription >= 0) row[idxDescription] = spreadDescription;
           if (idxStrike >= 0) row[idxStrike] = leg.strike;
           if (idxType >= 0) row[idxType] = leg.optionType;
           if (idxExp >= 0) row[idxExp] = spread.expiration;
@@ -1246,6 +1390,7 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
           const row = new Array(headers.length).fill("");
           if (idxSym >= 0) row[idxSym] = spread.ticker;
           if (idxGroup >= 0) row[idxGroup] = nextGroup;
+          if (idxDescription >= 0) row[idxDescription] = spreadDescription;
           if (idxStrike >= 0) row[idxStrike] = spread.lowerStrike;
           if (idxType >= 0) row[idxType] = spread.optionType;
           if (idxExp >= 0) row[idxExp] = spread.expiration;
@@ -1264,6 +1409,7 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
             if (idxSym >= 0) row[idxSym] = spread.ticker;
             if (idxGroup >= 0) row[idxGroup] = nextGroup;
           }
+          if (idxDescription >= 0) row[idxDescription] = spreadDescription;
           if (idxStrike >= 0) row[idxStrike] = spread.upperStrike;
           if (idxType >= 0) row[idxType] = spread.optionType;
           if (idxExp >= 0) row[idxExp] = spread.expiration;
@@ -1278,9 +1424,9 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
 
       if (rows.length === 0) continue;
 
-      // Set LastTxnDate on the first row of the group
+      // Set LastTxnDate on the first row of the group (format as MM/DD/YYYY)
       if (idxLastTxnDate >= 0 && spread.date) {
-        rows[0][idxLastTxnDate] = spread.date;
+        rows[0][idxLastTxnDate] = formatDateLong_(spread.date);
       }
 
       const firstRow = lastRow + 1;
@@ -1420,69 +1566,77 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
 }
 
 /**
- * Parses stock positions from PortfolioDownload.csv in the same folder.
- * Returns spread-like objects with type="stock" for each stock holding.
+ * Aggregates stock transactions into net positions by symbol.
+ * Bought transactions add to quantity, Sold transactions subtract.
+ * Tracks the latest transaction date for each symbol.
  *
- * @param {Folder} folder - Google Drive folder containing the CSV
- * @param {string} path - Folder path (for logging)
- * @returns {Object[]} Array of stock position objects
+ * @param {Object[]} stockTxns - Array of stock transaction objects from parseEtradeCsv_
+ * @returns {Object[]} Array of stock position objects (spread-like with type="stock")
  */
-function parsePortfolioStocks_(folder, path) {
-  const matches = findFilesByPrefix_(folder, "PortfolioDownload");
-  if (matches.length === 0) {
-    Logger.log("No PortfolioDownload CSV found in " + path);
-    return [];
-  }
+/**
+ * Aggregates stock transactions into delta positions by symbol.
+ * Bought transactions add to quantity, Sold transactions subtract.
+ *
+ * @param {Object[]} stockTxns - Array of stock transaction objects from parseEtradeCsv_
+ * @param {Map<string, Date>} [sinceByTicker] - Optional map of ticker -> cutoff date.
+ *        Only transactions AFTER this date are included for each ticker.
+ * @returns {Object[]} Array of stock position objects (spread-like with type="stock")
+ */
+function aggregateStockTransactions_(stockTxns, sinceByTicker) {
+  if (!stockTxns || stockTxns.length === 0) return [];
 
-  // Use most recent file
-  const csv = matches[0].getBlob().getDataAsString();
-  const lines = csv.split(/\r?\n/);
+  // Group by ticker: { ticker: { qty: number, lastDate: Date, lastPrice: number } }
+  const byTicker = new Map();
 
-  // Find the data header row ("Symbol,Last Price $,...")
-  let headerIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].startsWith("Symbol,Last Price")) {
-      headerIdx = i;
-      break;
+  for (const txn of stockTxns) {
+    const ticker = txn.ticker;
+    if (!ticker) continue;
+
+    // Parse transaction date
+    const txnDate = parseDateFlexible_(txn.date);
+
+    // If sinceByTicker provided, skip transactions on or before the cutoff date
+    if (sinceByTicker && sinceByTicker.has(ticker)) {
+      const cutoff = sinceByTicker.get(ticker);
+      if (txnDate && cutoff && txnDate <= cutoff) {
+        continue; // Skip this transaction - it's already been processed
+      }
+    }
+
+    // Get or initialize ticker entry
+    if (!byTicker.has(ticker)) {
+      byTicker.set(ticker, {
+        qty: 0,
+        lastDate: null,
+        lastPrice: 0,
+      });
+    }
+
+    const entry = byTicker.get(ticker);
+
+    // Accumulate quantity: Bought adds, Sold subtracts
+    const qtyChange = txn.txnType === "Bought" ? txn.qty : -txn.qty;
+    entry.qty += qtyChange;
+
+    // Track latest transaction date
+    if (txnDate && (!entry.lastDate || txnDate > entry.lastDate)) {
+      entry.lastDate = txnDate;
+      entry.lastPrice = txn.price; // Use price from most recent transaction
     }
   }
-  if (headerIdx < 0) return [];
 
-  const headers = parseCsvLine_(lines[headerIdx]);
-  const idxSym = headers.findIndex(h => h === "Symbol");
-  const idxQty = headers.findIndex(h => h === "Quantity");
-  const idxPricePaid = headers.findIndex(h => h.startsWith("Price Paid"));
-
-  if (idxSym < 0 || idxQty < 0 || idxPricePaid < 0) return [];
-
+  // Convert to spread-like objects
   const stocks = [];
-  for (let i = headerIdx + 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const cols = parseCsvLine_(line);
-    const symbol = (cols[idxSym] || "").trim().toUpperCase();
-
-    // Skip non-stock rows
-    if (!symbol) continue;
-    if (symbol === "CASH" || symbol === "TOTAL") continue;
-
-    // Skip option symbols (contain spaces, e.g. "TSLA Jun 16 '28 $350 Call")
-    if (symbol.includes(" ")) continue;
-
-    // Skip CUSIP-like symbols (contain 3+ consecutive digits)
-    if (/\d{3,}/.test(symbol)) continue;
-
-    const qty = parseFloat(cols[idxQty]) || 0;
-    const pricePaid = parseFloat(cols[idxPricePaid]) || 0;
-
-    if (qty === 0) continue;
+  for (const [ticker, entry] of byTicker) {
+    // Skip if no new transactions after cutoff (qty would be 0 and no lastDate)
+    if (entry.qty === 0 && !entry.lastDate) continue;
 
     stocks.push({
       type: "stock",
-      ticker: symbol,
-      qty: qty,
-      price: roundTo_(pricePaid, 2),
+      ticker: ticker,
+      qty: entry.qty,  // This is the DELTA qty (change from new transactions)
+      price: entry.lastPrice,
+      date: entry.lastDate,
       expiration: null,
       lowerStrike: null,
       upperStrike: null,
