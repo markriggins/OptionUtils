@@ -50,7 +50,7 @@ function refreshOptionPrices() {
     for (const expStr of expStrs) {
       const entry = bestByExp[expStr];
       const file = entry.file;
-      const fileCreated = new Date(entry.created);
+      const fileModified = new Date(entry.updated);
 
       // Parse expStr into a Date (midnight) for sheet storage
       const expDate = parseYyyyMmDdToDateAtMidnight_(expStr);
@@ -70,7 +70,7 @@ function refreshOptionPrices() {
           symbol: symbol,
           expiration: expStr,
           filename: file.getName(),
-          uploaded: fileCreated
+          uploaded: fileModified
         });
       }
     }
@@ -151,7 +151,7 @@ function refreshOptionPrices() {
   });
 
   for (const f of filesLoaded) {
-    const uploadDate = Utilities.formatDate(f.uploaded, Session.getScriptTimeZone(), "MMM d, yyyy");
+    const uploadDate = Utilities.formatDate(f.uploaded, Session.getScriptTimeZone(), "MMM d, yyyy h:mm a");
     summary += `  • ${f.symbol} ${f.expiration} (uploaded ${uploadDate})\n`;
   }
 
@@ -222,7 +222,7 @@ function findInputFiles_(path) {
 
     const prev = bestBySymbol[symbol][expStr];
     if (!prev || updated > prev.updated) {
-      bestBySymbol[symbol][expStr] = { file, updated, created: file.getDateCreated().getTime() };
+      bestBySymbol[symbol][expStr] = { file, updated };
     }
   }
 

@@ -11,14 +11,41 @@
  */
 
 /**
+ * Import Latest Transactions - adds new transactions, skips duplicates.
+ * Menu action for incremental imports.
+ */
+function importLatestTransactions() {
+  importEtradePortfolio_("update");
+}
+
+/**
+ * Clear & Rebuild Portfolio - deletes existing portfolio and imports all transactions fresh.
+ * Menu action for full rebuild.
+ */
+function rebuildPortfolio() {
+  importEtradePortfolio_("rebuild");
+}
+
+/**
+ * Legacy function for backwards compatibility.
+ */
+function importEtradePortfolio() {
+  // Default to update mode if portfolio exists, otherwise fresh
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const existingSheet = ss.getSheetByName("Portfolio");
+  importEtradePortfolio_(existingSheet ? "update" : "fresh");
+}
+
+/**
  * Imports E*Trade portfolio and transactions from CSV files in Google Drive.
- * Call from OptionTools menu or script.
  *
+ * @param {string} importMode - "fresh" (no existing), "update" (merge), or "rebuild" (delete and recreate)
  * @param {string} [fileName] - Transaction CSV filename (default: all "DownloadTxnHistory*.csv" files)
  * @param {string} [folderPath] - Folder path in Drive (default: "<DataFolder>/Etrade")
  */
-function importEtradePortfolio(fileName, folderPath) {
+function importEtradePortfolio_(importMode, fileName, folderPath) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
   const path = folderPath || getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA") + "/Etrade";
 
   // Navigate to folder
@@ -30,30 +57,23 @@ function importEtradePortfolio(fileName, folderPath) {
       folder = getFolder_(folder, part);
     }
   } catch (e) {
-    SpreadsheetApp.getUi().alert(
+    ui.alert(
+      "Folder Not Found",
       `Folder not found: ${path}\n\n` +
       `To set up your E*Trade import folder:\n` +
       `1. Create the folder in Google Drive: ${path}\n` +
       `2. Upload your E*Trade CSV files there\n\n` +
-      `Or change the DataFolder setting on the Config sheet.`
+      `Or change the DataFolder setting on the Config sheet.`,
+      ui.ButtonSet.OK
     );
     return;
   }
 
-  // Check for existing Portfolio sheet (may contain sample data)
-  const existingSheet = ss.getSheetByName("Portfolio");
-  if (existingSheet) {
-    const ui = SpreadsheetApp.getUi();
-    const resp = ui.alert(
-      "Import Portfolio",
-      "A Portfolio sheet already exists. Replace it with imported data?\n\n" +
-      "• OK = Delete existing data and import fresh\n" +
-      "• Cancel = Keep existing data and merge",
-      ui.ButtonSet.OK_CANCEL
-    );
-    if (resp === ui.Button.OK) {
+  // Handle rebuild mode - delete existing sheet first
+  if (importMode === "rebuild") {
+    const existingSheet = ss.getSheetByName("Portfolio");
+    if (existingSheet) {
       ss.deleteSheet(existingSheet);
-      // Also remove the named range
       const nr = ss.getNamedRanges().find(r => r.getName() === "PortfolioTable");
       if (nr) nr.remove();
     }
@@ -161,16 +181,21 @@ function importEtradePortfolio(fileName, folderPath) {
   writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices);
 
   // Report
-  const fileNames = txnFiles.map(f => f.getName()).join(", ");
-  SpreadsheetApp.getUi().alert(
-    `Import Complete\n\n` +
-    `Files: ${fileNames}\n` +
-    `Transactions parsed: ${transactions.length}\n` +
-    `Spread orders: ${spreads.length}\n` +
-    `New positions: ${newLegs.length}\n` +
-    `Updated positions: ${updatedLegs.length}\n` +
-    `Skipped (already imported): ${skippedCount}`
-  );
+  const fileNames = txnFiles.map(f => f.getName()).join("\n  ");
+  const modeLabel = importMode === "update" ? "Import Latest Transactions" : "Portfolio Import";
+  let summary = `Files:\n  ${fileNames}\n\n`;
+  summary += `Transactions parsed: ${transactions.length}\n`;
+  summary += `Spread orders: ${spreads.length}\n`;
+
+  if (importMode === "update") {
+    summary += `\nNew positions added: ${newLegs.length}\n`;
+    summary += `Existing positions updated: ${updatedLegs.length}\n`;
+    summary += `Skipped (already imported): ${skippedCount}`;
+  } else {
+    summary += `Positions imported: ${newLegs.length}`;
+  }
+
+  ui.alert(modeLabel + " Complete", summary, ui.ButtonSet.OK);
 }
 
 /**

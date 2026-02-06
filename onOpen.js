@@ -7,16 +7,26 @@
 
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
+
+  const spreadFinderMenu = ui.createMenu('SpreadFinder')
+    .addItem('Refresh Option Prices', 'refreshOptionPrices')
+    .addSeparator()
+    .addItem('Run SpreadFinder', 'runSpreadFinder')
+    .addItem('View Graphs', 'showSpreadFinderGraphs');
+
+  const portfolioMenu = ui.createMenu('Portfolio')
+    .addItem('Import Latest Transactions', 'importLatestTransactions')
+    .addItem('Clear & Rebuild from E*Trade', 'rebuildPortfolio')
+    .addSeparator()
+    .addItem('Load Sample Portfolio', 'loadSamplePortfolio')
+    .addSeparator()
+    .addItem('View Performance Graphs', 'PlotPortfolioValueByPrice');
+
   ui.createMenu('OptionTools')
-    .addItem('1. Initialize / Clear Project', 'initializeProject')
+    .addItem('Initialize / Clear Project', 'initializeProject')
     .addSeparator()
-    .addItem('2. Run SpreadFinder', 'runSpreadFinder')
-    .addItem('3. View SpreadFinder Graphs', 'showSpreadFinderGraphs')
-    .addSeparator()
-    .addItem('4. Refresh Option Prices', 'refreshOptionPrices')
-    .addItem('5. Import Portfolio from E*Trade', 'importEtradePortfolio')
-    .addItem('6. Load Sample Portfolio', 'loadSamplePortfolio')
-    .addItem('7. View Portfolio Performance Graphs', 'PlotPortfolioValueByPrice')
+    .addSubMenu(spreadFinderMenu)
+    .addSubMenu(portfolioMenu)
     .addToUi();
 }
 

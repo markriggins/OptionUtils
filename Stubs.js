@@ -51,6 +51,14 @@ function importEtradePortfolio() {
   SpreadFinder.importEtradePortfolio();
 }
 
+function importLatestTransactions() {
+  SpreadFinder.importLatestTransactions();
+}
+
+function rebuildPortfolio() {
+  SpreadFinder.rebuildPortfolio();
+}
+
 function loadSamplePortfolio() {
   SpreadFinder.loadSamplePortfolio();
 }
