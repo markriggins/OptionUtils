@@ -167,7 +167,10 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
   Logger.log(`Found ${stockPositions.length} stock positions from portfolio`);
 
   // Pair into spreads (opens only)
-  const spreads = [...stockPositions, ...pairTransactionsIntoSpreads_(transactions)];
+  const rawSpreads = [...stockPositions, ...pairTransactionsIntoSpreads_(transactions)];
+
+  // Pre-merge spreads with the same key, keeping latest date and summing quantities
+  const spreads = preMergeSpreads_(rawSpreads);
   Logger.log(`Paired into ${spreads.length} spread orders (including stocks)`);
 
   // Build map of closing prices by leg key
@@ -188,14 +191,60 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
   summary += `Spread orders: ${spreads.length}\n`;
 
   if (importMode === "update") {
-    summary += `\nNew positions added: ${newLegs.length}\n`;
-    summary += `Existing positions updated: ${updatedLegs.length}\n`;
-    summary += `Skipped (already imported): ${skippedCount}`;
+    summary += `\nNew positions added: ${newLegs.length}`;
+    if (newLegs.length > 0) {
+      summary += "\n  " + newLegs.map(s => formatSpreadLabel_(s)).join("\n  ");
+    }
+    summary += `\n\nExisting positions updated: ${updatedLegs.length}`;
+    if (updatedLegs.length > 0) {
+      summary += "\n  " + updatedLegs.map(p => formatPositionLabel_(p)).join("\n  ");
+    }
+    summary += `\n\nSkipped (already imported): ${skippedCount}`;
   } else {
     summary += `Positions imported: ${newLegs.length}`;
   }
 
   ui.alert(modeLabel + " Complete", summary, ui.ButtonSet.OK);
+}
+
+/**
+ * Formats a spread order for display in the report.
+ */
+function formatSpreadLabel_(spread) {
+  if (spread.type === "stock") {
+    return `${spread.ticker} Stock`;
+  }
+  if (spread.type === "iron-condor") {
+    const strikes = spread.legs.map(l => l.strike).join("/");
+    return `${spread.ticker} ${formatExpShort_(spread.expiration)} ${strikes} iron-condor`;
+  }
+  const strikes = [spread.lowerStrike, spread.upperStrike].filter(s => s).join("/");
+  const strategyType = spread.lowerStrike && spread.upperStrike ? "bull-call-spread" :
+                       spread.lowerStrike ? "long-call" : "short-call";
+  return `${spread.ticker} ${formatExpShort_(spread.expiration)} ${strikes} ${strategyType}`;
+}
+
+/**
+ * Formats an existing position for display in the report.
+ */
+function formatPositionLabel_(pos) {
+  if (!pos.legs || pos.legs.length === 0) return "Unknown position";
+  const leg = pos.legs[0];
+  const strikes = pos.legs.map(l => l.strike).filter(s => s).sort((a, b) => a - b).join("/");
+  const exp = formatExpShort_(leg.expiration);
+  const debug = pos.debugReason || "";
+  return `${leg.symbol} ${exp} ${strikes} ${leg.type || "Call"}${debug}`;
+}
+
+/**
+ * Formats expiration as "Mon YYYY" for display.
+ */
+function formatExpShort_(exp) {
+  if (!exp) return "";
+  const d = parseDateFlexible_(exp);
+  if (!d) return String(exp);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
 /**
@@ -428,6 +477,38 @@ function parseEtradeCsv_(csvContent) {
   }
 
   return { transactions, stockTxns };
+}
+
+/**
+ * Parses a date string flexibly, handling MM/DD/YY, MM/DD/YYYY, and Date objects.
+ * Returns a Date object or null if parsing fails.
+ */
+function parseDateFlexible_(dateVal) {
+  if (!dateVal) return null;
+
+  // Already a Date object
+  if (dateVal instanceof Date) {
+    return isNaN(dateVal.getTime()) ? null : dateVal;
+  }
+
+  const s = String(dateVal).trim();
+  if (!s) return null;
+
+  // Try MM/DD/YY or MM/DD/YYYY
+  const match = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (match) {
+    let [, m, d, y] = match;
+    let year = parseInt(y, 10);
+    // Handle 2-digit year: assume 20xx for years 00-99
+    if (year < 100) {
+      year = year < 50 ? 2000 + year : 1900 + year;
+    }
+    return new Date(year, parseInt(m, 10) - 1, parseInt(d, 10));
+  }
+
+  // Fallback to native parsing
+  const parsed = new Date(s);
+  return isNaN(parsed.getTime()) ? null : parsed;
 }
 
 /**
@@ -840,8 +921,14 @@ function makeSpreadKey_(legs) {
 
   const exp = normalizeExpiration_(legs[0].expiration) || legs[0].expiration;
   const strikes = legs.map(l => l.strike).sort((a, b) => a - b);
-  const type = legs[0].type || "Call";
 
+  // Detect iron-condor/iron-butterfly: 4 legs with both puts and calls
+  const types = new Set(legs.map(l => l.type));
+  if (legs.length === 4 && types.has("Put") && types.has("Call")) {
+    return `${ticker}|${exp}|${strikes.join("/")}|IC`;
+  }
+
+  const type = legs[0].type || "Call";
   return `${ticker}|${exp}|${strikes.join("/")}|${type}`;
 }
 
@@ -865,6 +952,62 @@ function makeSpreadKeyFromOrder_(spread) {
 }
 
 /**
+ * Pre-merges spreads with the same key, keeping the latest date and summing quantities.
+ * This ensures that when multiple transactions create the same spread on different dates,
+ * only one spread is created with the combined quantity and the latest date.
+ */
+function preMergeSpreads_(spreads) {
+  const merged = new Map(); // key -> spread
+
+  for (const spread of spreads) {
+    const key = makeSpreadKeyFromOrder_(spread);
+
+    if (!merged.has(key)) {
+      // First occurrence - clone the spread
+      merged.set(key, { ...spread });
+    } else {
+      // Merge into existing
+      const existing = merged.get(key);
+
+      // Keep the later date
+      if (spread.date && (!existing.date || spread.date > existing.date)) {
+        existing.date = spread.date;
+      }
+
+      // Sum quantities and compute weighted average prices
+      if (spread.type === "stock") {
+        const oldQty = existing.qty || 0;
+        const newQty = spread.qty || 0;
+        const totalQty = oldQty + newQty;
+        if (totalQty !== 0) {
+          existing.price = ((oldQty * (existing.price || 0)) + (newQty * (spread.price || 0))) / totalQty;
+        }
+        existing.qty = totalQty;
+      } else if (spread.type === "iron-condor" && spread.legs) {
+        // For iron condors, sum quantities (legs stay the same strikes)
+        existing.qty = (existing.qty || 0) + (spread.qty || 0);
+        // Could also merge leg prices but keeping it simple
+      } else {
+        // Regular spread - sum quantities and merge prices
+        const oldQty = existing.qty || 0;
+        const newQty = spread.qty || 0;
+        const totalQty = oldQty + newQty;
+
+        if (totalQty !== 0 && existing.lowerPrice !== undefined && spread.lowerPrice !== undefined) {
+          existing.lowerPrice = ((oldQty * existing.lowerPrice) + (newQty * spread.lowerPrice)) / totalQty;
+        }
+        if (totalQty !== 0 && existing.upperPrice !== undefined && spread.upperPrice !== undefined) {
+          existing.upperPrice = ((oldQty * existing.upperPrice) + (newQty * spread.upperPrice)) / totalQty;
+        }
+        existing.qty = totalQty;
+      }
+    }
+  }
+
+  return Array.from(merged.values());
+}
+
+/**
  * Merges new spreads into existing positions.
  * Skips spreads whose date is not newer than the group's LastTxnDate.
  * Returns { updatedLegs, newLegs, skippedCount }.
@@ -881,11 +1024,24 @@ function mergeSpreads_(existingPositions, newSpreads) {
     if (existingPositions.has(key)) {
       const existing = existingPositions.get(key);
 
-      // Per-group dedup: skip if spread's date is not newer than LastTxnDate
-      if (existing.lastTxnDate && spread.date && spread.date <= existing.lastTxnDate) {
+      // Stock positions don't have transaction dates - skip them on updates
+      if (spread.type === "stock") {
         skippedCount++;
         continue;
       }
+
+      // Per-group dedup: skip if spread's date is not newer than LastTxnDate
+      // Parse dates carefully to handle MM/DD/YY vs MM/DD/YYYY formats
+      const spreadDate = parseDateFlexible_(spread.date);
+      const lastTxnDate = parseDateFlexible_(existing.lastTxnDate);
+
+      if (spreadDate && lastTxnDate && spreadDate <= lastTxnDate) {
+        skippedCount++;
+        continue;
+      }
+
+      // Debug: capture why this wasn't skipped
+      existing.debugReason = ` [txn:${spread.date} vs last:${existing.lastTxnDate}]`;
 
       // Merge into existing
       const longLeg = existing.legs.find(l => l.qty > 0);
@@ -1019,14 +1175,26 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
     let lastRow = sheet.getLastRow();
     let nextGroup = 1;
 
-    // Find max group number
+    // Find max group number AND last data row (before summary rows)
+    let lastDataRow = startRow; // header row
     if (idxGroup >= 0 && lastRow > startRow) {
       const groupData = sheet.getRange(startRow + 1, startCol + idxGroup, lastRow - startRow, 1).getValues();
-      for (const row of groupData) {
-        const g = parseInt(row[0], 10);
-        if (Number.isFinite(g) && g >= nextGroup) nextGroup = g + 1;
+      for (let i = 0; i < groupData.length; i++) {
+        const g = parseInt(groupData[i][0], 10);
+        if (Number.isFinite(g)) {
+          if (g >= nextGroup) nextGroup = g + 1;
+          lastDataRow = startRow + 1 + i; // This row has valid data
+        }
       }
     }
+
+    // Delete any existing summary rows (everything after last data row)
+    if (lastRow > lastDataRow) {
+      sheet.deleteRows(lastDataRow + 1, lastRow - lastDataRow);
+    }
+
+    // Reset lastRow to the actual last data row
+    lastRow = lastDataRow;
 
     for (const spread of newLegs) {
       const rows = [];
