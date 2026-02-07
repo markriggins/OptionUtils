@@ -277,6 +277,14 @@
         return n.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0});
     }
 
+    // Shorten strategy labels for legend
+    function shortenLabel(label) {
+        return label
+            .replace('Bull Call Spreads', 'BCS')
+            .replace('Bull Put Spreads', 'BPS')
+            .replace('Bear Call Spreads', 'Bear CS');
+    }
+
     function drawCharts() {
         var d = rawData;
         var suffix = valueMode === 'current' ? 'Current' : 'Exp';
@@ -284,9 +292,9 @@
         // Chart 1: Portfolio Value ($)
         var dtValue = new google.visualization.DataTable();
         dtValue.addColumn('number', 'Price');
-        dtValue.addColumn('number', 'Shares $');
-        d.strategyLabels.forEach(function(l) { dtValue.addColumn('number', l + ' $'); });
-        dtValue.addColumn('number', 'Total $');
+        dtValue.addColumn('number', 'Shares');
+        d.strategyLabels.forEach(function(l) { dtValue.addColumn('number', shortenLabel(l)); });
+        dtValue.addColumn('number', 'Total');
 
         for (var i = 0; i < d.prices.length; i++) {
             var row = [d.prices[i], d.sharesValues[i]];
@@ -305,15 +313,15 @@
             legend: { position: 'right' },
             hAxis: { title: d.symbol + ' Price ($)', format: '#,##0' },
             vAxis: { title: 'Value ($)', format: '#,##0' },
-            chartArea: { width: '70%', height: '80%' },
+            chartArea: { width: '75%', height: '80%' },
             curveType: 'none'
         });
 
         // Chart 2: Portfolio ROI (%)
         var dtRoi = new google.visualization.DataTable();
         dtRoi.addColumn('number', 'Price');
-        dtRoi.addColumn('number', 'Shares %');
-        d.strategyLabels.forEach(function(l) { dtRoi.addColumn('number', l + ' %'); });
+        dtRoi.addColumn('number', 'Shares');
+        d.strategyLabels.forEach(function(l) { dtRoi.addColumn('number', shortenLabel(l)); });
 
         for (var i = 0; i < d.prices.length; i++) {
             var row = [d.prices[i], d.sharesRoi[i] * 100];
@@ -330,7 +338,7 @@
             legend: { position: 'right' },
             hAxis: { title: d.symbol + ' Price ($)', format: '#,##0' },
             vAxis: { title: 'ROI (%)', format: '#,##0\'%\'' },
-            chartArea: { width: '70%', height: '80%' },
+            chartArea: { width: '75%', height: '80%' },
             curveType: 'none'
         });
 
@@ -362,7 +370,7 @@
             // Chart 4: Individual Spreads ROI (%)
             var dtSpreadRoi = new google.visualization.DataTable();
             dtSpreadRoi.addColumn('number', 'Price');
-            d.spreadLabels.forEach(function(l) { dtSpreadRoi.addColumn('number', l + ' %'); });
+            d.spreadLabels.forEach(function(l) { dtSpreadRoi.addColumn('number', l); });
 
             for (var i = 0; i < d.prices.length; i++) {
                 var row = [d.prices[i]];
@@ -382,10 +390,35 @@
                 chartArea: { width: '70%', height: '80%' },
                 curveType: 'none'
             });
+
+            // Double-click on legend or line to open OptionStrat
+            setupSpreadChartClicks('chart_spreads', charts.spreads);
+            setupSpreadChartClicks('chart_spreads_roi', charts.spreadsRoi);
         } else {
             document.getElementById('chart_spreads').innerHTML = '<div style="color:#5f6368;padding:20px;text-align:center;">No individual spreads to display.</div>';
             document.getElementById('chart_spreads_roi').innerHTML = '<div style="color:#5f6368;padding:20px;text-align:center;">No individual spreads to display.</div>';
         }
+    }
+
+    function setupSpreadChartClicks(chartDivId, chart) {
+        var el = document.getElementById(chartDivId);
+        el.addEventListener('dblclick', function() {
+            var sel = chart.getSelection();
+            if (sel.length > 0 && sel[0].column > 0) {
+                var spreadIdx = sel[0].column - 1; // column 0 is X axis
+                var url = rawData.spreadUrls && rawData.spreadUrls[spreadIdx];
+                if (url) window.open(url, '_blank');
+            }
+        });
+        // Also handle selection for click feedback
+        google.visualization.events.addListener(chart, 'select', function() {
+            var sel = chart.getSelection();
+            if (sel.length > 0 && sel[0].column > 0) {
+                var spreadIdx = sel[0].column - 1;
+                var label = rawData.spreadLabels[spreadIdx];
+                console.log('Selected spread:', label, 'URL:', rawData.spreadUrls[spreadIdx]);
+            }
+        });
     }
 </script>
 </body>

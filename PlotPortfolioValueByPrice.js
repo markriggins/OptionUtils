@@ -84,10 +84,10 @@ function plotSelectedSymbols(symbols) {
   const props = PropertiesService.getDocumentProperties();
   props.setProperty("portfolioGraphSymbol", symbols[0]);
 
-  // Show the portfolio graphs modal
+  // Show the portfolio graphs modal (25% larger)
   const html = HtmlService.createHtmlOutputFromFile("PortfolioGraphs")
-    .setWidth(1200)
-    .setHeight(900);
+    .setWidth(1500)
+    .setHeight(1125);
   SpreadsheetApp.getUi().showModalDialog(html, symbols[0] + " Portfolio Performance");
 }
 
@@ -214,11 +214,24 @@ function computePortfolioGraphData_(ss, symbol) {
   const strategyRoisCurrent = strategyGroups.map(() => []);
 
   // Individual spread values: [spreadIdx][priceIdx]
-  const spreadLabels = allSpreads.map(sp => sp.label);
+  // Include qty in label: "5 - Dec 28 480/490"
+  const spreadLabels = allSpreads.map(sp => `${sp.qty} - ${sp.label}`);
   const spreadValuesExp = allSpreads.map(() => []);
   const spreadValuesCurrent = allSpreads.map(() => []);
   const spreadRoisExp = allSpreads.map(() => []);
   const spreadRoisCurrent = allSpreads.map(() => []);
+
+  // Build OptionStrat URLs for each spread (always use the symbol we're plotting for)
+  const spreadUrls = allSpreads.map(sp => {
+    try {
+      const strikes = `${sp.kLong}/${sp.kShort}`;
+      const strategy = sp.flavor === "CALL" ? "bull-call-spread" :
+                       sp.flavor === "PUT" ? "bull-put-spread" : "bear-call-spread";
+      return buildOptionStratUrl(strikes, symbol, strategy, sp.expiration);
+    } catch (e) {
+      return null;
+    }
+  });
 
   for (let S = minPrice; S <= maxPrice + 1e-9; S += step) {
     prices.push(roundTo_(S, 2));
@@ -308,6 +321,7 @@ function computePortfolioGraphData_(ss, symbol) {
     strategyRoisExp: strategyRoisExp,
     strategyRoisCurrent: strategyRoisCurrent,
     spreadLabels: spreadLabels,
+    spreadUrls: spreadUrls,
     spreadValuesExp: spreadValuesExp,
     spreadValuesCurrent: spreadValuesCurrent,
     spreadRoisExp: spreadRoisExp,

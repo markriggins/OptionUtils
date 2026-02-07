@@ -636,6 +636,8 @@ function parsePositionsForSymbol_(rows, symbol) {
         debit,
         flavor: "CALL",
         label,
+        expiration: longLeg.expiration,
+        symbol: lastSym,
       });
     } else if (posType === "bull-put-spread") {
       const longLeg = legs.find(l => l.qty > 0);
@@ -656,6 +658,8 @@ function parsePositionsForSymbol_(rows, symbol) {
         debit,
         flavor: "PUT",
         label,
+        expiration: longLeg.expiration,
+        symbol: lastSym,
       });
     } else if (posType === "iron-condor") {
       const puts = legs.filter(l => l.type === "Put").sort((a, b) => a.strike - b.strike);
@@ -682,6 +686,8 @@ function parsePositionsForSymbol_(rows, symbol) {
           debit: putDebit,
           flavor: "PUT",
           label: label + " (put)",
+          expiration: longPut.expiration,
+          symbol: lastSym,
         });
       }
 
@@ -699,6 +705,8 @@ function parsePositionsForSymbol_(rows, symbol) {
           debit: callDebit,
           flavor: "BEAR_CALL",
           label: label + " (call)",
+          expiration: shortCall.expiration,
+          symbol: lastSym,
         });
       }
     }
