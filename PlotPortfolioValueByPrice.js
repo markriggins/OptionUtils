@@ -31,6 +31,9 @@
    Entry point
    ========================================================= */
 
+// Store selected symbol for the graph dialog
+var selectedSymbolForGraph_ = null;
+
 function PlotPortfolioValueByPrice() {
   Logger.log("PlotPortfolioValueByPrice Started");
 
@@ -50,16 +53,17 @@ function PlotPortfolioValueByPrice() {
     return;
   }
 
-  // If only one symbol, skip the dialog and plot directly
+  // If only one symbol, show graphs directly
   if (symbols.length === 1) {
     plotSelectedSymbols(symbols);
     return;
   }
 
+  // Multiple symbols - show symbol selection dialog first
   const html = HtmlService.createHtmlOutputFromFile("SelectSymbols")
     .setWidth(350)
     .setHeight(400);
-  SpreadsheetApp.getUi().showModalDialog(html, "Plot Portfolio Value by Price");
+  SpreadsheetApp.getUi().showModalDialog(html, "Select Symbol for Portfolio Graphs");
 }
 
 /**
@@ -71,13 +75,270 @@ function getAvailableSymbols() {
 }
 
 /**
- * Plots charts for the selected symbols. Called by the dialog OK button.
+ * Shows the portfolio graphs modal for selected symbols.
  */
 function plotSelectedSymbols(symbols) {
-  const ss = SpreadsheetApp.getActive();
-  for (const symbol of symbols) {
-    plotForSymbol_(ss, symbol);
+  if (!symbols || symbols.length === 0) return;
+
+  // Store the first symbol for the graph data function
+  const props = PropertiesService.getDocumentProperties();
+  props.setProperty("portfolioGraphSymbol", symbols[0]);
+
+  // Show the portfolio graphs modal
+  const html = HtmlService.createHtmlOutputFromFile("PortfolioGraphs")
+    .setWidth(1200)
+    .setHeight(900);
+  SpreadsheetApp.getUi().showModalDialog(html, symbols[0] + " Portfolio Performance");
+}
+
+/**
+ * Returns portfolio graph data for the selected symbol.
+ * Called by PortfolioGraphs.html via google.script.run.
+ */
+function getPortfolioGraphData() {
+  try {
+    Logger.log("getPortfolioGraphData: Starting...");
+    const ss = SpreadsheetApp.getActive();
+    const props = PropertiesService.getDocumentProperties();
+    const symbol = props.getProperty("portfolioGraphSymbol") || "";
+
+    Logger.log("getPortfolioGraphData: symbol = " + symbol);
+
+    if (!symbol) {
+      throw new Error("No symbol selected for portfolio graphs");
+    }
+
+    const result = computePortfolioGraphData_(ss, symbol);
+    Logger.log("getPortfolioGraphData: Computed data, prices count = " + (result.prices ? result.prices.length : 0));
+    return result;
+  } catch (e) {
+    Logger.log("getPortfolioGraphData ERROR: " + e.message + "\n" + e.stack);
+    throw e;
   }
+}
+
+/**
+ * Computes portfolio graph data for a symbol.
+ */
+function computePortfolioGraphData_(ss, symbol) {
+  // Parse positions
+  let shares = [];
+  let bullCallSpreads = [];
+  let bullPutSpreads = [];
+  let bearCallSpreads = [];
+
+  const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
+  if (legsRange) {
+    const legsRows = legsRange.getValues();
+    const parsed = parsePositionsForSymbol_(legsRows, symbol);
+    shares = parsed.shares;
+    bullCallSpreads = parsed.bullCallSpreads;
+    bullPutSpreads = parsed.bullPutSpreads;
+    bearCallSpreads = parsed.bearCallSpreads;
+  }
+
+  const allSpreads = [...bullCallSpreads, ...bullPutSpreads, ...bearCallSpreads];
+
+  // Compute smart price range
+  const smart = computeSmartDefaults_(ss, symbol);
+  const minPrice = smart.minPrice;
+  const maxPrice = smart.maxPrice;
+  const step = smart.step;
+
+  // Compute denominators for ROI
+  const sharesCost = shares.reduce((sum, sh) => sum + sh.qty * sh.basis, 0);
+  const totalShares = shares.reduce((sum, sh) => sum + sh.qty, 0);
+
+  const spreadInvestments = allSpreads.map((sp) => {
+    if (sp.flavor === "CALL") {
+      return sp.debit * 100 * sp.qty;
+    } else {
+      const width = sp.kShort - sp.kLong;
+      const credit = -sp.debit;
+      return (width - credit) * 100 * sp.qty;
+    }
+  });
+  const totalSpreadInvestment = spreadInvestments.reduce((sum, v) => sum + v, 0);
+
+  // Build strategy groups
+  const strategyGroupDefs = [
+    { name: "Bull Call Spreads", spreads: bullCallSpreads, flavor: "CALL" },
+    { name: "Bull Put Spreads", spreads: bullPutSpreads, flavor: "PUT" },
+    { name: "Bear Call Spreads", spreads: bearCallSpreads, flavor: "BEAR_CALL" },
+  ];
+  const strategyGroups = strategyGroupDefs.filter(g => g.spreads.length > 0);
+  const strategyLabels = strategyGroups.map(g => g.name);
+
+  // Compute strategy investments
+  let spreadIdx = 0;
+  const strategyInvestments = strategyGroups.map(g => {
+    let sum = 0;
+    for (let i = 0; i < g.spreads.length; i++) {
+      sum += spreadInvestments[spreadIdx++];
+    }
+    return sum;
+  });
+
+  // Get current price via GOOGLEFINANCE
+  let currentPrice = null;
+  try {
+    const tempSheet = ss.insertSheet("__temp_price__");
+    tempSheet.getRange("A1").setFormula(`=GOOGLEFINANCE("${symbol}")`);
+    SpreadsheetApp.flush();
+    Utilities.sleep(500); // Give GOOGLEFINANCE time to evaluate
+    currentPrice = tempSheet.getRange("A1").getValue();
+    ss.deleteSheet(tempSheet);
+    if (typeof currentPrice !== "number" || !isFinite(currentPrice)) {
+      currentPrice = null;
+    }
+  } catch (e) {
+    Logger.log("Could not get current price: " + e);
+    // Clean up temp sheet if it exists
+    try {
+      const tempSheet = ss.getSheetByName("__temp_price__");
+      if (tempSheet) ss.deleteSheet(tempSheet);
+    } catch (e2) {}
+  }
+
+  // Build data arrays
+  const prices = [];
+  const sharesValues = [];
+  const sharesRoi = [];
+  const totalValues = [];
+  const totalValuesCurrent = [];
+
+  // Strategy values: [strategyIdx][priceIdx]
+  const strategyValuesExp = strategyGroups.map(() => []);
+  const strategyValuesCurrent = strategyGroups.map(() => []);
+  const strategyRoisExp = strategyGroups.map(() => []);
+  const strategyRoisCurrent = strategyGroups.map(() => []);
+
+  // Individual spread values: [spreadIdx][priceIdx]
+  const spreadLabels = allSpreads.map(sp => sp.label);
+  const spreadValuesExp = allSpreads.map(() => []);
+  const spreadValuesCurrent = allSpreads.map(() => []);
+  const spreadRoisExp = allSpreads.map(() => []);
+  const spreadRoisCurrent = allSpreads.map(() => []);
+
+  for (let S = minPrice; S <= maxPrice + 1e-9; S += step) {
+    prices.push(roundTo_(S, 2));
+
+    // Shares value
+    const sharesValue = shares.reduce((sum, sh) => sum + S * sh.qty, 0);
+    sharesValues.push(roundTo_(sharesValue, 2));
+    const sharesPL = sharesValue - sharesCost;
+    sharesRoi.push(sharesCost > 0 ? roundTo_(sharesPL / sharesCost, 4) : 0);
+
+    // Compute individual spread values (at expiration)
+    const individualExp = [];
+    const individualCurrent = [];
+
+    for (const sp of allSpreads) {
+      const width = sp.kShort - sp.kLong;
+      let valueExp = 0;
+      let valueCurrent = 0;
+
+      if (sp.flavor === "CALL") {
+        // Bull call spread
+        const intrinsic = clamp_(S - sp.kLong, 0, width);
+        valueExp = intrinsic * 100 * sp.qty;
+        // Current: add time value estimate (simplified: linear decay based on moneyness)
+        const timeValue = estimateTimeValue_(S, sp.kLong, sp.kShort, sp.dte || 365, width);
+        valueCurrent = (intrinsic + timeValue) * 100 * sp.qty;
+      } else if (sp.flavor === "PUT") {
+        // Bull put spread
+        const loss = clamp_(sp.kShort - S, 0, width);
+        valueExp = (width - loss) * 100 * sp.qty;
+        valueCurrent = valueExp; // Simplified for puts
+      } else {
+        // Bear call spread
+        const loss = clamp_(S - sp.kLong, 0, width);
+        valueExp = (width - loss) * 100 * sp.qty;
+        valueCurrent = valueExp; // Simplified
+      }
+
+      individualExp.push(roundTo_(valueExp, 2));
+      individualCurrent.push(roundTo_(valueCurrent, 2));
+    }
+
+    // Store individual spread values
+    for (let i = 0; i < allSpreads.length; i++) {
+      spreadValuesExp[i].push(individualExp[i]);
+      spreadValuesCurrent[i].push(individualCurrent[i]);
+
+      const inv = spreadInvestments[i];
+      spreadRoisExp[i].push(inv > 0 ? roundTo_((individualExp[i] - inv) / inv, 4) : 0);
+      spreadRoisCurrent[i].push(inv > 0 ? roundTo_((individualCurrent[i] - inv) / inv, 4) : 0);
+    }
+
+    // Aggregate by strategy
+    let sIdx = 0;
+    for (let g = 0; g < strategyGroups.length; g++) {
+      let sumExp = 0, sumCurrent = 0;
+      for (let i = 0; i < strategyGroups[g].spreads.length; i++) {
+        sumExp += individualExp[sIdx];
+        sumCurrent += individualCurrent[sIdx];
+        sIdx++;
+      }
+      strategyValuesExp[g].push(roundTo_(sumExp, 2));
+      strategyValuesCurrent[g].push(roundTo_(sumCurrent, 2));
+
+      const inv = strategyInvestments[g];
+      strategyRoisExp[g].push(inv > 0 ? roundTo_((sumExp - inv) / inv, 4) : 0);
+      strategyRoisCurrent[g].push(inv > 0 ? roundTo_((sumCurrent - inv) / inv, 4) : 0);
+    }
+
+    // Total values
+    const optionsExp = individualExp.reduce((sum, v) => sum + v, 0);
+    const optionsCurrent = individualCurrent.reduce((sum, v) => sum + v, 0);
+    totalValues.push(roundTo_(sharesValue + optionsExp, 2));
+    totalValuesCurrent.push(roundTo_(sharesValue + optionsCurrent, 2));
+  }
+
+  return {
+    symbol: symbol,
+    prices: prices,
+    sharesValues: sharesValues,
+    sharesRoi: sharesRoi,
+    totalValues: totalValues,
+    totalValuesCurrent: totalValuesCurrent,
+    strategyLabels: strategyLabels,
+    strategyValuesExp: strategyValuesExp,
+    strategyValuesCurrent: strategyValuesCurrent,
+    strategyRoisExp: strategyRoisExp,
+    strategyRoisCurrent: strategyRoisCurrent,
+    spreadLabels: spreadLabels,
+    spreadValuesExp: spreadValuesExp,
+    spreadValuesCurrent: spreadValuesCurrent,
+    spreadRoisExp: spreadRoisExp,
+    spreadRoisCurrent: spreadRoisCurrent,
+    totalShares: totalShares,
+    sharesCost: sharesCost,
+    spreadCount: allSpreads.length,
+    spreadInvestment: totalSpreadInvestment,
+    currentPrice: currentPrice,
+  };
+}
+
+/**
+ * Estimates time value for a call spread (simplified model).
+ * Returns per-contract time value estimate.
+ */
+function estimateTimeValue_(S, kLong, kShort, dte, width) {
+  // Simplified time value: decays linearly with time, higher when near the money
+  const midStrike = (kLong + kShort) / 2;
+  const moneyness = S / midStrike;
+
+  // Time factor: sqrt(dte/365) gives time decay curve
+  const timeFactor = Math.sqrt(Math.max(dte, 1) / 365);
+
+  // ATM gets max time value, decreases as you move away
+  const atmFactor = Math.exp(-Math.pow(moneyness - 1, 2) * 4);
+
+  // Max time value is about 20% of width for ATM with 1 year to expiry
+  const maxTimeValue = width * 0.2;
+
+  return maxTimeValue * timeFactor * atmFactor;
 }
 
 /* =========================================================

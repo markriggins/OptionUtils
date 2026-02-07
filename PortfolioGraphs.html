@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <base target="_top">
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #f1f3f4; margin: 0; padding: 15px; }
+        .controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; background: white; padding: 10px 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .controls-left { display: flex; align-items: center; gap: 15px; }
+        .toggle-group { display: flex; align-items: center; gap: 8px; }
+        .toggle-label { font-size: 13px; color: #5f6368; }
+        .toggle-btn { font-size: 12px; cursor: pointer; border: 1px solid #dadce0; background: white; border-radius: 4px; padding: 6px 12px; transition: all 0.2s; }
+        .toggle-btn:hover { background: #f1f3f4; }
+        .toggle-btn.active { background: #1a73e8; color: white; border-color: #1a73e8; }
+        .dashboard { display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; }
+        .chart-card { background: white; border-radius: 8px; padding: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); flex: 1 1 480px; min-width: 400px; }
+        .chart-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; margin-bottom: 5px; padding-bottom: 5px; }
+        .chart-title { font-weight: bold; color: #3c4043; border-bottom: 1px dashed #1a73e8; cursor: help; position: relative; }
+        .chart-div { width: 100%; height: 400px; position: relative; }
+        .chart-spinner {
+          position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+          display: flex; flex-direction: column; align-items: center; gap: 10px; color: #5f6368;
+        }
+        .chart-spinner .dot-pulse { display: inline-flex; gap: 6px; }
+        .chart-spinner .dot-pulse span {
+          width: 10px; height: 10px; border-radius: 50%; background: #1a73e8;
+          animation: pulse 1.2s ease-in-out infinite;
+        }
+        .chart-spinner .dot-pulse span:nth-child(2) { animation-delay: 0.2s; }
+        .chart-spinner .dot-pulse span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes pulse { 0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); } 40% { opacity: 1; transform: scale(1.2); } }
+
+        /* CSS INSTANT TOOLTIPS */
+        [data-help] { position: relative; }
+        [data-help]:hover::after {
+          content: attr(data-help);
+          position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
+          background: #333; color: #fff; padding: 8px; border-radius: 4px;
+          font-size: 11px; font-weight: normal; width: 200px; z-index: 1000;
+          text-align: center; line-height: 1.4; box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+          white-space: pre-line;
+        }
+        .chart-title[data-help]:hover::after {
+          left: 0; transform: none; width: 250px; text-align: left;
+        }
+
+        .btn-refresh { background: #1a73e8; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .btn-help { background: none; color: #5f6368; border: 1px solid #dadce0; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-right: 10px; }
+        .btn-help:hover { background: #f1f3f4; }
+        .hide-btn { font-size: 11px; cursor: pointer; color: #1a73e8; border: 1px solid #1a73e8; background: none; border-radius: 4px; padding: 2px 6px; }
+
+        /* Help Modal */
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
+        .modal-overlay.show { display: flex; }
+        .modal-content { background: white; border-radius: 12px; max-width: 600px; max-height: 80vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid #e0e0e0; }
+        .modal-header h2 { margin: 0; color: #202124; font-size: 20px; }
+        .modal-close { background: none; border: none; font-size: 24px; color: #5f6368; cursor: pointer; padding: 0; line-height: 1; }
+        .modal-close:hover { color: #202124; }
+        .modal-body { padding: 24px; color: #3c4043; line-height: 1.6; }
+        .modal-body h3 { color: #202124; margin: 20px 0 10px 0; font-size: 16px; }
+        .modal-body h3:first-child { margin-top: 0; }
+        .modal-body ul { margin: 10px 0; padding-left: 24px; }
+        .modal-body li { margin: 8px 0; }
+
+        /* Summary Panel */
+        #summary-panel { width: 100%; max-width: 1150px; background: #202124; color: #e8eaed; margin: 20px auto 0 auto; padding: 20px; border-radius: 8px; border-left: 6px solid #8bc34a; }
+        .grid-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 15px; }
+        .metric-box { background: #2d2e31; padding: 10px; border-radius: 4px; border-bottom: 2px solid #3c4043; }
+        .label { font-size: 10px; color: #9aa0a6; text-transform: uppercase; display: block; margin-bottom: 4px; border-bottom: 1px dashed #5f6368; width: fit-content; }
+        .value { font-size: 14px; color: #8bc34a; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="controls">
+    <div class="controls-left">
+        <div style="font-weight:bold; color:#5f6368;"><span id="symbol-title">Portfolio</span> Performance</div>
+        <div class="toggle-group">
+            <span class="toggle-label">Value Mode:</span>
+            <button id="btn-expiration" class="toggle-btn active" onclick="setValueMode('expiration')">At Expiration</button>
+            <button id="btn-current" class="toggle-btn" onclick="setValueMode('current')">Current</button>
+        </div>
+    </div>
+    <div>
+        <button class="btn-help" onclick="showHelp()">Help</button>
+        <button class="btn-refresh" onclick="refreshData()">Refresh</button>
+    </div>
+</div>
+
+<!-- Help Modal -->
+<div id="help-modal" class="modal-overlay" onclick="hideHelp(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h2>Portfolio Performance Charts</h2>
+            <button class="modal-close" onclick="hideHelp()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <h3>Understanding the Charts</h3>
+            <p>These charts show how your portfolio value changes as the stock price moves.</p>
+
+            <h3>Value Mode Toggle</h3>
+            <ul>
+                <li><strong>At Expiration</strong> — Shows option values at expiration (intrinsic value only). This is the final P/L if you hold to expiration.</li>
+                <li><strong>Current</strong> — Shows estimated current option values based on time remaining and volatility. More relevant for early exit decisions.</li>
+            </ul>
+
+            <h3>Chart 1: Portfolio Value ($)</h3>
+            <p>Shows the dollar value of your portfolio at different stock prices:</p>
+            <ul>
+                <li><strong>Shares $</strong> — Value of your stock holdings</li>
+                <li><strong>Bull Call Spreads $</strong> — Value of your call spread positions</li>
+                <li><strong>Total $</strong> — Combined portfolio value</li>
+            </ul>
+
+            <h3>Chart 2: Portfolio ROI (%)</h3>
+            <p>Shows the percentage return on investment:</p>
+            <ul>
+                <li><strong>Shares % ROI</strong> — Return relative to your cost basis</li>
+                <li><strong>Bull Call Spreads %</strong> — Return relative to your debit paid</li>
+            </ul>
+
+            <h3>Charts 3 & 4: Individual Spreads</h3>
+            <p>Break down performance by individual spread position, showing both dollar value and ROI for each.</p>
+
+            <h3>Chart Controls</h3>
+            <ul>
+                <li><strong>Hover</strong> over data points to see exact values</li>
+                <li><strong>Click</strong> legend items to show/hide series</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<div class="dashboard">
+    <div class="chart-card">
+        <div class="chart-header">
+            <span class="chart-title" data-help="Portfolio dollar value at each stock price.&#10;&#10;At Expiration: intrinsic value only&#10;Current: estimated with time value">Portfolio Value ($)</span>
+            <button class="hide-btn" onclick="toggleChart('chart_value')">Hide/Show</button>
+        </div>
+        <div id="chart_value" class="chart-div"><div class="chart-spinner"><div class="dot-pulse"><span></span><span></span><span></span></div><div>Loading...</div></div></div>
+    </div>
+
+    <div class="chart-card">
+        <div class="chart-header">
+            <span class="chart-title" data-help="Percentage return on investment.&#10;&#10;Shares: (value - cost) / cost&#10;Options: (value - debit) / debit">Portfolio ROI (%)</span>
+            <button class="hide-btn" onclick="toggleChart('chart_roi')">Hide/Show</button>
+        </div>
+        <div id="chart_roi" class="chart-div"><div class="chart-spinner"><div class="dot-pulse"><span></span><span></span><span></span></div><div>Loading...</div></div></div>
+    </div>
+</div>
+
+<div class="dashboard" style="margin-top: 15px;">
+    <div class="chart-card">
+        <div class="chart-header">
+            <span class="chart-title" data-help="Value of each individual spread position">Individual Spreads ($)</span>
+            <button class="hide-btn" onclick="toggleChart('chart_spreads')">Hide/Show</button>
+        </div>
+        <div id="chart_spreads" class="chart-div"><div class="chart-spinner"><div class="dot-pulse"><span></span><span></span><span></span></div><div>Loading...</div></div></div>
+    </div>
+
+    <div class="chart-card">
+        <div class="chart-header">
+            <span class="chart-title" data-help="ROI of each individual spread position">Individual Spreads ROI (%)</span>
+            <button class="hide-btn" onclick="toggleChart('chart_spreads_roi')">Hide/Show</button>
+        </div>
+        <div id="chart_spreads_roi" class="chart-div"><div class="chart-spinner"><div class="dot-pulse"><span></span><span></span><span></span></div><div>Loading...</div></div></div>
+    </div>
+</div>
+
+<div id="summary-panel">
+    <h3 style="margin: 0 0 10px 0; color: #8bc34a;">Position Summary</h3>
+    <div class="grid-container">
+        <div class="metric-box" data-help="Total shares held"><span class="label">Shares</span><span id="sum-shares" class="value">—</span></div>
+        <div class="metric-box" data-help="Cost basis for shares"><span class="label">Share Cost</span><span id="sum-share-cost" class="value">—</span></div>
+        <div class="metric-box" data-help="Number of spread positions"><span class="label">Spreads</span><span id="sum-spreads" class="value">—</span></div>
+        <div class="metric-box" data-help="Total debit paid for spreads"><span class="label">Spread Investment</span><span id="sum-spread-inv" class="value">—</span></div>
+        <div class="metric-box" data-help="Current stock price"><span class="label">Current Price</span><span id="sum-price" class="value">—</span></div>
+        <div class="metric-box" data-help="Total portfolio value at current price"><span class="label">Current Value</span><span id="sum-value" class="value">—</span></div>
+    </div>
+</div>
+
+<script type="text/javascript">
+    // State
+    var valueMode = 'expiration'; // 'expiration' or 'current'
+    var rawData = null;
+    var charts = {};
+
+    // Help modal
+    function showHelp() {
+        document.getElementById('help-modal').classList.add('show');
+    }
+    function hideHelp(event) {
+        if (!event || event.target === document.getElementById('help-modal')) {
+            document.getElementById('help-modal').classList.remove('show');
+        }
+    }
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') hideHelp();
+    });
+
+    // Value mode toggle
+    function setValueMode(mode) {
+        valueMode = mode;
+        document.getElementById('btn-expiration').classList.toggle('active', mode === 'expiration');
+        document.getElementById('btn-current').classList.toggle('active', mode === 'current');
+        if (rawData) drawCharts();
+    }
+
+    function toggleChart(id) {
+        var el = document.getElementById(id);
+        el.style.display = (el.style.display === 'none') ? 'block' : 'none';
+    }
+
+    // Google Charts
+    google.charts.load('current', {'packages':['corechart']});
+    google.charts.setOnLoadCallback(init);
+
+    function init() {
+        console.log('PortfolioGraphs: init() called, fetching data...');
+        google.script.run
+            .withSuccessHandler(onDataLoaded)
+            .withFailureHandler(onError)
+            .getPortfolioGraphData();
+    }
+
+    function refreshData() {
+        console.log('PortfolioGraphs: refreshData() called');
+        document.querySelectorAll('.chart-div').forEach(function(el) {
+            el.innerHTML = '<div class="chart-spinner"><div class="dot-pulse"><span></span><span></span><span></span></div><div>Refreshing...</div></div>';
+        });
+        google.script.run
+            .withSuccessHandler(onDataLoaded)
+            .withFailureHandler(onError)
+            .getPortfolioGraphData();
+    }
+
+    function onError(err) {
+        console.error('PortfolioGraphs error:', err);
+        var msg = err ? (err.message || String(err)) : 'Unknown error';
+        document.querySelectorAll('.chart-div').forEach(function(el) {
+            el.innerHTML = '<div style="color:#d93025;padding:20px;">Error: ' + msg + '</div>';
+        });
+    }
+
+    function onDataLoaded(data) {
+        rawData = data;
+        if (!data || !data.prices || data.prices.length === 0) {
+            document.querySelectorAll('.chart-div').forEach(function(el) {
+                el.innerHTML = '<div style="color:#5f6368;padding:20px;">No position data found.</div>';
+            });
+            return;
+        }
+
+        document.getElementById('symbol-title').innerText = data.symbol || 'Portfolio';
+        updateSummary(data);
+        drawCharts();
+    }
+
+    function updateSummary(data) {
+        document.getElementById('sum-shares').innerText = data.totalShares || 0;
+        document.getElementById('sum-share-cost').innerText = '$' + formatNumber(data.sharesCost || 0);
+        document.getElementById('sum-spreads').innerText = data.spreadCount || 0;
+        document.getElementById('sum-spread-inv').innerText = '$' + formatNumber(data.spreadInvestment || 0);
+        document.getElementById('sum-price').innerText = data.currentPrice ? ('$' + data.currentPrice.toFixed(2)) : '—';
+
+        // Calculate current value from data
+        if (data.currentPrice && data.prices) {
+            var idx = data.prices.findIndex(function(p) { return p >= data.currentPrice; });
+            if (idx >= 0 && data.totalValues && data.totalValues[idx] !== undefined) {
+                document.getElementById('sum-value').innerText = '$' + formatNumber(data.totalValues[idx]);
+            }
+        }
+    }
+
+    function formatNumber(n) {
+        return n.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0});
+    }
+
+    function drawCharts() {
+        var d = rawData;
+        var suffix = valueMode === 'current' ? 'Current' : 'Exp';
+
+        // Chart 1: Portfolio Value ($)
+        var dtValue = new google.visualization.DataTable();
+        dtValue.addColumn('number', 'Price');
+        dtValue.addColumn('number', 'Shares $');
+        d.strategyLabels.forEach(function(l) { dtValue.addColumn('number', l + ' $'); });
+        dtValue.addColumn('number', 'Total $');
+
+        for (var i = 0; i < d.prices.length; i++) {
+            var row = [d.prices[i], d.sharesValues[i]];
+            d.strategyLabels.forEach(function(l, j) {
+                var vals = valueMode === 'current' ? d.strategyValuesCurrent : d.strategyValuesExp;
+                row.push(vals[j][i]);
+            });
+            var total = valueMode === 'current' ? d.totalValuesCurrent[i] : d.totalValues[i];
+            row.push(total);
+            dtValue.addRow(row);
+        }
+
+        charts.value = charts.value || new google.visualization.LineChart(document.getElementById('chart_value'));
+        charts.value.draw(dtValue, {
+            title: '',
+            legend: { position: 'right' },
+            hAxis: { title: d.symbol + ' Price ($)', format: '#,##0' },
+            vAxis: { title: 'Value ($)', format: '#,##0' },
+            chartArea: { width: '70%', height: '80%' },
+            curveType: 'none'
+        });
+
+        // Chart 2: Portfolio ROI (%)
+        var dtRoi = new google.visualization.DataTable();
+        dtRoi.addColumn('number', 'Price');
+        dtRoi.addColumn('number', 'Shares %');
+        d.strategyLabels.forEach(function(l) { dtRoi.addColumn('number', l + ' %'); });
+
+        for (var i = 0; i < d.prices.length; i++) {
+            var row = [d.prices[i], d.sharesRoi[i] * 100];
+            d.strategyLabels.forEach(function(l, j) {
+                var rois = valueMode === 'current' ? d.strategyRoisCurrent : d.strategyRoisExp;
+                row.push(rois[j][i] * 100);
+            });
+            dtRoi.addRow(row);
+        }
+
+        charts.roi = charts.roi || new google.visualization.LineChart(document.getElementById('chart_roi'));
+        charts.roi.draw(dtRoi, {
+            title: '',
+            legend: { position: 'right' },
+            hAxis: { title: d.symbol + ' Price ($)', format: '#,##0' },
+            vAxis: { title: 'ROI (%)', format: '#,##0\'%\'' },
+            chartArea: { width: '70%', height: '80%' },
+            curveType: 'none'
+        });
+
+        // Chart 3: Individual Spreads ($)
+        if (d.spreadLabels && d.spreadLabels.length > 0) {
+            var dtSpreads = new google.visualization.DataTable();
+            dtSpreads.addColumn('number', 'Price');
+            d.spreadLabels.forEach(function(l) { dtSpreads.addColumn('number', l); });
+
+            for (var i = 0; i < d.prices.length; i++) {
+                var row = [d.prices[i]];
+                d.spreadLabels.forEach(function(l, j) {
+                    var vals = valueMode === 'current' ? d.spreadValuesCurrent : d.spreadValuesExp;
+                    row.push(vals[j][i]);
+                });
+                dtSpreads.addRow(row);
+            }
+
+            charts.spreads = charts.spreads || new google.visualization.LineChart(document.getElementById('chart_spreads'));
+            charts.spreads.draw(dtSpreads, {
+                title: '',
+                legend: { position: 'right' },
+                hAxis: { title: d.symbol + ' Price ($)', format: '#,##0' },
+                vAxis: { title: 'Value ($)', format: '#,##0' },
+                chartArea: { width: '70%', height: '80%' },
+                curveType: 'none'
+            });
+
+            // Chart 4: Individual Spreads ROI (%)
+            var dtSpreadRoi = new google.visualization.DataTable();
+            dtSpreadRoi.addColumn('number', 'Price');
+            d.spreadLabels.forEach(function(l) { dtSpreadRoi.addColumn('number', l + ' %'); });
+
+            for (var i = 0; i < d.prices.length; i++) {
+                var row = [d.prices[i]];
+                d.spreadLabels.forEach(function(l, j) {
+                    var rois = valueMode === 'current' ? d.spreadRoisCurrent : d.spreadRoisExp;
+                    row.push(rois[j][i] * 100);
+                });
+                dtSpreadRoi.addRow(row);
+            }
+
+            charts.spreadsRoi = charts.spreadsRoi || new google.visualization.LineChart(document.getElementById('chart_spreads_roi'));
+            charts.spreadsRoi.draw(dtSpreadRoi, {
+                title: '',
+                legend: { position: 'right' },
+                hAxis: { title: d.symbol + ' Price ($)', format: '#,##0' },
+                vAxis: { title: 'ROI (%)', format: '#,##0\'%\'' },
+                chartArea: { width: '70%', height: '80%' },
+                curveType: 'none'
+            });
+        } else {
+            document.getElementById('chart_spreads').innerHTML = '<div style="color:#5f6368;padding:20px;text-align:center;">No individual spreads to display.</div>';
+            document.getElementById('chart_spreads_roi').innerHTML = '<div style="color:#5f6368;padding:20px;text-align:center;">No individual spreads to display.</div>';
+        }
+    }
+</script>
+</body>
+</html>

@@ -91,6 +91,10 @@ function getSpreadFinderGraphData() {
   return SpreadFinder.getSpreadFinderGraphData();
 }
 
+function getPortfolioGraphData() {
+  return SpreadFinder.getPortfolioGraphData();
+}
+
 // ============================================================
 // CUSTOM SPREADSHEET FUNCTIONS (used in cell formulas)
 // ============================================================
