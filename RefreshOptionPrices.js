@@ -352,3 +352,88 @@ function forceRecalculateBullCallSpreads_(ss) {
   forceRecalculateTable_(ss, "IronCondorsTable");
 }
 
+/**
+ * Shows the file upload dialog for option prices.
+ */
+function showUploadOptionPricesDialog() {
+  const html = HtmlService.createHtmlOutputFromFile("FileUpload")
+    .setWidth(500)
+    .setHeight(400);
+  // Inject the mode
+  const content = html.getContent().replace(
+    "if (mode) init(mode);",
+    "init('optionPrices');"
+  );
+  const output = HtmlService.createHtmlOutput(content)
+    .setWidth(500)
+    .setHeight(400);
+  SpreadsheetApp.getUi().showModalDialog(output, "Upload Option Prices");
+}
+
+/**
+ * Handles uploaded option price files from the file chooser.
+ * Saves files to Drive and then refreshes option prices.
+ * @param {Array<{name: string, content: string}>} files - Array of file objects
+ * @returns {string} Status message
+ */
+function uploadOptionPrices(files) {
+  if (!files || files.length === 0) {
+    throw new Error("No files provided");
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const dataFolderPath = getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA") + "/OptionPrices";
+
+  // Navigate to or create the folder
+  let folder = DriveApp.getRootFolder();
+  for (const part of dataFolderPath.split("/").filter(p => p.trim())) {
+    folder = getOrCreateFolder_(folder, part);
+  }
+
+  // Save each file with unique names (preserves history)
+  const savedFiles = [];
+  for (const file of files) {
+    const savedName = saveFileWithUniqueName_(folder, file.name, file.content);
+    savedFiles.push(savedName);
+  }
+
+  // Refresh option prices
+  refreshOptionPrices();
+
+  return `Uploaded ${savedFiles.length} file(s) and refreshed option prices.`;
+}
+
+/**
+ * Saves a file to a folder with a unique name.
+ * If a file with the same name exists, appends a timestamp to make it unique.
+ * Returns the actual filename used.
+ */
+function saveFileWithUniqueName_(folder, fileName, content) {
+  // Check if file with same name exists
+  const existing = folder.getFilesByName(fileName);
+  let finalName = fileName;
+
+  if (existing.hasNext()) {
+    // File exists - create unique name by inserting timestamp before extension
+    const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd-HHmmss");
+    const lastDot = fileName.lastIndexOf(".");
+    if (lastDot > 0) {
+      finalName = fileName.substring(0, lastDot) + "-" + timestamp + fileName.substring(lastDot);
+    } else {
+      finalName = fileName + "-" + timestamp;
+    }
+  }
+
+  folder.createFile(finalName, content, MimeType.CSV);
+  return finalName;
+}
+
+/**
+ * Gets or creates a subfolder.
+ */
+function getOrCreateFolder_(parent, name) {
+  const it = parent.getFoldersByName(name);
+  if (it.hasNext()) return it.next();
+  return parent.createFolder(name);
+}
+

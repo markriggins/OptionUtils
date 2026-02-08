@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 20px; background: #f8f9fa; }
+    h3 { margin: 0 0 16px 0; color: #202124; }
+    .description { color: #5f6368; font-size: 13px; margin-bottom: 16px; line-height: 1.5; }
+    .file-section { background: white; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .file-section h4 { margin: 0 0 8px 0; color: #1a73e8; font-size: 14px; }
+    .file-section p { margin: 0 0 12px 0; color: #5f6368; font-size: 12px; }
+    .file-input-wrapper { position: relative; }
+    input[type="file"] { width: 100%; padding: 8px; border: 2px dashed #dadce0; border-radius: 4px; background: #f8f9fa; cursor: pointer; }
+    input[type="file"]:hover { border-color: #1a73e8; background: #e8f0fe; }
+    .file-name { margin-top: 8px; font-size: 12px; color: #1a73e8; }
+    .buttons { margin-top: 20px; text-align: right; }
+    .buttons button { padding: 10px 24px; border-radius: 4px; cursor: pointer; font-size: 14px; margin-left: 8px; }
+    #cancelBtn { background: white; border: 1px solid #dadce0; color: #5f6368; }
+    #cancelBtn:hover { background: #f1f3f4; }
+    #uploadBtn { background: #1a73e8; border: none; color: white; }
+    #uploadBtn:hover { background: #1557b0; }
+    #uploadBtn:disabled { background: #dadce0; cursor: not-allowed; }
+    .status { margin-top: 12px; padding: 12px; border-radius: 4px; font-size: 13px; display: none; }
+    .status.info { background: #e8f0fe; color: #1a73e8; display: block; }
+    .status.success { background: #e6f4ea; color: #137333; display: block; }
+    .status.error { background: #fce8e6; color: #c5221f; display: block; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #1a73e8; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <h3 id="dialogTitle">Upload Files</h3>
+  <div class="description" id="dialogDescription"></div>
+
+  <div id="optionPricesSection" class="file-section" style="display:none;">
+    <h4>Option Prices CSV</h4>
+    <p>Download from barchart.com: Options > Select expiration > Stacked view > Download CSV</p>
+    <input type="file" id="optionPricesFile" accept=".csv" multiple>
+    <div class="file-name" id="optionPricesName"></div>
+  </div>
+
+  <div id="portfolioSection" class="file-section" style="display:none;">
+    <h4>Portfolio Download CSV</h4>
+    <p>From E*Trade: Accounts > Portfolio > Download</p>
+    <input type="file" id="portfolioFile" accept=".csv">
+    <div class="file-name" id="portfolioName"></div>
+  </div>
+
+  <div id="transactionsSection" class="file-section" style="display:none;">
+    <h4>Transaction History CSV</h4>
+    <p>From E*Trade: Accounts > Transactions > Download</p>
+    <input type="file" id="transactionsFile" accept=".csv" multiple>
+    <div class="file-name" id="transactionsName"></div>
+  </div>
+
+  <div id="status" class="status"></div>
+
+  <div class="buttons">
+    <button id="cancelBtn" onclick="google.script.host.close()">Cancel</button>
+    <button id="uploadBtn" onclick="uploadFiles()" disabled>Upload & Process</button>
+  </div>
+
+  <script>
+    var uploadMode = '';
+    var filesToUpload = {};
+
+    function init(mode) {
+      uploadMode = mode;
+
+      if (mode === 'optionPrices') {
+        document.getElementById('dialogTitle').innerText = 'Upload Option Prices';
+        document.getElementById('dialogDescription').innerText = 'Upload option price CSV files from barchart.com. Files will be saved to your Google Drive and processed.';
+        document.getElementById('optionPricesSection').style.display = 'block';
+      } else if (mode === 'rebuildPortfolio') {
+        document.getElementById('dialogTitle').innerText = 'Upload E*Trade Files (Full Rebuild)';
+        document.getElementById('dialogDescription').innerText = 'Upload both your Portfolio and Transaction History from E*Trade. This will clear and rebuild your portfolio.';
+        document.getElementById('portfolioSection').style.display = 'block';
+        document.getElementById('transactionsSection').style.display = 'block';
+      } else if (mode === 'importTransactions') {
+        document.getElementById('dialogTitle').innerText = 'Upload Transaction History';
+        document.getElementById('dialogDescription').innerText = 'Upload your latest Transaction History from E*Trade to add new transactions.';
+        document.getElementById('transactionsSection').style.display = 'block';
+      }
+    }
+
+    // File input handlers
+    document.getElementById('optionPricesFile').addEventListener('change', function(e) {
+      var files = e.target.files;
+      if (files.length > 0) {
+        var names = Array.from(files).map(f => f.name).join(', ');
+        document.getElementById('optionPricesName').innerText = names;
+        filesToUpload.optionPrices = files;
+      }
+      updateUploadButton();
+    });
+
+    document.getElementById('portfolioFile').addEventListener('change', function(e) {
+      var file = e.target.files[0];
+      if (file) {
+        document.getElementById('portfolioName').innerText = file.name;
+        filesToUpload.portfolio = file;
+      }
+      updateUploadButton();
+    });
+
+    document.getElementById('transactionsFile').addEventListener('change', function(e) {
+      var files = e.target.files;
+      if (files.length > 0) {
+        var names = Array.from(files).map(f => f.name).join(', ');
+        document.getElementById('transactionsName').innerText = names;
+        filesToUpload.transactions = files;
+      }
+      updateUploadButton();
+    });
+
+    function updateUploadButton() {
+      var hasFiles = false;
+      if (uploadMode === 'optionPrices') {
+        hasFiles = filesToUpload.optionPrices && filesToUpload.optionPrices.length > 0;
+      } else if (uploadMode === 'rebuildPortfolio') {
+        hasFiles = filesToUpload.portfolio && filesToUpload.transactions && filesToUpload.transactions.length > 0;
+      } else if (uploadMode === 'importTransactions') {
+        hasFiles = filesToUpload.transactions && filesToUpload.transactions.length > 0;
+      }
+      document.getElementById('uploadBtn').disabled = !hasFiles;
+    }
+
+    function showStatus(message, type) {
+      var el = document.getElementById('status');
+      el.className = 'status ' + type;
+      el.innerHTML = message;
+    }
+
+    function readFileAsText(file) {
+      return new Promise(function(resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function(e) { resolve({ name: file.name, content: e.target.result }); };
+        reader.onerror = function(e) { reject(e); };
+        reader.readAsText(file);
+      });
+    }
+
+    async function uploadFiles() {
+      document.getElementById('uploadBtn').disabled = true;
+      showStatus('<span class="spinner"></span>Uploading and processing files...', 'info');
+
+      try {
+        if (uploadMode === 'optionPrices') {
+          var files = await Promise.all(Array.from(filesToUpload.optionPrices).map(readFileAsText));
+          google.script.run
+            .withSuccessHandler(onSuccess)
+            .withFailureHandler(onError)
+            .uploadOptionPrices(files);
+        } else if (uploadMode === 'rebuildPortfolio') {
+          var portfolio = await readFileAsText(filesToUpload.portfolio);
+          var transactions = await Promise.all(Array.from(filesToUpload.transactions).map(readFileAsText));
+          google.script.run
+            .withSuccessHandler(onSuccess)
+            .withFailureHandler(onError)
+            .uploadAndRebuildPortfolio(portfolio, transactions);
+        } else if (uploadMode === 'importTransactions') {
+          var transactions = await Promise.all(Array.from(filesToUpload.transactions).map(readFileAsText));
+          google.script.run
+            .withSuccessHandler(onSuccess)
+            .withFailureHandler(onError)
+            .uploadAndImportTransactions(transactions);
+        }
+      } catch (e) {
+        onError(e);
+      }
+    }
+
+    function onSuccess(result) {
+      showStatus(result || 'Files uploaded and processed successfully!', 'success');
+      document.getElementById('uploadBtn').innerText = 'Done';
+      document.getElementById('uploadBtn').disabled = false;
+      document.getElementById('uploadBtn').onclick = function() { google.script.host.close(); };
+    }
+
+    function onError(err) {
+      showStatus('Error: ' + (err.message || err), 'error');
+      document.getElementById('uploadBtn').disabled = false;
+    }
+
+    // Get mode from URL parameter or call init directly
+    var params = new URLSearchParams(window.location.search);
+    var mode = params.get('mode');
+    if (mode) init(mode);
+  </script>
+</body>
+</html>

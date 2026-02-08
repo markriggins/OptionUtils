@@ -1646,3 +1646,149 @@ function aggregateStockTransactions_(stockTxns, sinceByTicker) {
 
   return stocks;
 }
+
+/* =========================================================
+   File Upload Dialogs
+   ========================================================= */
+
+/**
+ * Shows file upload dialog for full portfolio rebuild.
+ */
+function showUploadRebuildDialog() {
+  const html = HtmlService.createHtmlOutputFromFile("FileUpload")
+    .setWidth(500)
+    .setHeight(450);
+  const content = html.getContent().replace(
+    "if (mode) init(mode);",
+    "init('rebuildPortfolio');"
+  );
+  const output = HtmlService.createHtmlOutput(content)
+    .setWidth(500)
+    .setHeight(450);
+  SpreadsheetApp.getUi().showModalDialog(output, "Upload E*Trade Files");
+}
+
+/**
+ * Shows file upload dialog for importing latest transactions.
+ */
+function showUploadTransactionsDialog() {
+  const html = HtmlService.createHtmlOutputFromFile("FileUpload")
+    .setWidth(500)
+    .setHeight(350);
+  const content = html.getContent().replace(
+    "if (mode) init(mode);",
+    "init('importTransactions');"
+  );
+  const output = HtmlService.createHtmlOutput(content)
+    .setWidth(500)
+    .setHeight(350);
+  SpreadsheetApp.getUi().showModalDialog(output, "Upload Transaction History");
+}
+
+/**
+ * Handles uploaded files for full portfolio rebuild.
+ * Saves files to Drive and rebuilds portfolio.
+ * @param {{name: string, content: string}} portfolio - Portfolio CSV
+ * @param {Array<{name: string, content: string}>} transactions - Transaction CSV(s)
+ * @returns {string} Status message
+ */
+function uploadAndRebuildPortfolio(portfolio, transactions) {
+  if (!portfolio) throw new Error("Portfolio file is required");
+  if (!transactions || transactions.length === 0) throw new Error("Transaction file(s) required");
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const folder = getOrCreateEtradeFolder_(ss);
+
+  // Save portfolio file (replace if exists - it's always current state)
+  saveFileToFolder_(folder, portfolio.name, portfolio.content);
+
+  // Save transaction files with unique names (preserves history)
+  const savedNames = [];
+  for (const txn of transactions) {
+    const savedName = saveFileWithUniqueName_(folder, txn.name, txn.content);
+    savedNames.push(savedName);
+  }
+
+  // Run rebuild
+  rebuildPortfolio();
+
+  return `Uploaded portfolio and ${savedNames.length} transaction file(s). Rebuilt portfolio.`;
+}
+
+/**
+ * Handles uploaded transaction files for incremental import.
+ * Saves files to Drive and imports transactions.
+ * @param {Array<{name: string, content: string}>} transactions - Transaction CSV(s)
+ * @returns {string} Status message
+ */
+function uploadAndImportTransactions(transactions) {
+  if (!transactions || transactions.length === 0) throw new Error("Transaction file(s) required");
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const folder = getOrCreateEtradeFolder_(ss);
+
+  // Save transaction files with unique names (preserves history)
+  const savedNames = [];
+  for (const txn of transactions) {
+    const savedName = saveFileWithUniqueName_(folder, txn.name, txn.content);
+    savedNames.push(savedName);
+  }
+
+  // Run import
+  importLatestTransactions();
+
+  return `Uploaded ${savedNames.length} file(s) and imported transactions.`;
+}
+
+/**
+ * Gets or creates the E*Trade data folder.
+ */
+function getOrCreateEtradeFolder_(ss) {
+  const dataFolderPath = getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA") + "/Etrade";
+  let folder = DriveApp.getRootFolder();
+  for (const part of dataFolderPath.split("/").filter(p => p.trim())) {
+    const it = folder.getFoldersByName(part);
+    if (it.hasNext()) {
+      folder = it.next();
+    } else {
+      folder = folder.createFolder(part);
+    }
+  }
+  return folder;
+}
+
+/**
+ * Saves a file to a folder, replacing existing file with same name.
+ */
+function saveFileToFolder_(folder, fileName, content) {
+  const existing = folder.getFilesByName(fileName);
+  if (existing.hasNext()) {
+    existing.next().setTrashed(true);
+  }
+  folder.createFile(fileName, content, MimeType.CSV);
+}
+
+/**
+ * Saves a file to a folder with a unique name.
+ * If a file with the same name exists, appends a timestamp to make it unique.
+ * Returns the actual filename used.
+ */
+function saveFileWithUniqueName_(folder, fileName, content) {
+  // Check if file with same name exists
+  const existing = folder.getFilesByName(fileName);
+  let finalName = fileName;
+
+  if (existing.hasNext()) {
+    // File exists - create unique name by inserting timestamp before extension
+    const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd-HHmmss");
+    const lastDot = fileName.lastIndexOf(".");
+    if (lastDot > 0) {
+      finalName = fileName.substring(0, lastDot) + "-" + timestamp + fileName.substring(lastDot);
+    } else {
+      finalName = fileName + "-" + timestamp;
+    }
+  }
+
+  folder.createFile(finalName, content, MimeType.CSV);
+  return finalName;
+}

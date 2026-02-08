@@ -75,6 +75,18 @@ function showSpreadFinderGraphs() {
   SpreadFinder.showSpreadFinderGraphs();
 }
 
+function showUploadOptionPricesDialog() {
+  SpreadFinder.showUploadOptionPricesDialog();
+}
+
+function showUploadTransactionsDialog() {
+  SpreadFinder.showUploadTransactionsDialog();
+}
+
+function showUploadRebuildDialog() {
+  SpreadFinder.showUploadRebuildDialog();
+}
+
 // ============================================================
 // DIALOG CALLBACKS (called via google.script.run from HTML)
 // ============================================================
@@ -93,6 +105,18 @@ function getSpreadFinderGraphData() {
 
 function getPortfolioGraphData() {
   return SpreadFinder.getPortfolioGraphData();
+}
+
+function uploadOptionPrices(files) {
+  return SpreadFinder.uploadOptionPrices(files);
+}
+
+function uploadAndRebuildPortfolio(portfolio, transactions) {
+  return SpreadFinder.uploadAndRebuildPortfolio(portfolio, transactions);
+}
+
+function uploadAndImportTransactions(transactions) {
+  return SpreadFinder.uploadAndImportTransactions(transactions);
 }
 
 // ============================================================
