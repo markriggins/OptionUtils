@@ -68,17 +68,13 @@
       uploadMode = mode;
 
       if (mode === 'optionPrices') {
-        document.getElementById('dialogTitle').innerText = 'Upload Option Prices';
-        document.getElementById('dialogDescription').innerText = 'Upload option price CSV files from barchart.com. Files will be saved to your Google Drive and processed.';
+        document.getElementById('dialogTitle').innerText = 'Upload & Refresh Option Prices';
+        document.getElementById('dialogDescription').innerText = 'Upload option price CSV files from barchart.com. Files will be saved to Google Drive and refreshed.';
         document.getElementById('optionPricesSection').style.display = 'block';
       } else if (mode === 'rebuildPortfolio') {
-        document.getElementById('dialogTitle').innerText = 'Upload E*Trade Files (Full Rebuild)';
-        document.getElementById('dialogDescription').innerText = 'Upload both your Portfolio and Transaction History from E*Trade. This will clear and rebuild your portfolio.';
+        document.getElementById('dialogTitle').innerText = 'Upload & Rebuild Portfolio';
+        document.getElementById('dialogDescription').innerText = 'Upload Portfolio and/or Transaction History from E*Trade. Select one or both files, then rebuild your portfolio.';
         document.getElementById('portfolioSection').style.display = 'block';
-        document.getElementById('transactionsSection').style.display = 'block';
-      } else if (mode === 'importTransactions') {
-        document.getElementById('dialogTitle').innerText = 'Upload Transaction History';
-        document.getElementById('dialogDescription').innerText = 'Upload your latest Transaction History from E*Trade to add new transactions.';
         document.getElementById('transactionsSection').style.display = 'block';
       }
     }
@@ -87,9 +83,22 @@
     document.getElementById('optionPricesFile').addEventListener('change', function(e) {
       var files = e.target.files;
       if (files.length > 0) {
-        var names = Array.from(files).map(f => f.name).join(', ');
-        document.getElementById('optionPricesName').innerText = names;
-        filesToUpload.optionPrices = files;
+        // Filter for files with "options" in the name
+        var validFiles = Array.from(files).filter(f => f.name.toLowerCase().includes('options'));
+        var skipped = files.length - validFiles.length;
+
+        if (validFiles.length > 0) {
+          var names = validFiles.map(f => f.name).join(', ');
+          var msg = names;
+          if (skipped > 0) {
+            msg += ' (skipped ' + skipped + ' file(s) without "options" in name)';
+          }
+          document.getElementById('optionPricesName').innerText = msg;
+          filesToUpload.optionPrices = validFiles;
+        } else {
+          document.getElementById('optionPricesName').innerText = 'No files with "options" in filename. Expected format: symbol-options-exp-YYYY-MM-DD-....csv';
+          filesToUpload.optionPrices = null;
+        }
       }
       updateUploadButton();
     });
@@ -118,9 +127,10 @@
       if (uploadMode === 'optionPrices') {
         hasFiles = filesToUpload.optionPrices && filesToUpload.optionPrices.length > 0;
       } else if (uploadMode === 'rebuildPortfolio') {
-        hasFiles = filesToUpload.portfolio && filesToUpload.transactions && filesToUpload.transactions.length > 0;
-      } else if (uploadMode === 'importTransactions') {
-        hasFiles = filesToUpload.transactions && filesToUpload.transactions.length > 0;
+        // Allow either portfolio OR transactions (or both)
+        var hasPortfolio = !!filesToUpload.portfolio;
+        var hasTransactions = filesToUpload.transactions && filesToUpload.transactions.length > 0;
+        hasFiles = hasPortfolio || hasTransactions;
       }
       document.getElementById('uploadBtn').disabled = !hasFiles;
     }
@@ -152,18 +162,12 @@
             .withFailureHandler(onError)
             .uploadOptionPrices(files);
         } else if (uploadMode === 'rebuildPortfolio') {
-          var portfolio = await readFileAsText(filesToUpload.portfolio);
-          var transactions = await Promise.all(Array.from(filesToUpload.transactions).map(readFileAsText));
+          var portfolio = filesToUpload.portfolio ? await readFileAsText(filesToUpload.portfolio) : null;
+          var transactions = filesToUpload.transactions ? await Promise.all(Array.from(filesToUpload.transactions).map(readFileAsText)) : [];
           google.script.run
             .withSuccessHandler(onSuccess)
             .withFailureHandler(onError)
             .uploadAndRebuildPortfolio(portfolio, transactions);
-        } else if (uploadMode === 'importTransactions') {
-          var transactions = await Promise.all(Array.from(filesToUpload.transactions).map(readFileAsText));
-          google.script.run
-            .withSuccessHandler(onSuccess)
-            .withFailureHandler(onError)
-            .uploadAndImportTransactions(transactions);
         }
       } catch (e) {
         onError(e);

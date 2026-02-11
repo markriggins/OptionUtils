@@ -668,7 +668,7 @@ function getUniqueSymbolsFromPositions_(ss) {
       }
 
       const sym = String(rows[r][idxSym] ?? "").trim().toUpperCase();
-      if (sym) symbols.add(sym);
+      if (sym && sym !== "CASH") symbols.add(sym);
     }
   }
 
@@ -1377,13 +1377,6 @@ function getNamedRangeWithTableFallback_(ss, rangeNameRaw) {
   return null;
 }
 
-/* =========================================================
-   Parsing with optional Symbol column filtering
-   ========================================================= */
-
-// parseSharesFromTableForSymbol_ is in Parsing.js
-
-// parseSpreadsFromTableForSymbol_, formatExpirationLabel_, parseIronCondorsFromTableForSymbol_ are in Parsing.js
 
 /* =========================================================
    Status messaging
@@ -1398,9 +1391,4 @@ function clearStatus_(sheet) {
   sheet.getRange("D1:D2").clearContent();
 }
 
-/* =========================================================
-   Range helpers
-   ========================================================= */
-
-// rangesIntersect_ is in CommonUtils.js
 

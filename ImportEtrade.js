@@ -27,16 +27,6 @@ function rebuildPortfolio() {
 }
 
 /**
- * Legacy function for backwards compatibility.
- */
-function importEtradePortfolio() {
-  // Default to update mode if portfolio exists, otherwise fresh
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const existingSheet = ss.getSheetByName("Portfolio");
-  importEtradePortfolio_(existingSheet ? "update" : "fresh");
-}
-
-/**
  * Imports E*Trade portfolio and transactions from CSV files in Google Drive.
  *
  * @param {string} importMode - "fresh" (no existing), "update" (merge), or "rebuild" (delete and recreate)
@@ -133,7 +123,7 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
 
   for (const file of txnFiles) {
     const csvContent = file.getBlob().getDataAsString();
-    const result = parseEtradeCsv_(csvContent);
+    const result = parseEtradeTransactionsFromCsv_(csvContent);
     let txnAdded = 0, txnDupes = 0;
     for (const txn of result.transactions) {
       const key = `${txn.date}|${txn.txnType}|${txn.ticker}|${txn.expiration}|${txn.strike}|${txn.optionType}|${txn.qty}|${txn.price}|${txn.amount}`;
@@ -169,7 +159,7 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
     // For rebuild/fresh: use PortfolioDownload CSV for quantities (source of truth)
     // Transaction dates come from stockTxns (or NOW if none found)
     if (portfolioFiles.length > 0) {
-      const portfolioResult = parsePortfolioStocksFromFile_(portfolioFiles[0], stockTxns);
+      const portfolioResult = parsePortfolioStocksAndCashFromFile_(portfolioFiles[0], stockTxns);
       stockPositions = portfolioResult.stocks;
       portfolioCash = portfolioResult.cash || 0;
       Logger.log(`Found ${stockPositions.length} stock positions and $${portfolioCash} cash from portfolio CSV`);
@@ -180,7 +170,7 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
     for (const [key, pos] of existingPositions) {
       if (key.endsWith("|STOCK")) {
         const ticker = key.split("|")[0];
-        const cutoff = parseDateFlexible_(pos.lastTxnDate);
+        const cutoff = parseDateAtMidnight_(pos.lastTxnDate);
         if (cutoff) {
           stockCutoffDates.set(ticker, cutoff);
         }
@@ -328,12 +318,12 @@ function formatSpreadLabel_(spread) {
   }
   if (spread.type === "iron-condor") {
     const strikes = spread.legs.map(l => l.strike).join("/");
-    return `${spread.ticker} ${formatExpShort_(spread.expiration)} ${strikes} iron-condor`;
+    return `${spread.ticker} ${formatExpirationShort_(spread.expiration)} ${strikes} iron-condor`;
   }
   const strikes = [spread.lowerStrike, spread.upperStrike].filter(s => s).join("/");
   const strategyType = spread.lowerStrike && spread.upperStrike ? "bull-call-spread" :
                        spread.lowerStrike ? "long-call" : "short-call";
-  return `${spread.ticker} ${formatExpShort_(spread.expiration)} ${strikes} ${strategyType}`;
+  return `${spread.ticker} ${formatExpirationShort_(spread.expiration)} ${strikes} ${strategyType}`;
 }
 
 /**
@@ -343,7 +333,7 @@ function formatPositionLabel_(pos) {
   if (!pos.legs || pos.legs.length === 0) return "Unknown position";
   const leg = pos.legs[0];
   const strikes = pos.legs.map(l => l.strike).filter(s => s).sort((a, b) => a - b).join("/");
-  const exp = formatExpShort_(leg.expiration);
+  const exp = formatExpirationShort_(leg.expiration);
   const debug = pos.debugReason || "";
   return `${leg.symbol} ${exp} ${strikes} ${leg.type || "Call"}${debug}`;
 }
@@ -351,9 +341,9 @@ function formatPositionLabel_(pos) {
 /**
  * Formats expiration as "Mon YYYY" for display.
  */
-function formatExpShort_(exp) {
+function formatExpirationShort_(exp) {
   if (!exp) return "";
-  const d = parseDateFlexible_(exp);
+  const d = parseDateAtMidnight_(exp);
   if (!d) return String(exp);
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${months[d.getMonth()]} ${d.getFullYear()}`;
@@ -364,7 +354,7 @@ function formatExpShort_(exp) {
  */
 function formatDateLong_(dateVal) {
   if (!dateVal) return "";
-  const d = parseDateFlexible_(dateVal);
+  const d = parseDateAtMidnight_(dateVal);
   if (!d) return String(dateVal);
   return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
 }
@@ -387,6 +377,13 @@ function generateSpreadDescription_(spread) {
     const sortedStrikes = spread.legs.map(l => l.strike).sort((a, b) => a - b);
     const isButterfly = sortedStrikes[1] === sortedStrikes[2];
     return `${strikes} ${isButterfly ? "iron-butterfly" : "iron-condor"}`;
+  }
+
+  // Straddle/strangle (2 legs: call + put)
+  if (spread.legs && spread.legs.length === 2) {
+    const strikes = spread.legs.map(l => l.strike).sort((a, b) => a - b);
+    const strikeStr = strikes[0] === strikes[1] ? String(strikes[0]) : strikes.join("/");
+    return `${strikeStr} ${spread.type}`;
   }
 
   // Regular spread
@@ -438,7 +435,7 @@ function importEtradePortfolioFromFolder_(folder, txnFileName, portfolioFileName
 
   for (const file of txnFiles) {
     const csvContent = file.getBlob().getDataAsString();
-    const result = parseEtradeCsv_(csvContent);
+    const result = parseEtradeTransactionsFromCsv_(csvContent);
     transactions.push(...result.transactions);
     stockTxns.push(...result.stockTxns);
   }
@@ -452,7 +449,7 @@ function importEtradePortfolioFromFolder_(folder, txnFileName, portfolioFileName
   let stockPositions = [];
   let portfolioCash = 0;
   if (portfolioFiles.length > 0) {
-    const portfolioResult = parsePortfolioStocksFromFile_(portfolioFiles[0], stockTxns);
+    const portfolioResult = parsePortfolioStocksAndCashFromFile_(portfolioFiles[0], stockTxns);
     stockPositions = portfolioResult.stocks;
     portfolioCash = portfolioResult.cash || 0;
   }
@@ -490,10 +487,10 @@ function importEtradePortfolioFromFolder_(folder, txnFileName, portfolioFileName
  * Transaction dates come from stockTxns (latest date per ticker, or NOW if none found).
  *
  * @param {File} file - The PortfolioDownload CSV file
- * @param {Object[]} stockTxns - Array of stock transactions from parseEtradeCsv_
+ * @param {Object[]} stockTxns - Array of stock transactions from parseEtradeTransactionsFromCsv_
  * @returns {{ stocks: Object[], cash: number }} Object with stocks array and cash amount
  */
-function parsePortfolioStocksFromFile_(file, stockTxns) {
+function parsePortfolioStocksAndCashFromFile_(file, stockTxns) {
   const csv = file.getBlob().getDataAsString();
   const lines = csv.split(/\r?\n/);
 
@@ -711,7 +708,7 @@ function buildLatestStockDates_(stockTxns) {
     const ticker = txn.ticker;
     if (!ticker) continue;
 
-    const txnDate = parseDateFlexible_(txn.date);
+    const txnDate = parseDateAtMidnight_(txn.date);
     if (!txnDate) continue;
 
     const existing = latestByTicker.get(ticker);
@@ -784,7 +781,7 @@ function findFilesByName_(folder, name) {
  * transactions: option opens, closes, exercises, assignments
  * stockTxns: stock Bought/Sold for matching exercise/assignment to market price
  */
-function parseEtradeCsv_(csvContent) {
+function parseEtradeTransactionsFromCsv_(csvContent) {
   const lines = csvContent.split(/\r?\n/);
   const transactions = [];
   const stockTxns = [];
@@ -881,38 +878,6 @@ function parseEtradeCsv_(csvContent) {
   }
 
   return { transactions, stockTxns };
-}
-
-/**
- * Parses a date string flexibly, handling MM/DD/YY, MM/DD/YYYY, and Date objects.
- * Returns a Date object or null if parsing fails.
- */
-function parseDateFlexible_(dateVal) {
-  if (!dateVal) return null;
-
-  // Already a Date object
-  if (dateVal instanceof Date) {
-    return isNaN(dateVal.getTime()) ? null : dateVal;
-  }
-
-  const s = String(dateVal).trim();
-  if (!s) return null;
-
-  // Try MM/DD/YY or MM/DD/YYYY
-  const match = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-  if (match) {
-    let [, m, d, y] = match;
-    let year = parseInt(y, 10);
-    // Handle 2-digit year: assume 20xx for years 00-99
-    if (year < 100) {
-      year = year < 50 ? 2000 + year : 1900 + year;
-    }
-    return new Date(year, parseInt(m, 10) - 1, parseInt(d, 10));
-  }
-
-  // Fallback to native parsing
-  const parsed = new Date(s);
-  return isNaN(parsed.getTime()) ? null : parsed;
 }
 
 /**
@@ -1066,6 +1031,66 @@ function pairTransactionsIntoSpreads_(transactions) {
           ].sort((a, b) => a.strike - b.strike),
         });
         continue; // Skip normal pairing for this group
+      }
+    }
+
+    // Check for long straddle/strangle: 1 long call + 1 long put (no shorts)
+    if (longCalls.length >= 1 && longPuts.length >= 1 &&
+        shortCalls.length === 0 && shortPuts.length === 0) {
+      const lc = longCalls[0];
+      const lp = longPuts[0];
+      const pairQty = Math.min(lc.qty, lp.qty);
+      const isStraddle = lc.strike === lp.strike;
+
+      spreads.push({
+        type: isStraddle ? "long-straddle" : "long-strangle",
+        ticker: lc.ticker,
+        expiration: lc.expiration,
+        qty: pairQty,
+        date: lc.date,
+        legs: [
+          { strike: lp.strike, optionType: "Put", qty: pairQty, price: lp.price },
+          { strike: lc.strike, optionType: "Call", qty: pairQty, price: lc.price },
+        ].sort((a, b) => a.strike - b.strike),
+      });
+
+      // Reduce quantities for any remainder
+      lc.qty -= pairQty;
+      lp.qty -= pairQty;
+
+      // If fully consumed, skip to next group
+      if (lc.qty === 0 && lp.qty === 0 && longCalls.length === 1 && longPuts.length === 1) {
+        continue;
+      }
+    }
+
+    // Check for short straddle/strangle: 1 short call + 1 short put (no longs)
+    if (shortCalls.length >= 1 && shortPuts.length >= 1 &&
+        longCalls.length === 0 && longPuts.length === 0) {
+      const sc = shortCalls[0];
+      const sp = shortPuts[0];
+      const pairQty = Math.min(Math.abs(sc.qty), Math.abs(sp.qty));
+      const isStraddle = sc.strike === sp.strike;
+
+      spreads.push({
+        type: isStraddle ? "short-straddle" : "short-strangle",
+        ticker: sc.ticker,
+        expiration: sc.expiration,
+        qty: pairQty,
+        date: sc.date,
+        legs: [
+          { strike: sp.strike, optionType: "Put", qty: -pairQty, price: sp.price },
+          { strike: sc.strike, optionType: "Call", qty: -pairQty, price: sc.price },
+        ].sort((a, b) => a.strike - b.strike),
+      });
+
+      // Reduce quantities for any remainder
+      sc.qty += pairQty; // negative + positive = less negative
+      sp.qty += pairQty;
+
+      // If fully consumed, skip to next group
+      if (sc.qty === 0 && sp.qty === 0 && shortCalls.length === 1 && shortPuts.length === 1) {
+        continue;
       }
     }
 
@@ -1360,9 +1385,20 @@ function makeSpreadKeyFromOrder_(spread) {
 
   const exp = normalizeExpiration_(spread.expiration) || spread.expiration;
 
-  if (spread.type === "iron-condor" && spread.legs) {
+  // Multi-leg strategies with spread.legs
+  if (spread.legs && spread.legs.length > 0) {
     const strikes = spread.legs.map(l => l.strike).sort((a, b) => a - b);
-    return `${spread.ticker}|${exp}|${strikes.join("/")}|IC`;
+    // Use type abbreviation for the key
+    let typeKey;
+    switch (spread.type) {
+      case "iron-condor": typeKey = "IC"; break;
+      case "long-straddle": typeKey = "LS"; break;
+      case "short-straddle": typeKey = "SS"; break;
+      case "long-strangle": typeKey = "LSg"; break;
+      case "short-strangle": typeKey = "SSg"; break;
+      default: typeKey = spread.type || "?";
+    }
+    return `${spread.ticker}|${exp}|${strikes.join("/")}|${typeKey}`;
   }
 
   const strikes = [spread.lowerStrike, spread.upperStrike].filter(s => s != null).sort((a, b) => a - b);
@@ -1486,8 +1522,8 @@ function mergeSpreads_(existingPositions, newSpreads) {
 
       // Per-group dedup: skip if spread's date is not newer than LastTxnDate
       // Parse dates carefully to handle MM/DD/YY vs MM/DD/YYYY formats
-      const spreadDate = parseDateFlexible_(spread.date);
-      const lastTxnDate = parseDateFlexible_(existing.lastTxnDate);
+      const spreadDate = parseDateAtMidnight_(spread.date);
+      const lastTxnDate = parseDateAtMidnight_(existing.lastTxnDate);
 
       if (spreadDate && lastTxnDate && spreadDate <= lastTxnDate) {
         skippedCount++;
@@ -1688,8 +1724,8 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
         if (idxPrice >= 0) row[idxPrice] = roundTo_(spread.price, 2);
         rows.push(row);
       }
-      // Handle iron condor (4 legs)
-      else if (spread.type === "iron-condor" && spread.legs) {
+      // Handle iron condor (4 legs) or straddle/strangle (2 legs)
+      else if (spread.legs && spread.legs.length > 0) {
         for (let i = 0; i < spread.legs.length; i++) {
           const leg = spread.legs[i];
           const row = new Array(headers.length).fill("");
@@ -1968,14 +2004,14 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
  * Bought transactions add to quantity, Sold transactions subtract.
  * Tracks the latest transaction date for each symbol.
  *
- * @param {Object[]} stockTxns - Array of stock transaction objects from parseEtradeCsv_
+ * @param {Object[]} stockTxns - Array of stock transaction objects from parseEtradeTransactionsFromCsv_
  * @returns {Object[]} Array of stock position objects (spread-like with type="stock")
  */
 /**
  * Aggregates stock transactions into delta positions by symbol.
  * Bought transactions add to quantity, Sold transactions subtract.
  *
- * @param {Object[]} stockTxns - Array of stock transaction objects from parseEtradeCsv_
+ * @param {Object[]} stockTxns - Array of stock transaction objects from parseEtradeTransactionsFromCsv_
  * @param {Map<string, Date>} [sinceByTicker] - Optional map of ticker -> cutoff date.
  *        Only transactions AFTER this date are included for each ticker.
  * @returns {Object[]} Array of stock position objects (spread-like with type="stock")
@@ -1991,7 +2027,7 @@ function aggregateStockTransactions_(stockTxns, sinceByTicker) {
     if (!ticker) continue;
 
     // Parse transaction date
-    const txnDate = parseDateFlexible_(txn.date);
+    const txnDate = parseDateAtMidnight_(txn.date);
 
     // If sinceByTicker provided, skip transactions on or before the cutoff date
     if (sinceByTicker && sinceByTicker.has(ticker)) {
@@ -2067,23 +2103,6 @@ function showUploadRebuildDialog() {
 }
 
 /**
- * Shows file upload dialog for importing latest transactions.
- */
-function showUploadTransactionsDialog() {
-  const html = HtmlService.createHtmlOutputFromFile("FileUpload")
-    .setWidth(500)
-    .setHeight(350);
-  const content = html.getContent().replace(
-    "if (mode) init(mode);",
-    "init('importTransactions');"
-  );
-  const output = HtmlService.createHtmlOutput(content)
-    .setWidth(500)
-    .setHeight(350);
-  SpreadsheetApp.getUi().showModalDialog(output, "Upload Transaction History");
-}
-
-/**
  * Strips browser-added disambiguators like "(1)", " (1)", "(2)" from filenames.
  * E.g., "PortfolioDownload (1).csv" -> "PortfolioDownload.csv"
  */
@@ -2093,60 +2112,41 @@ function stripBrowserDisambiguator_(fileName) {
 }
 
 /**
- * Handles uploaded files for full portfolio rebuild.
+ * Handles uploaded files for portfolio rebuild.
  * Saves files to Drive and rebuilds portfolio.
- * @param {{name: string, content: string}} portfolio - Portfolio CSV
- * @param {Array<{name: string, content: string}>} transactions - Transaction CSV(s)
+ * @param {{name: string, content: string}|null} portfolio - Portfolio CSV (optional)
+ * @param {Array<{name: string, content: string}>} transactions - Transaction CSV(s) (optional)
  * @returns {string} Status message
  */
 function uploadAndRebuildPortfolio(portfolio, transactions) {
-  if (!portfolio) throw new Error("Portfolio file is required");
-  if (!transactions || transactions.length === 0) throw new Error("Transaction file(s) required");
+  if (!portfolio && (!transactions || transactions.length === 0)) {
+    throw new Error("At least one file (Portfolio or Transactions) is required");
+  }
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const folder = getOrCreateEtradeFolder_(ss);
 
+  const uploadedParts = [];
+
   // Save portfolio file with canonical name (always replace - it's current state)
-  saveFileToFolder_(folder, "PortfolioDownload.csv", portfolio.content);
+  if (portfolio) {
+    saveFileToFolder_(folder, "PortfolioDownload.csv", portfolio.content);
+    uploadedParts.push("portfolio");
+  }
 
   // Save transaction files with unique names (preserves history)
-  const savedNames = [];
-  for (const txn of transactions) {
-    const cleanName = stripBrowserDisambiguator_(txn.name);
-    const savedName = saveFileWithUniqueName_(folder, cleanName, txn.content);
-    savedNames.push(savedName);
+  if (transactions && transactions.length > 0) {
+    for (const txn of transactions) {
+      const cleanName = stripBrowserDisambiguator_(txn.name);
+      saveFileWithUniqueName_(folder, cleanName, txn.content);
+    }
+    uploadedParts.push(`${transactions.length} transaction file(s)`);
   }
 
   // Run rebuild
   rebuildPortfolio();
 
-  return `Uploaded portfolio and ${savedNames.length} transaction file(s). Rebuilt portfolio.`;
-}
-
-/**
- * Handles uploaded transaction files for incremental import.
- * Saves files to Drive and imports transactions.
- * @param {Array<{name: string, content: string}>} transactions - Transaction CSV(s)
- * @returns {string} Status message
- */
-function uploadAndImportTransactions(transactions) {
-  if (!transactions || transactions.length === 0) throw new Error("Transaction file(s) required");
-
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const folder = getOrCreateEtradeFolder_(ss);
-
-  // Save transaction files with unique names (preserves history)
-  const savedNames = [];
-  for (const txn of transactions) {
-    const cleanName = stripBrowserDisambiguator_(txn.name);
-    const savedName = saveFileWithUniqueName_(folder, cleanName, txn.content);
-    savedNames.push(savedName);
-  }
-
-  // Run import
-  importLatestTransactions();
-
-  return `Uploaded ${savedNames.length} file(s) and imported transactions.`;
+  return `Uploaded ${uploadedParts.join(" and ")}. Rebuilt portfolio.`;
 }
 
 /**

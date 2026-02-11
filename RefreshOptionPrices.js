@@ -53,7 +53,7 @@ function refreshOptionPrices() {
       const fileModified = new Date(entry.updated);
 
       // Parse expStr into a Date (midnight) for sheet storage
-      const expDate = parseYyyyMmDdToDateAtMidnight_(expStr);
+      const expDate = parseDateAtMidnight_(expStr);
       if (!expDate || isNaN(expDate.getTime())) {
         throw new Error(`Cannot parse expiration '${expStr}' from filename for ${symbol}. Expected format: exp-YYYY-MM-DD`);
       }
@@ -367,7 +367,7 @@ function showUploadOptionPricesDialog() {
   const output = HtmlService.createHtmlOutput(content)
     .setWidth(500)
     .setHeight(400);
-  SpreadsheetApp.getUi().showModalDialog(output, "Upload Option Prices");
+  SpreadsheetApp.getUi().showModalDialog(output, "Upload & Refresh Option Prices");
 }
 
 /**

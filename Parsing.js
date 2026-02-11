@@ -126,18 +126,54 @@ function formatExpirationLabel_(exp) {
 // ---- Date Parsing ----
 
 /**
- * Parses "YYYY-MM-DD" into a Date at midnight local time.
- * Returns null on invalid input.
+ * Parses various date formats into a Date at midnight local time.
+ * Handles: Date objects, YYYY-MM-DD, M/D/YY, M/D/YYYY, and native Date parsing.
+ * Always returns a midnight-normalized date or null on failure.
+ *
+ * @param {Date|string|number} dateVal - Date value to parse
+ * @returns {Date|null} Date at midnight local time, or null if invalid
  */
-function parseYyyyMmDdToDateAtMidnight_(s) {
-  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return null;
-  const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
-  const dt = new Date(y, mo, d);
-  if (isNaN(dt.getTime())) return null;
-  dt.setHours(0, 0, 0, 0);
-  return dt;
+function parseDateAtMidnight_(dateVal) {
+  if (!dateVal) return null;
+
+  // Already a Date object - normalize to midnight
+  if (dateVal instanceof Date) {
+    if (isNaN(dateVal.getTime())) return null;
+    return new Date(dateVal.getFullYear(), dateVal.getMonth(), dateVal.getDate());
+  }
+
+  const s = String(dateVal).trim();
+  if (!s) return null;
+
+  // Try YYYY-MM-DD (ISO format)
+  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    const dt = new Date(
+      parseInt(isoMatch[1], 10),
+      parseInt(isoMatch[2], 10) - 1,
+      parseInt(isoMatch[3], 10)
+    );
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+
+  // Try M/D/YY or M/D/YYYY
+  const mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (mdyMatch) {
+    let year = parseInt(mdyMatch[3], 10);
+    // Handle 2-digit year: assume 20xx for years 00-49, 19xx for 50-99
+    if (year < 100) {
+      year = year < 50 ? 2000 + year : 1900 + year;
+    }
+    const dt = new Date(year, parseInt(mdyMatch[1], 10) - 1, parseInt(mdyMatch[2], 10));
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+
+  // Fallback to native parsing, then normalize to midnight
+  const parsed = new Date(s);
+  if (isNaN(parsed.getTime())) return null;
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
 }
+
 
 // ---- Column Index Helpers ----
 
@@ -485,15 +521,31 @@ function detectPositionType_(legs) {
 
   if (legs.length === 2) {
     const [a, b] = legs;
-    // Both must have types and opposite qty signs
+    // Both must have types
     if (!a.type || !b.type) return null;
     if (a.type === "Stock" || b.type === "Stock") return null;
-    const sameType = a.type === b.type;
-    const oppositeSigns = (a.qty > 0 && b.qty < 0) || (a.qty < 0 && b.qty > 0);
-    if (!sameType || !oppositeSigns) return null;
 
-    if (a.type === "Call") return "bull-call-spread";
-    if (a.type === "Put") return "bull-put-spread";
+    const sameType = a.type === b.type;
+    const bothLong = a.qty > 0 && b.qty > 0;
+    const bothShort = a.qty < 0 && b.qty < 0;
+    const oppositeSigns = (a.qty > 0 && b.qty < 0) || (a.qty < 0 && b.qty > 0);
+
+    // Straddle/strangle: call + put, same direction
+    if (!sameType && (bothLong || bothShort)) {
+      const sameStrike = a.strike === b.strike;
+      if (bothLong) {
+        return sameStrike ? "long-straddle" : "long-strangle";
+      } else {
+        return sameStrike ? "short-straddle" : "short-strangle";
+      }
+    }
+
+    // Vertical spreads: same type, opposite signs
+    if (sameType && oppositeSigns) {
+      if (a.type === "Call") return "bull-call-spread";
+      if (a.type === "Put") return "bull-put-spread";
+    }
+
     return null;
   }
 
@@ -750,7 +802,7 @@ function getSymbolsFromLegsTable_(rows) {
     if (lastSym) symbols.add(lastSym);
   }
 
-  const skip = new Set(["REALIZED", "UNREALIZED", "TOTAL"]);
+  const skip = new Set(["REALIZED", "UNREALIZED", "TOTAL", "CASH"]);
   return Array.from(symbols).filter(s => !skip.has(s)).sort();
 }
 
@@ -762,6 +814,15 @@ function strategyAbbrev_(type) {
     case "bull-call-spread": return "BCS";
     case "bull-put-spread": return "BPS";
     case "iron-condor": return "IC";
+    case "iron-butterfly": return "IB";
+    case "long-straddle": return "LS";
+    case "short-straddle": return "SS";
+    case "long-strangle": return "LSg";
+    case "short-strangle": return "SSg";
+    case "long-call": return "LC";
+    case "short-call": return "SC";
+    case "long-put": return "LP";
+    case "short-put": return "SP";
     case "stock": return "Stock";
     case "cash": return "Cash";
     default: return "?";

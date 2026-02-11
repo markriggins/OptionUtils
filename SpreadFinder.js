@@ -727,7 +727,8 @@ function outputSpreadResults_(sheet, spreads, config) {
   const allRows = [];
   for (let i = 0; i < spreads.length; i++) {
     const s = spreads[i];
-    const expDate = new Date(s.expiration);
+    // Parse expiration carefully to avoid timezone issues with ISO strings
+    const expDate = parseIsoDate_(s.expiration);
     const dateStr = months[expDate.getMonth()] + " " + String(expDate.getFullYear()).slice(2);
     const label = `${s.symbol} ${s.lowerStrike}/${s.upperStrike} ${dateStr}`;
 
@@ -749,25 +750,20 @@ function outputSpreadResults_(sheet, spreads, config) {
     rowData[colIdx.Liquidity] = s.liquidityScore;
     rowData[colIdx.Tightness] = s.tightness;
     rowData[colIdx.Fitness] = s.fitness;
-    rowData[colIdx.OptionStrat] = "";  // formula set separately
+    // Compute OptionStrat URL directly (avoids popup warning from custom function in HYPERLINK)
+    const osUrl = buildOptionStratUrl(
+      `${s.lowerStrike}/${s.upperStrike}`,
+      s.symbol,
+      "bull-call-spread",
+      s.expiration
+    );
+    rowData[colIdx.OptionStrat] = osUrl;
     rowData[colIdx.Label] = label;
     rowData[colIdx.Held] = s.held ? "HELD" : "";
     rowData[colIdx.IV] = s.lowerIV;
     allRows.push(rowData);
   }
   sheet.getRange(dataStartRow, 1, allRows.length, headers.length).setValues(allRows);
-
-  // OptionStrat formulas reference other columns by letter
-  if (false) {
-      const lowerLetter = colLetter("Lower"), upperLetter = colLetter("Upper");
-      const symLetter = colLetter("Symbol"), expLetter = colLetter("Expiration");
-      const optionStratFormulas = spreads.map((s, i) => {
-        const row = dataStartRow + i;
-        const osUrl = `buildOptionStratUrl(${lowerLetter}${row}&"/"&${upperLetter}${row},${symLetter}${row},"bull-call-spread",${expLetter}${row})`;
-        return [`=HYPERLINK(${osUrl},"OptionStrat")`];
-      });
-      sheet.getRange(dataStartRow, col("OptionStrat"), spreads.length, 1).setFormulas(optionStratFormulas);
-  }
 
   // Number formats from the map
   const formats = spreads.map(() => headers.map(h => formatMap[h] || "@"));
@@ -883,3 +879,47 @@ function showSpreadFinderGraphs() {
      };
    }).sort((a, b) => a.fitness - b.fitness);
  }
+
+/**
+ * Parses an ISO date string (YYYY-MM-DD) or M/D/YYYY to a Date object at noon local time.
+ * Avoids timezone issues that occur with new Date("YYYY-MM-DD") which parses as UTC.
+ * @param {string|Date} exp - Expiration date string or Date object
+ * @returns {Date} Date object at noon local time
+ */
+function parseIsoDate_(exp) {
+  if (exp instanceof Date) {
+    return new Date(exp.getFullYear(), exp.getMonth(), exp.getDate(), 12, 0, 0);
+  }
+
+  const s = String(exp || "").trim();
+
+  // ISO format: YYYY-MM-DD
+  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    return new Date(
+      parseInt(isoMatch[1], 10),
+      parseInt(isoMatch[2], 10) - 1,
+      parseInt(isoMatch[3], 10),
+      12, 0, 0
+    );
+  }
+
+  // M/D/YYYY format
+  const mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdyMatch) {
+    return new Date(
+      parseInt(mdyMatch[3], 10),
+      parseInt(mdyMatch[1], 10) - 1,
+      parseInt(mdyMatch[2], 10),
+      12, 0, 0
+    );
+  }
+
+  // Fallback: create Date and extract components to avoid timezone shift
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0);
+  }
+
+  throw new Error("Invalid date format: " + exp);
+}

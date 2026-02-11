@@ -47,10 +47,6 @@ function PlotPortfolioValueByPrice() {
   SpreadFinder.PlotPortfolioValueByPrice();
 }
 
-function importEtradePortfolio() {
-  SpreadFinder.importEtradePortfolio();
-}
-
 function importLatestTransactions() {
   SpreadFinder.importLatestTransactions();
 }
@@ -77,10 +73,6 @@ function showSpreadFinderGraphs() {
 
 function showUploadOptionPricesDialog() {
   SpreadFinder.showUploadOptionPricesDialog();
-}
-
-function showUploadTransactionsDialog() {
-  SpreadFinder.showUploadTransactionsDialog();
 }
 
 function showUploadRebuildDialog() {
@@ -113,10 +105,6 @@ function uploadOptionPrices(files) {
 
 function uploadAndRebuildPortfolio(portfolio, transactions) {
   return SpreadFinder.uploadAndRebuildPortfolio(portfolio, transactions);
-}
-
-function uploadAndImportTransactions(transactions) {
-  return SpreadFinder.uploadAndImportTransactions(transactions);
 }
 
 // ============================================================

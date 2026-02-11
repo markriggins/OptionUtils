@@ -136,10 +136,11 @@ function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
 
   function parseExpirationToDate(exp) {
 
-    // Already a Date → use it
+    // Already a Date → use it (but create a copy at noon to avoid timezone issues)
     if (exp instanceof Date) {
       if (isNaN(exp.getTime())) throw new Error("Invalid Date expiration");
-      return exp;
+      // Create new date at noon local time to avoid timezone shifts
+      return new Date(exp.getFullYear(), exp.getMonth(), exp.getDate(), 12, 0, 0);
     }
 
     let s = String(exp).trim();
@@ -147,7 +148,25 @@ function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
     // Normalize "'28" → "2028"
     s = s.replace(/'(\d{2})\b/, "20$1");
 
-    // Let JS parse it
+    // Try to parse ISO format YYYY-MM-DD directly (avoids UTC timezone issues)
+    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) {
+      const year = parseInt(isoMatch[1], 10);
+      const month = parseInt(isoMatch[2], 10) - 1; // 0-indexed
+      const day = parseInt(isoMatch[3], 10);
+      return new Date(year, month, day, 12, 0, 0);
+    }
+
+    // Try M/D/YYYY format
+    const mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (mdyMatch) {
+      const month = parseInt(mdyMatch[1], 10) - 1; // 0-indexed
+      const day = parseInt(mdyMatch[2], 10);
+      const year = parseInt(mdyMatch[3], 10);
+      return new Date(year, month, day, 12, 0, 0);
+    }
+
+    // Fallback: Let JS parse it
     let d = new Date(s);
     if (isNaN(d.getTime())) {
       throw new Error("Invalid expiration format: " + exp);
@@ -159,7 +178,7 @@ function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
     }
 
     // Normalize time (avoid DST edge cases)
-    d.setHours(12, 0, 0, 0);
+    d = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0);
 
     return d;
   }

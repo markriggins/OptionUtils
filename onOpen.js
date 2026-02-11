@@ -9,17 +9,14 @@ function onOpen() {
   const ui = SpreadsheetApp.getUi();
 
   const spreadFinderMenu = ui.createMenu('SpreadFinder')
-    .addItem('Upload Option Prices...', 'showUploadOptionPricesDialog')
+    .addItem('Upload & Refresh...', 'showUploadOptionPricesDialog')
     .addItem('Refresh from Drive', 'refreshOptionPrices')
     .addSeparator()
     .addItem('Run SpreadFinder', 'runSpreadFinder')
     .addItem('View Graphs', 'showSpreadFinderGraphs');
 
   const portfolioMenu = ui.createMenu('Portfolio')
-    .addItem('Upload & Import Transactions...', 'showUploadTransactionsDialog')
-    .addItem('Upload & Rebuild Portfolio...', 'showUploadRebuildDialog')
-    .addSeparator()
-    .addItem('Import Latest Transactions from Drive', 'importLatestTransactions')
+    .addItem('Upload & Rebuild...', 'showUploadRebuildDialog')
     .addItem('Rebuild from Drive', 'rebuildPortfolio')
     .addSeparator()
     .addItem('Load Sample Portfolio', 'loadSamplePortfolio')
