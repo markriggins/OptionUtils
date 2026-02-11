@@ -23,6 +23,7 @@ function parseSpreadStrategy_(raw) {
   if (/^(stock|stocks|share|shares)$/.test(t)) return "stock";
   if (/^(bcs|bull[\s.\-]?call[\s.\-]?spread(s)?)$/.test(t)) return "bull-call-spread";
   if (/^(bps|bull[\s.\-]?put[\s.\-]?spread(s)?)$/.test(t)) return "bull-put-spread";
+  if (/^(cash|money|usd|\$)$/.test(t)) return "cash";
 
   return null;
 }
@@ -474,6 +475,7 @@ function detectPositionType_(legs) {
 
   if (legs.length === 1) {
     const leg = legs[0];
+    if (leg.type === "Cash") return "cash";
     if (!leg.type || leg.type === "Stock" || !Number.isFinite(leg.strike)) return "stock";
     const direction = leg.qty >= 0 ? "long" : "short";
     if (leg.type === "Call") return direction + "-call";
@@ -523,7 +525,7 @@ function detectPositionType_(legs) {
  * @returns {{ shares: Array<{qty, basis}>, bullCallSpreads: Array, bullPutSpreads: Array, bearCallSpreads: Array }}
  */
 function parsePositionsForSymbol_(rows, symbol) {
-  const result = { shares: [], bullCallSpreads: [], bullPutSpreads: [], bearCallSpreads: [] };
+  const result = { shares: [], bullCallSpreads: [], bullPutSpreads: [], bearCallSpreads: [], cash: 0 };
 
   if (!rows || rows.length < 2) return result;
 
@@ -595,10 +597,16 @@ function parsePositionsForSymbol_(rows, symbol) {
     if (!legType && !Number.isFinite(strike)) {
       legType = "Stock";
     }
-    // Check if strategy column says Stock
+    // Check if strategy column says Stock or Cash
     if (!legType && idxStrat >= 0) {
       const strat = parseSpreadStrategy_(row[idxStrat]);
       if (strat === "stock") legType = "Stock";
+      if (strat === "cash") legType = "Cash";
+    }
+    // Also check type column for Cash
+    if (!legType && idxType >= 0) {
+      const typeStr = String(row[idxType] ?? "").trim().toLowerCase();
+      if (typeStr === "cash" || typeStr === "$" || typeStr === "usd") legType = "Cash";
     }
 
     const leg = { qty, price, strike, type: legType };
@@ -617,6 +625,11 @@ function parsePositionsForSymbol_(rows, symbol) {
     if (posType === "stock") {
       const leg = legs[0];
       result.shares.push({ qty: leg.qty, basis: leg.price });
+    } else if (posType === "cash") {
+      // Cash: just add the amount (qty * price or just price if qty=1)
+      const leg = legs[0];
+      const amount = leg.qty * leg.price;
+      result.cash += amount;
     } else if (posType === "bull-call-spread") {
       const longLeg = legs.find(l => l.qty > 0);
       const shortLeg = legs.find(l => l.qty < 0);
@@ -750,6 +763,7 @@ function strategyAbbrev_(type) {
     case "bull-put-spread": return "BPS";
     case "iron-condor": return "IC";
     case "stock": return "Stock";
+    case "cash": return "Cash";
     default: return "?";
   }
 }

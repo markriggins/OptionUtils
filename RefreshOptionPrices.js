@@ -391,9 +391,11 @@ function uploadOptionPrices(files) {
   }
 
   // Save each file with unique names (preserves history)
+  // Strip browser disambiguators like "(1)" from filenames
   const savedFiles = [];
   for (const file of files) {
-    const savedName = saveFileWithUniqueName_(folder, file.name, file.content);
+    const cleanName = stripBrowserDisambiguator_(file.name);
+    const savedName = saveFileWithUniqueName_(folder, cleanName, file.content);
     savedFiles.push(savedName);
   }
 
@@ -403,37 +405,5 @@ function uploadOptionPrices(files) {
   return `Uploaded ${savedFiles.length} file(s) and refreshed option prices.`;
 }
 
-/**
- * Saves a file to a folder with a unique name.
- * If a file with the same name exists, appends a timestamp to make it unique.
- * Returns the actual filename used.
- */
-function saveFileWithUniqueName_(folder, fileName, content) {
-  // Check if file with same name exists
-  const existing = folder.getFilesByName(fileName);
-  let finalName = fileName;
 
-  if (existing.hasNext()) {
-    // File exists - create unique name by inserting timestamp before extension
-    const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd-HHmmss");
-    const lastDot = fileName.lastIndexOf(".");
-    if (lastDot > 0) {
-      finalName = fileName.substring(0, lastDot) + "-" + timestamp + fileName.substring(lastDot);
-    } else {
-      finalName = fileName + "-" + timestamp;
-    }
-  }
-
-  folder.createFile(finalName, content, MimeType.CSV);
-  return finalName;
-}
-
-/**
- * Gets or creates a subfolder.
- */
-function getOrCreateFolder_(parent, name) {
-  const it = parent.getFoldersByName(name);
-  if (it.hasNext()) return it.next();
-  return parent.createFolder(name);
-}
 

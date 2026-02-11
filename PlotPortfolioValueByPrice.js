@@ -127,6 +127,8 @@ function computePortfolioGraphData_(ss, symbol) {
   let bullPutSpreads = [];
   let bearCallSpreads = [];
 
+  let cash = 0;
+
   const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
   if (legsRange) {
     const legsRows = legsRange.getValues();
@@ -135,9 +137,38 @@ function computePortfolioGraphData_(ss, symbol) {
     bullCallSpreads = parsed.bullCallSpreads;
     bullPutSpreads = parsed.bullPutSpreads;
     bearCallSpreads = parsed.bearCallSpreads;
+    cash = parsed.cash || 0;
   }
 
   const allSpreads = [...bullCallSpreads, ...bullPutSpreads, ...bearCallSpreads];
+
+  // Calculate DTE (days to expiration) for each spread
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  for (const sp of allSpreads) {
+    if (sp.expiration) {
+      let expDate = sp.expiration;
+      if (!(expDate instanceof Date)) {
+        expDate = new Date(sp.expiration);
+      }
+      if (!isNaN(expDate.getTime())) {
+        expDate.setHours(0, 0, 0, 0);
+        sp.dte = Math.max(1, Math.round((expDate - today) / (1000 * 60 * 60 * 24)));
+      }
+    }
+    if (!sp.dte) sp.dte = 365; // Default fallback
+    Logger.log(`Spread ${sp.label}: expiration=${sp.expiration}, dte=${sp.dte}`);
+  }
+
+  // Pre-fetch actual option prices for all spreads (for "current" mode)
+  // Each spread gets { longBid, longMid, longAsk, shortBid, shortMid, shortAsk }
+  const spreadQuotes = allSpreads.map(sp => {
+    const quotes = fetchSpreadQuotes_(symbol, sp.expiration, sp.kLong, sp.kShort, sp.flavor === "CALL" ? "Call" : "Put");
+    // Log for debugging
+    const spreadValue = quotes.longMid != null && quotes.shortMid != null ? quotes.longMid - quotes.shortMid : null;
+    Logger.log(`Spread ${sp.label}: longMid=${quotes.longMid}, shortMid=${quotes.shortMid}, spreadValue=${spreadValue}, debit=${sp.debit}`);
+    return quotes;
+  });
 
   // Compute smart price range
   const smart = computeSmartDefaults_(ss, symbol);
@@ -148,6 +179,14 @@ function computePortfolioGraphData_(ss, symbol) {
   // Compute denominators for ROI
   const sharesCost = shares.reduce((sum, sh) => sum + sh.qty * sh.basis, 0);
   const totalShares = shares.reduce((sum, sh) => sum + sh.qty, 0);
+
+  // Summary logging for debugging
+  Logger.log(`=== Portfolio Summary for ${symbol} ===`);
+  Logger.log(`Shares: ${totalShares} shares, cost basis = $${sharesCost.toFixed(2)}`);
+  Logger.log(`Bull Call Spreads: ${bullCallSpreads.length} positions`);
+  Logger.log(`Bull Put Spreads: ${bullPutSpreads.length} positions`);
+  Logger.log(`Bear Call Spreads: ${bearCallSpreads.length} positions`);
+  Logger.log(`Cash: $${cash.toFixed(2)}`);
 
   const spreadInvestments = allSpreads.map((sp) => {
     if (sp.flavor === "CALL") {
@@ -185,12 +224,19 @@ function computePortfolioGraphData_(ss, symbol) {
     const tempSheet = ss.insertSheet("__temp_price__");
     tempSheet.getRange("A1").setFormula(`=GOOGLEFINANCE("${symbol}")`);
     SpreadsheetApp.flush();
-    Utilities.sleep(500); // Give GOOGLEFINANCE time to evaluate
-    currentPrice = tempSheet.getRange("A1").getValue();
-    ss.deleteSheet(tempSheet);
-    if (typeof currentPrice !== "number" || !isFinite(currentPrice)) {
-      currentPrice = null;
+
+    // Try up to 3 times with increasing wait, as GOOGLEFINANCE can be slow
+    for (let attempt = 0; attempt < 3; attempt++) {
+      Utilities.sleep(500 + attempt * 500); // 500ms, 1000ms, 1500ms
+      const val = tempSheet.getRange("A1").getValue();
+      if (typeof val === "number" && isFinite(val) && val > 0) {
+        currentPrice = val;
+        break;
+      }
     }
+
+    ss.deleteSheet(tempSheet);
+    Logger.log("GOOGLEFINANCE returned currentPrice: " + currentPrice + " for " + symbol);
   } catch (e) {
     Logger.log("Could not get current price: " + e);
     // Clean up temp sheet if it exists
@@ -246,23 +292,33 @@ function computePortfolioGraphData_(ss, symbol) {
     const individualExp = [];
     const individualCurrent = [];
 
-    for (const sp of allSpreads) {
+    for (let spIdx = 0; spIdx < allSpreads.length; spIdx++) {
+      const sp = allSpreads[spIdx];
       const width = sp.kShort - sp.kLong;
       let valueExp = 0;
       let valueCurrent = 0;
+
+      // Get actual current value at current stock price (from quotes fetched earlier)
+      const quotes = spreadQuotes[spIdx];
+      const currentSpreadValue = quotes && quotes.longMid != null && quotes.shortMid != null
+        ? quotes.longMid - quotes.shortMid
+        : sp.debit; // Fall back to debit paid
 
       if (sp.flavor === "CALL") {
         // Bull call spread
         const intrinsic = clamp_(S - sp.kLong, 0, width);
         valueExp = intrinsic * 100 * sp.qty;
-        // Current: add time value estimate (simplified: linear decay based on moneyness)
-        const timeValue = estimateTimeValue_(S, sp.kLong, sp.kShort, sp.dte || 365, width);
-        valueCurrent = (intrinsic + timeValue) * 100 * sp.qty;
+        // Current: estimate value at stock price S, anchored at actual current value
+        valueCurrent = estimateSpreadValueAtPrice_(S, sp.kLong, sp.kShort, currentSpreadValue, sp.dte || 365, currentPrice) * 100 * sp.qty;
       } else if (sp.flavor === "PUT") {
-        // Bull put spread
+        // Bull put spread (credit spread)
         const loss = clamp_(sp.kShort - S, 0, width);
         valueExp = (width - loss) * 100 * sp.qty;
-        valueCurrent = valueExp; // Simplified for puts
+        // For puts, estimate similarly
+        const putCurrentValue = quotes && quotes.longMid != null && quotes.shortMid != null
+          ? width - (quotes.shortMid - quotes.longMid)
+          : width + sp.debit; // debit is negative for credit spreads
+        valueCurrent = estimatePutSpreadValueAtPrice_(S, sp.kLong, sp.kShort, putCurrentValue, sp.dte || 365, currentPrice) * 100 * sp.qty;
       } else {
         // Bear call spread
         const loss = clamp_(S - sp.kLong, 0, width);
@@ -301,7 +357,7 @@ function computePortfolioGraphData_(ss, symbol) {
       strategyRoisCurrent[g].push(inv > 0 ? roundTo_((sumCurrent - inv) / inv, 4) : 0);
     }
 
-    // Total values
+    // Total values (excluding cash - cash doesn't change with price)
     const optionsExp = individualExp.reduce((sum, v) => sum + v, 0);
     const optionsCurrent = individualCurrent.reduce((sum, v) => sum + v, 0);
     totalValues.push(roundTo_(sharesValue + optionsExp, 2));
@@ -315,6 +371,7 @@ function computePortfolioGraphData_(ss, symbol) {
     sharesRoi: sharesRoi,
     totalValues: totalValues,
     totalValuesCurrent: totalValuesCurrent,
+    cash: cash,
     strategyLabels: strategyLabels,
     strategyValuesExp: strategyValuesExp,
     strategyValuesCurrent: strategyValuesCurrent,
@@ -335,25 +392,216 @@ function computePortfolioGraphData_(ss, symbol) {
 }
 
 /**
- * Estimates time value for a call spread (simplified model).
- * Returns per-contract time value estimate.
+ * Fetches actual option quotes for a spread from OptionPricesUploaded.
+ * Returns { longBid, longMid, longAsk, shortBid, shortMid, shortAsk } or null values if not found.
  */
-function estimateTimeValue_(S, kLong, kShort, dte, width) {
-  // Simplified time value: decays linearly with time, higher when near the money
-  const midStrike = (kLong + kShort) / 2;
-  const moneyness = S / midStrike;
+function fetchSpreadQuotes_(symbol, expiration, kLong, kShort, optionType) {
+  const result = {
+    longBid: null, longMid: null, longAsk: null,
+    shortBid: null, shortMid: null, shortAsk: null
+  };
 
-  // Time factor: sqrt(dte/365) gives time decay curve
-  const timeFactor = Math.sqrt(Math.max(dte, 1) / 365);
+  try {
+    // Format expiration for lookup
+    const expStr = formatExpirationForLookup_(expiration);
 
-  // ATM gets max time value, decreases as you move away
-  const atmFactor = Math.exp(-Math.pow(moneyness - 1, 2) * 4);
+    // Look up long leg
+    const longRes = XLookupByKeys(
+      [symbol, expStr, kLong, optionType],
+      ["symbol", "expiration", "strike", "type"],
+      ["bid", "mid", "ask"],
+      "OptionPricesUploaded"
+    );
+    if (longRes && longRes[0]) {
+      result.longBid = parseFloat(longRes[0][0]) || null;
+      result.longMid = parseFloat(longRes[0][1]) || null;
+      result.longAsk = parseFloat(longRes[0][2]) || null;
+    }
 
-  // Max time value is about 20% of width for ATM with 1 year to expiry
-  const maxTimeValue = width * 0.2;
+    // Look up short leg
+    const shortRes = XLookupByKeys(
+      [symbol, expStr, kShort, optionType],
+      ["symbol", "expiration", "strike", "type"],
+      ["bid", "mid", "ask"],
+      "OptionPricesUploaded"
+    );
+    if (shortRes && shortRes[0]) {
+      result.shortBid = parseFloat(shortRes[0][0]) || null;
+      result.shortMid = parseFloat(shortRes[0][1]) || null;
+      result.shortAsk = parseFloat(shortRes[0][2]) || null;
+    }
+  } catch (e) {
+    Logger.log("fetchSpreadQuotes_ error: " + e.message);
+  }
 
-  return maxTimeValue * timeFactor * atmFactor;
+  return result;
 }
+
+/**
+ * Formats expiration for XLookupByKeys lookup.
+ */
+function formatExpirationForLookup_(exp) {
+  if (!exp) return "";
+  if (exp instanceof Date) {
+    return Utilities.formatDate(exp, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  const s = String(exp).trim();
+  // If already yyyy-MM-dd format, return as is
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // Try to parse MM/DD/YYYY
+  const match = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) {
+    const m = match[1].padStart(2, '0');
+    const d = match[2].padStart(2, '0');
+    return `${match[3]}-${m}-${d}`;
+  }
+  return s;
+}
+
+
+/**
+ * Estimates bull call spread value at a given stock price S using a
+ * calibrated Black-Scholes model.
+ *
+ * @param {number} S - Stock price to evaluate
+ * @param {number} kLong - Long call strike
+ * @param {number} kShort - Short call strike
+ * @param {number} currentValue - Current spread value (per share) at current stock price
+ * @param {number} dte - Days to expiration
+ * @param {number} currentStockPrice - Actual current stock price
+ * @returns {number} Estimated spread value per share at price S
+ */
+function estimateSpreadValueAtPrice_(S, kLong, kShort, currentValue, dte, currentStockPrice) {
+    const r = 0.04; // Assumed risk-free rate
+    const t = Math.max(dte, 1) / 365;
+
+    // Standard Abramowitz & Stegun 5-term CND approximation
+    function cnd(x) {
+        const neg = (x < 0);
+        const z = Math.abs(x);
+        const k = 1.0 / (1.0 + 0.2316419 * z);
+        const pdf = Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI);
+        let v = 1.0 - pdf * (0.319381530 * k - 0.356563782 * Math.pow(k, 2) + 1.781477937 * Math.pow(k, 3) - 1.821255978 * Math.pow(k, 4) + 1.330274429 * Math.pow(k, 5));
+        return neg ? 1.0 - v : v;
+    }
+
+    function bsCall(stock, strike, time, rate, sigma) {
+        if (time <= 0) return Math.max(0, stock - strike);
+        if (sigma <= 0.0001) return Math.max(0, stock - strike * Math.exp(-rate * time));
+        const d1 = (Math.log(stock / strike) + (rate + (sigma * sigma) / 2) * time) / (sigma * Math.sqrt(time));
+        const d2 = d1 - sigma * Math.sqrt(time);
+        return stock * cnd(d1) - strike * Math.exp(-rate * time) * cnd(d2);
+    }
+
+    const getSpreadPrice = (price, sigma) => bsCall(price, kLong, t, r, sigma) - bsCall(price, kShort, t, r, sigma);
+
+    // Solve for Implied Volatility (sigma) using reference price/value
+    let sigma = 0.5;
+    for (let i = 0; i < 40; i++) {
+        let p = getSpreadPrice(currentStockPrice, sigma);
+        let diff = p - currentValue;
+        if (Math.abs(diff) < 0.00001) break;
+
+        let vega = (getSpreadPrice(currentStockPrice, sigma + 0.01) - p) / 0.01;
+        sigma -= diff / (vega || 0.01);
+        if (sigma <= 0) sigma = 0.001;
+    }
+
+    return getSpreadPrice(S, sigma);
+}
+
+/**
+ * Data-driven test runner for the spread estimation logic.
+ */
+function testEstimateSpreadValueAtPrice() {
+    const refS = 424.00;
+    const refP = 23.60;
+    const minK = 500;
+    const maxK = 600;
+    const days = 1040;
+
+    const testTable = [
+        { label: "Calibration",   s: 424.00,  expected: 23.60 },
+        { label: "Moderate Rise",  s: 500.00,  expected: 28.87 },
+        { label: "Strike Breach",  s: 600.00,  expected: 35.19 },
+        { label: "Deep ITM",       s: 1200.00, expected: 60.23 },
+        { label: "Extreme ITM",    s: 2000.00, expected: 74.76 },
+        { label: "Downside",       s: 300.00,  expected: 14.38 }
+    ];
+
+    console.log("Scenario".padEnd(18) + " | " + "Target S".padEnd(10) + " | " + "Actual".padEnd(10) + " | " + "Expected".padEnd(10) + " | " + "Result");
+    console.log("-".repeat(70));
+
+    testTable.forEach(row => {
+        // Parameter order: S, kLong, kShort, currentValue, dte, currentStockPrice
+        const actual = estimateSpreadValueAtPrice_(row.s, minK, maxK, refP, days, refS);
+        const diff = Math.abs(actual - row.expected);
+        const passed = diff < 0.15;
+
+        console.log(
+            row.label.padEnd(18) + " | " +
+            row.s.toFixed(2).padEnd(10) + " | " +
+            actual.toFixed(2).padEnd(10) + " | " +
+            row.expected.toFixed(2).padEnd(10) + " | " +
+            (passed ? "PASS ✅" : "FAIL ❌")
+        );
+    });
+}
+
+
+/**
+ * Estimates bull put spread value at a given stock price S.
+ * Bull put spread (credit spread): Sell higher strike put, buy lower strike put.
+ * Profits when stock stays above short strike.
+ *
+ * @param {number} S - Stock price to evaluate
+ * @param {number} kLong - Long put strike (lower)
+ * @param {number} kShort - Short put strike (higher)
+ * @param {number} currentValue - Current spread value at current stock price
+ * @param {number} dte - Days to expiration
+ * @param {number} currentStockPrice - Actual current stock price
+ * @returns {number} Estimated spread value per share at price S
+ */
+function estimatePutSpreadValueAtPrice_(S, kLong, kShort, currentValue, dte, currentStockPrice) {
+  const width = kShort - kLong;
+
+  // At stock price 0, loss is max (value = 0)
+  if (S <= 0) return 0;
+
+  // Intrinsic value: what we keep of the width
+  const loss = clamp_(kShort - S, 0, width);
+  const intrinsic = width - loss;
+
+  // If no valid current data, just return intrinsic
+  if (!currentValue || currentValue <= 0 || !currentStockPrice || currentStockPrice <= 0) {
+    return intrinsic;
+  }
+
+  // Above short strike: full profit (value = width)
+  if (S >= kShort) return width;
+
+  // At current stock price: return actual current value (anchor point)
+  if (Math.abs(S - currentStockPrice) < 1) {
+    return currentValue;
+  }
+
+  // Compute time value from actual market prices
+  const currentLoss = clamp_(kShort - currentStockPrice, 0, width);
+  const currentIntrinsic = width - currentLoss;
+  const timeValue = Math.max(0, currentValue - currentIntrinsic);
+
+  if (S <= kLong) {
+    // Below long strike: max loss on intrinsic, but some time value remains
+    const otmFactor = S / kLong;
+    return timeValue * otmFactor;
+  } else {
+    // Between strikes: intrinsic + decaying time value
+    const progress = (S - kLong) / width;
+    const adjustedTimeValue = timeValue * (1 - progress);
+    return intrinsic + adjustedTimeValue;
+  }
+}
+
 
 /* =========================================================
    onEdit trigger - rebuild when config edited

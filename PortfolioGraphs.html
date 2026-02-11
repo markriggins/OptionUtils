@@ -17,6 +17,15 @@
         .chart-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; margin-bottom: 5px; padding-bottom: 5px; }
         .chart-title { font-weight: bold; color: #3c4043; border-bottom: 1px dashed #1a73e8; cursor: help; position: relative; }
         .chart-div { width: 100%; height: 400px; position: relative; }
+        .current-price-line {
+            position: absolute; top: 0; bottom: 0; width: 2px;
+            background: rgba(220, 53, 69, 0.7); pointer-events: none; z-index: 10;
+        }
+        .current-price-label {
+            position: absolute; top: 5px; transform: translateX(-50%);
+            background: #dc3545; color: white; padding: 2px 6px; border-radius: 3px;
+            font-size: 11px; font-weight: bold; white-space: nowrap; z-index: 11;
+        }
         .chart-spinner {
           position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
           display: flex; flex-direction: column; align-items: center; gap: 10px; color: #5f6368;
@@ -101,8 +110,8 @@
 
             <h3>Value Mode Toggle</h3>
             <ul>
-                <li><strong>At Expiration</strong> — Shows option values at expiration (intrinsic value only). This is the final P/L if you hold to expiration.</li>
-                <li><strong>Current</strong> — Shows estimated current option values based on time remaining and volatility. More relevant for early exit decisions.</li>
+                <li><strong>At Expiration</strong> — Shows option values at expiration (intrinsic value only). This is the exact P/L if you hold to expiration.</li>
+                <li><strong>Current</strong> — <em>Estimated</em> market value of your positions today if the stock were to move to that price point. This uses a <strong>calibrated Black-Scholes model</strong> that infers current market implied volatility to account for the significant time value locked in long LEAPS.</li>
             </ul>
 
             <h3>Chart 1: Portfolio Value ($)</h3>
@@ -175,6 +184,7 @@
         <div class="metric-box" data-help="Cost basis for shares"><span class="label">Share Cost</span><span id="sum-share-cost" class="value">—</span></div>
         <div class="metric-box" data-help="Number of spread positions"><span class="label">Spreads</span><span id="sum-spreads" class="value">—</span></div>
         <div class="metric-box" data-help="Total debit paid for spreads"><span class="label">Spread Investment</span><span id="sum-spread-inv" class="value">—</span></div>
+        <div class="metric-box" data-help="Cash holdings"><span class="label">Cash</span><span id="sum-cash" class="value">—</span></div>
         <div class="metric-box" data-help="Current stock price"><span class="label">Current Price</span><span id="sum-price" class="value">—</span></div>
         <div class="metric-box" data-help="Total portfolio value at current price"><span class="label">Current Value</span><span id="sum-value" class="value">—</span></div>
     </div>
@@ -262,6 +272,7 @@
         document.getElementById('sum-share-cost').innerText = '$' + formatNumber(data.sharesCost || 0);
         document.getElementById('sum-spreads').innerText = data.spreadCount || 0;
         document.getElementById('sum-spread-inv').innerText = '$' + formatNumber(data.spreadInvestment || 0);
+        document.getElementById('sum-cash').innerText = data.cash ? ('$' + formatNumber(data.cash)) : '$0';
         document.getElementById('sum-price').innerText = data.currentPrice ? ('$' + data.currentPrice.toFixed(2)) : '—';
 
         // Calculate current value from data
@@ -283,6 +294,45 @@
             .replace('Bull Call Spreads', 'BCS')
             .replace('Bull Put Spreads', 'BPS')
             .replace('Bear Call Spreads', 'Bear CS');
+    }
+
+    // Draw vertical line at current price on a chart
+    function drawCurrentPriceLine(chartDivId, chart, currentPrice, symbol) {
+        console.log('drawCurrentPriceLine called:', chartDivId, 'price:', currentPrice, 'symbol:', symbol);
+        if (!currentPrice || !chart) {
+            console.log('  -> Early return: currentPrice=' + currentPrice + ', chart=' + (chart ? 'exists' : 'null'));
+            return;
+        }
+
+        // Remove existing line
+        var container = document.getElementById(chartDivId);
+        var existing = container.querySelectorAll('.current-price-line, .current-price-label');
+        existing.forEach(function(el) { el.remove(); });
+
+        try {
+            var cli = chart.getChartLayoutInterface();
+            var chartArea = cli.getChartAreaBoundingBox();
+            var xPos = cli.getXLocation(currentPrice);
+
+            // Only draw if within chart area
+            if (xPos >= chartArea.left && xPos <= chartArea.left + chartArea.width) {
+                var line = document.createElement('div');
+                line.className = 'current-price-line';
+                line.style.left = xPos + 'px';
+                line.style.top = chartArea.top + 'px';
+                line.style.height = chartArea.height + 'px';
+                container.appendChild(line);
+
+                var label = document.createElement('div');
+                label.className = 'current-price-label';
+                label.style.left = xPos + 'px';
+                label.style.top = (chartArea.top - 2) + 'px';
+                label.innerText = '$' + currentPrice.toFixed(0);
+                container.appendChild(label);
+            }
+        } catch (e) {
+            console.log('Could not draw price line:', e);
+        }
     }
 
     function drawCharts() {
@@ -308,6 +358,9 @@
         }
 
         charts.value = charts.value || new google.visualization.LineChart(document.getElementById('chart_value'));
+        google.visualization.events.addListener(charts.value, 'ready', function() {
+            drawCurrentPriceLine('chart_value', charts.value, d.currentPrice, d.symbol);
+        });
         charts.value.draw(dtValue, {
             title: '',
             legend: { position: 'right' },
@@ -333,6 +386,9 @@
         }
 
         charts.roi = charts.roi || new google.visualization.LineChart(document.getElementById('chart_roi'));
+        google.visualization.events.addListener(charts.roi, 'ready', function() {
+            drawCurrentPriceLine('chart_roi', charts.roi, d.currentPrice, d.symbol);
+        });
         charts.roi.draw(dtRoi, {
             title: '',
             legend: { position: 'right' },
@@ -358,6 +414,9 @@
             }
 
             charts.spreads = charts.spreads || new google.visualization.LineChart(document.getElementById('chart_spreads'));
+            google.visualization.events.addListener(charts.spreads, 'ready', function() {
+                drawCurrentPriceLine('chart_spreads', charts.spreads, d.currentPrice, d.symbol);
+            });
             charts.spreads.draw(dtSpreads, {
                 title: '',
                 legend: { position: 'right' },
@@ -382,6 +441,9 @@
             }
 
             charts.spreadsRoi = charts.spreadsRoi || new google.visualization.LineChart(document.getElementById('chart_spreads_roi'));
+            google.visualization.events.addListener(charts.spreadsRoi, 'ready', function() {
+                drawCurrentPriceLine('chart_spreads_roi', charts.spreadsRoi, d.currentPrice, d.symbol);
+            });
             charts.spreadsRoi.draw(dtSpreadRoi, {
                 title: '',
                 legend: { position: 'right' },
