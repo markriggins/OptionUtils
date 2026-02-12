@@ -577,7 +577,17 @@ function detectPositionType_(legs) {
  * @returns {{ shares: Array<{qty, basis}>, bullCallSpreads: Array, bullPutSpreads: Array, bearCallSpreads: Array }}
  */
 function parsePositionsForSymbol_(rows, symbol) {
-  const result = { shares: [], bullCallSpreads: [], bullPutSpreads: [], bearCallSpreads: [], cash: 0 };
+  const result = {
+    shares: [],
+    bullCallSpreads: [],
+    bullPutSpreads: [],
+    bearCallSpreads: [],
+    longCalls: [],
+    shortCalls: [],
+    longPuts: [],
+    shortPuts: [],
+    cash: 0
+  };
 
   if (!rows || rows.length < 2) return result;
 
@@ -774,8 +784,40 @@ function parsePositionsForSymbol_(rows, symbol) {
           symbol: lastSym,
         });
       }
+    } else if (posType === "long-call" || posType === "short-call" ||
+               posType === "long-put" || posType === "short-put") {
+      // Single-leg option position
+      const leg = legs[0];
+      if (!leg || !Number.isFinite(leg.strike)) continue;
+
+      let label = `${leg.strike}`;
+      if (leg.expiration) {
+        const expLabel = formatExpirationLabel_(leg.expiration);
+        if (expLabel) label = `${expLabel} ${label}`;
+      }
+
+      const optionPos = {
+        qty: Math.abs(leg.qty),
+        strike: leg.strike,
+        price: leg.price,
+        type: leg.type,
+        label,
+        expiration: leg.expiration,
+        symbol: lastSym,
+        isLong: leg.qty > 0,
+      };
+
+      if (posType === "long-call") {
+        result.longCalls.push(optionPos);
+      } else if (posType === "short-call") {
+        result.shortCalls.push(optionPos);
+      } else if (posType === "long-put") {
+        result.longPuts.push(optionPos);
+      } else if (posType === "short-put") {
+        result.shortPuts.push(optionPos);
+      }
     }
-    // null/unknown types are silently skipped
+    // Other unknown types are silently skipped
   }
 
   return result;

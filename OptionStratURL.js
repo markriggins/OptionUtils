@@ -13,6 +13,54 @@
  *******************************************************/
 
 
+/**
+ * Builds an OptionStrat URL for a single-leg option position.
+ *
+ * @param {string} symbol - Ticker symbol (e.g., "TSLA")
+ * @param {number} strike - Strike price
+ * @param {string} optionType - "Call" or "Put"
+ * @param {Date|string} expiration - Expiration date
+ * @param {boolean} isLong - true for long position, false for short
+ * @returns {string} OptionStrat URL
+ */
+function buildSingleLegOptionStratUrl_(symbol, strike, optionType, expiration, isLong) {
+  if (!symbol || !Number.isFinite(strike) || !optionType || !expiration) {
+    return null;
+  }
+
+  // Determine strategy name
+  const strategyMap = {
+    "Call-true": "long-call",
+    "Call-false": "short-call",
+    "Put-true": "long-put",
+    "Put-false": "short-put"
+  };
+  const strategy = strategyMap[`${optionType}-${isLong}`];
+  if (!strategy) return null;
+
+  // Format date code (YYMMDD)
+  let d = expiration;
+  if (!(d instanceof Date)) {
+    // Try to parse ISO format directly
+    const isoMatch = String(d).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) {
+      d = new Date(parseInt(isoMatch[1], 10), parseInt(isoMatch[2], 10) - 1, parseInt(isoMatch[3], 10), 12, 0, 0);
+    } else {
+      d = new Date(d);
+    }
+  }
+  if (isNaN(d.getTime())) return null;
+
+  const dateCode = String(d.getFullYear() % 100).padStart(2, "0") +
+                   String(d.getMonth() + 1).padStart(2, "0") +
+                   String(d.getDate()).padStart(2, "0");
+
+  const typeChar = optionType === "Call" ? "C" : "P";
+  const legString = `.${symbol.toUpperCase()}${dateCode}${typeChar}${strike}`;
+
+  return `https://optionstrat.com/build/${strategy}/${symbol.toUpperCase()}/${legString}`;
+}
+
 function testbuildOptionStratUrl () {
 
   buildOptionStratUrl("350/450","TSLA", "bull-call-spread", new Date(2028, 5, 16));

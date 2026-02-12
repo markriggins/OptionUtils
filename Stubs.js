@@ -192,6 +192,14 @@ function recommendIronCondorCloseDebit(symbol, expiration, putLower, putUpper, c
 }
 
 /**
+ * Recommends opening price for a single option leg.
+ * @customfunction
+ */
+function recommendOpen(symbol, expiration, strike, type, qty, avgMinutesToExecute) {
+  return SpreadFinder.recommendOpen(symbol, expiration, strike, type, qty, avgMinutesToExecute);
+}
+
+/**
  * Recommends closing price for a single option leg.
  * @customfunction
  */

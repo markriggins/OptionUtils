@@ -411,6 +411,48 @@ function recommendIronCondorCloseDebit(
 }
 
 /**
+ * Recommends price to open a single option leg.
+ *
+ * @param {string|Range} symbol - Ticker (e.g. "TSLA"), or a range like $A$1:$A3 to find first non-blank looking upward
+ * @param {Date|string} expiration - Expiration date
+ * @param {number} strike - Strike price
+ * @param {string} type - "Call" or "Put"
+ * @param {number} qty - Position quantity (positive=long/buy, negative=short/sell)
+ * @param {number} avgMinutesToExecute - Patience: 0=aggressive, 60=patient
+ * @param {Array} [_labels] - Optional; ignored, for spreadsheet readability
+ * @return {number} Always positive premium price to open the leg, or error string
+ * @customfunction
+ */
+function recommendOpen(symbol, expiration, strike, type, qty, avgMinutesToExecute, _labels) {
+  /*
+   * Examples:
+   *   Spreadsheet: =recommendOpen("TSLA", "2028-06-16", 450, "Call", 1, 60)   // buy to open
+   *   Spreadsheet: =recommendOpen("TSLA", "2028-06-16", 450, "Put", -1, 60)   // sell to open
+   *
+   * Returns positive premium value:
+   *   - Positive qty (long): BUY to open → debit (what you pay)
+   *   - Negative qty (short): SELL to open → credit (what you receive)
+   */
+  const parsed = normalizeLegInputs_(symbol, expiration, strike, type, qty, avgMinutesToExecute);
+  if (parsed.error) return parsed.error;
+
+  const { sym, exp, k, optType, position, alpha } = parsed;
+
+  const quote = getOptionQuote_(sym, exp, k, optType);
+  if (!hasBidAsk_(quote)) return "#No Data:" + sym + " " + exp + " " + k + " " + optType;
+
+  if (position > 0) {
+    // Long position: BUY to open → return buy price (debit)
+    const buyLimit = getRealisticBuyPrice_(quote, alpha);
+    return roundTo_(buyLimit, 2);
+  } else {
+    // Short position: SELL to open → return sell price (credit)
+    const sellLimit = getRealisticSellPrice_(quote, alpha);
+    return roundTo_(sellLimit, 2);
+  }
+}
+
+/**
  * Recommends price to close a single option leg.
  *
  * @param {string|Range} symbol - Ticker (e.g. "TSLA"), or a range like $A$1:$A3 to find first non-blank looking upward
