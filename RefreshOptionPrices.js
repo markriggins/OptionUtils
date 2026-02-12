@@ -133,13 +133,6 @@ function refreshOptionPrices() {
     XLookupByKeys_WarmCache(SHEET_NAME, ["symbol", "expiration", "strike", "type"], ["bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness"]);
   } catch (e) {}
 
-  // Force recalculate of BullCallSpreads formulas
-  try {
-    forceRecalculateBullCallSpreads_(ss);
-  } catch (e) {
-    Logger.log("Could not force recalculate BullCallSpreads: " + e);
-  }
-
   // Build summary of loaded files
   let summary = `Loaded ${allRows.length} option prices from ${folderPath}\n\n`;
   summary += `Files loaded (${filesLoaded.length}):\n`;
@@ -319,38 +312,6 @@ function getFolder_(parent, name) {
   return it.next();
 }
 
-/**
- * Forces recalculation of a named table by adding then deleting a column on the left.
- */
-function forceRecalculateTable_(ss, tableName) {
-  return;
-  const range = ss.getRangeByName(tableName);
-  if (!range) {
-    Logger.log(tableName + " not found");
-    return;
-  }
-
-  const sheet = range.getSheet();
-  const firstCol = range.getColumn();
-
-  // Insert column before table to force recalculateulation
-  sheet.insertColumnBefore(firstCol);
-  sheet.getRange(range.getRow(), firstCol).setValue("Recalculate");
-  SpreadsheetApp.flush();
-
-  // Delete it
-  sheet.deleteColumn(firstCol);
-  SpreadsheetApp.flush();
-  Logger.log("Forced recalculate of " + tableName + " via column add/delete");
-}
-
-/**
- * Forces recalculation of position tables.
- */
-function forceRecalculateBullCallSpreads_(ss) {
-  forceRecalculateTable_(ss, "BullCallSpreadsTable");
-  forceRecalculateTable_(ss, "IronCondorsTable");
-}
 
 /**
  * Shows the file upload dialog for option prices.

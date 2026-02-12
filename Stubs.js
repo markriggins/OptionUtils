@@ -27,10 +27,6 @@ function onOpen(e) {
   SpreadFinder.onOpen(e);
 }
 
-function onEdit(e) {
-  SpreadFinder.onEdit(e);
-}
-
 // ============================================================
 // MENU ACTIONS (called by name from OptionTools menu)
 // ============================================================
