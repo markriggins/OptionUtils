@@ -1,6 +1,1 @@
 
-1. make the portfolio perf graphs into a modal like the spread finder graphs, so we can add toggles for ROI vs
-     ExpROI, hover help etc
-
-2. add toggles to the graph for value "At Expiration" vs "Current"
-
