@@ -59,10 +59,23 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
     return;
   }
 
-  // Handle rebuild mode - delete existing sheet first
+  // Handle rebuild mode - check for custom groups and warn before deleting
   if (importMode === "rebuild") {
     const existingSheet = ss.getSheetByName("Portfolio");
     if (existingSheet) {
+      // Check for custom groups before deleting
+      const customGroups = findCustomGroups_(existingSheet);
+      if (customGroups.length > 0) {
+        const groupList = customGroups.map(g => `  • Group ${g.group}: ${g.description}`).join("\n");
+        const resp = ui.alert(
+          "Custom Groups Will Be Lost",
+          `The following custom groups cannot be auto-recreated from transactions:\n\n${groupList}\n\n` +
+          `These would need to be manually re-created after rebuild.\n\n` +
+          `Continue with rebuild?`,
+          ui.ButtonSet.OK_CANCEL
+        );
+        if (resp !== ui.Button.OK) return;
+      }
       ss.deleteSheet(existingSheet);
       const nr = ss.getNamedRanges().find(r => r.getName() === "PortfolioTable");
       if (nr) nr.remove();
@@ -1260,6 +1273,73 @@ function buildClosingPricesMap_(transactions, stockTxns) {
   }
 
   return result;
+}
+
+/**
+ * Finds custom groups in a Portfolio sheet (groups that don't match standard strategies).
+ * Returns array of { group, description } for each custom group found.
+ */
+function findCustomGroups_(sheet) {
+  const customGroups = [];
+  const range = sheet.getDataRange();
+  const rows = range.getValues();
+  if (rows.length < 2) return customGroups;
+
+  const headers = rows[0];
+  const idxSym = findColumn_(headers, ["symbol", "ticker"]);
+  const idxGroup = findColumn_(headers, ["group", "grp"]);
+  const idxDesc = findColumn_(headers, ["description", "desc"]);
+  const idxStrike = findColumn_(headers, ["strike", "strikeprice"]);
+  const idxType = findColumn_(headers, ["type", "optiontype", "callput"]);
+  const idxQty = findColumn_(headers, ["qty", "quantity"]);
+
+  // Group rows by (symbol, group)
+  const groups = new Map();
+  let lastSym = "", lastGroup = "", lastDesc = "";
+
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    const rawSym = idxSym >= 0 ? String(row[idxSym] || "").trim().toUpperCase() : "";
+    if (rawSym) lastSym = rawSym;
+    const rawGroup = idxGroup >= 0 ? String(row[idxGroup] || "").trim() : "";
+    if (rawGroup) lastGroup = rawGroup;
+    const rawDesc = idxDesc >= 0 ? String(row[idxDesc] || "").trim() : "";
+    if (rawDesc) lastDesc = rawDesc;
+
+    const groupKey = `${lastSym}|${lastGroup}`;
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, { legs: [], description: lastDesc, group: lastGroup });
+    }
+
+    const strike = idxStrike >= 0 ? parseNumber_(row[idxStrike]) : NaN;
+    const type = idxType >= 0 ? parseOptionType_(row[idxType]) : null;
+    const qty = idxQty >= 0 ? parseNumber_(row[idxQty]) : 0;
+
+    if (Number.isFinite(qty) && qty !== 0) {
+      groups.get(groupKey).legs.push({ strike, type, qty });
+    }
+  }
+
+  // Check each group - if detectPositionType_ returns null, it's custom
+  for (const [key, g] of groups) {
+    if (g.legs.length === 0) continue;
+    const posType = detectPositionType_(g.legs);
+    if (posType === null) {
+      // Build description from strikes if not provided
+      let desc = g.description;
+      if (!desc) {
+        const strikes = g.legs
+          .filter(l => Number.isFinite(l.strike))
+          .sort((a, b) => a.strike - b.strike)
+          .map(l => l.qty < 0 ? `-${l.strike}` : `${l.strike}`)
+          .join('/');
+        desc = `${strikes} custom`;
+      }
+      customGroups.push({ group: g.group, description: desc });
+    }
+  }
+
+  return customGroups;
 }
 
 /**

@@ -129,6 +129,7 @@ function computePortfolioGraphData_(ss, symbol) {
   let shortPuts = [];
 
   let cash = 0;
+  let customPositions = [];
 
   const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
   if (legsRange) {
@@ -142,11 +143,15 @@ function computePortfolioGraphData_(ss, symbol) {
     shortCalls = parsed.shortCalls || [];
     longPuts = parsed.longPuts || [];
     shortPuts = parsed.shortPuts || [];
+    customPositions = parsed.customPositions || [];
     cash = parsed.cash || 0;
   }
 
   const allSpreads = [...bullCallSpreads, ...bullPutSpreads, ...bearCallSpreads];
   const allSingleLegs = [...longCalls, ...shortCalls, ...longPuts, ...shortPuts];
+
+  // Flatten custom position legs for quote fetching and DTE calculation
+  const allCustomLegs = customPositions.flatMap(cp => cp.legs);
 
   // Calculate DTE (days to expiration) for each spread and single leg
   const today = new Date();
@@ -179,6 +184,20 @@ function computePortfolioGraphData_(ss, symbol) {
     if (!leg.dte) leg.dte = 365;
     Logger.log(`Single leg ${leg.label}: expiration=${leg.expiration}, dte=${leg.dte}`);
   }
+  // Calculate DTE for custom position legs
+  for (const leg of allCustomLegs) {
+    if (leg.expiration) {
+      let expDate = leg.expiration;
+      if (!(expDate instanceof Date)) {
+        expDate = new Date(leg.expiration);
+      }
+      if (!isNaN(expDate.getTime())) {
+        expDate.setHours(0, 0, 0, 0);
+        leg.dte = Math.max(1, Math.round((expDate - today) / (1000 * 60 * 60 * 24)));
+      }
+    }
+    if (!leg.dte) leg.dte = 365;
+  }
 
   // Pre-fetch actual option prices for all spreads (for "current" mode)
   // Each spread gets { longBid, longMid, longAsk, shortBid, shortMid, shortAsk }
@@ -196,6 +215,13 @@ function computePortfolioGraphData_(ss, symbol) {
     Logger.log(`Single leg ${leg.label}: mid=${quote?.mid}, price=${leg.price}`);
     return quote;
   });
+
+  // Pre-fetch quotes for custom position legs
+  const customLegQuotes = allCustomLegs.map(leg => {
+    const quote = getOptionQuote_(symbol, leg.expiration, leg.strike, leg.type);
+    return quote;
+  });
+  Logger.log(`Custom positions: ${customPositions.length}, total legs: ${allCustomLegs.length}`);
 
   // Compute smart price range
   const smart = computeSmartDefaults_(ss, symbol);
@@ -234,9 +260,16 @@ function computePortfolioGraphData_(ss, symbol) {
   const singleLegInvestments = allSingleLegs.map(leg => {
     return leg.isLong ? leg.price * 100 * leg.qty : -leg.price * 100 * leg.qty;
   });
+
+  // Custom position investments: sum of all leg investments
+  const customPositionInvestments = customPositions.map(cp => {
+    return cp.legs.reduce((sum, leg) => {
+      return sum + (leg.isLong ? leg.price * 100 * leg.qty : -leg.price * 100 * leg.qty);
+    }, 0);
+  });
   const totalSingleLegInvestment = singleLegInvestments.reduce((sum, v) => sum + v, 0);
 
-  // Build strategy groups (spreads and single legs)
+  // Build strategy groups (spreads, single legs, and custom positions)
   const strategyGroupDefs = [
     { name: "Bull Call Spreads", spreads: bullCallSpreads, flavor: "CALL", isSingleLeg: false },
     { name: "Bull Put Spreads", spreads: bullPutSpreads, flavor: "PUT", isSingleLeg: false },
@@ -246,6 +279,15 @@ function computePortfolioGraphData_(ss, symbol) {
     { name: "Long Puts", spreads: longPuts, flavor: "LONG_PUT", isSingleLeg: true },
     { name: "Short Puts", spreads: shortPuts, flavor: "SHORT_PUT", isSingleLeg: true },
   ];
+  // Add each custom position as its own strategy group
+  for (let i = 0; i < customPositions.length; i++) {
+    strategyGroupDefs.push({
+      name: customPositions[i].label,
+      spreads: [customPositions[i]],
+      isCustom: true,
+      customIndex: i
+    });
+  }
   const strategyGroups = strategyGroupDefs.filter(g => g.spreads.length > 0);
   const strategyLabels = strategyGroups.map(g => g.name);
 
@@ -254,7 +296,9 @@ function computePortfolioGraphData_(ss, symbol) {
   let singleLegIdx = 0;
   const strategyInvestments = strategyGroups.map(g => {
     let sum = 0;
-    if (g.isSingleLeg) {
+    if (g.isCustom) {
+      sum = customPositionInvestments[g.customIndex];
+    } else if (g.isSingleLeg) {
       for (let i = 0; i < g.spreads.length; i++) {
         sum += singleLegInvestments[singleLegIdx++];
       }
@@ -311,9 +355,10 @@ function computePortfolioGraphData_(ss, symbol) {
   // Include qty in label: "5 - Dec 28 480/490" or "3 - Dec 28 500 Call"
   const spreadLabels = [
     ...allSpreads.map(sp => `${sp.qty} - ${sp.label}`),
-    ...allSingleLegs.map(leg => `${leg.qty} - ${leg.label} ${leg.type}`)
+    ...allSingleLegs.map(leg => `${leg.qty} - ${leg.label} ${leg.type}`),
+    ...customPositions.map(cp => `${cp.qty} - ${cp.label}`)
   ];
-  const allPositions = allSpreads.length + allSingleLegs.length;
+  const allPositions = allSpreads.length + allSingleLegs.length + customPositions.length;
   const spreadValuesExp = Array.from({ length: allPositions }, () => []);
   const spreadValuesCurrent = Array.from({ length: allPositions }, () => []);
   const spreadRoisExp = Array.from({ length: allPositions }, () => []);
@@ -337,7 +382,8 @@ function computePortfolioGraphData_(ss, symbol) {
       } catch (e) {
         return null;
       }
-    })
+    }),
+    ...customPositions.map(() => null) // Custom positions don't have OptionStrat URLs
   ];
 
   for (let S = minPrice; S <= maxPrice + 1e-9; S += step) {
@@ -434,6 +480,46 @@ function computePortfolioGraphData_(ss, symbol) {
       singleLegCurrent.push(roundTo_(valueCurrent, 2));
     }
 
+    // Compute custom position values (sum of all legs' P&L)
+    const customPosExp = [];
+    const customPosCurrent = [];
+    let customLegIdx = 0;
+    for (let cpIdx = 0; cpIdx < customPositions.length; cpIdx++) {
+      const cp = customPositions[cpIdx];
+      let sumExp = 0, sumCurrent = 0;
+      for (const leg of cp.legs) {
+        const quote = customLegQuotes[customLegIdx++];
+        const currentMid = quote?.mid ?? leg.price;
+        let legValueExp = 0, legValueCurrent = 0;
+
+        if (leg.type === "Call") {
+          const intrinsic = Math.max(0, S - leg.strike);
+          if (leg.isLong) {
+            legValueExp = intrinsic * 100 * leg.qty;
+            legValueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call") * 100 * leg.qty;
+          } else {
+            legValueExp = (leg.price - intrinsic) * 100 * leg.qty;
+            const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call");
+            legValueCurrent = (leg.price - optionValue) * 100 * leg.qty;
+          }
+        } else {
+          const intrinsic = Math.max(0, leg.strike - S);
+          if (leg.isLong) {
+            legValueExp = intrinsic * 100 * leg.qty;
+            legValueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put") * 100 * leg.qty;
+          } else {
+            legValueExp = (leg.price - intrinsic) * 100 * leg.qty;
+            const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put");
+            legValueCurrent = (leg.price - optionValue) * 100 * leg.qty;
+          }
+        }
+        sumExp += legValueExp;
+        sumCurrent += legValueCurrent;
+      }
+      customPosExp.push(roundTo_(sumExp, 2));
+      customPosCurrent.push(roundTo_(sumCurrent, 2));
+    }
+
     // Store individual spread values
     for (let i = 0; i < allSpreads.length; i++) {
       spreadValuesExp[i].push(individualExp[i]);
@@ -465,12 +551,35 @@ function computePortfolioGraphData_(ss, symbol) {
       }
     }
 
-    // Aggregate by strategy (handles both spreads and single legs)
+    // Store custom position values (appended after single legs)
+    for (let i = 0; i < customPositions.length; i++) {
+      const idx = allSpreads.length + allSingleLegs.length + i;
+      spreadValuesExp[idx].push(customPosExp[i]);
+      spreadValuesCurrent[idx].push(customPosCurrent[i]);
+
+      const inv = customPositionInvestments[i];
+      if (inv > 0) {
+        spreadRoisExp[idx].push(roundTo_((customPosExp[i] - inv) / inv, 4));
+        spreadRoisCurrent[idx].push(roundTo_((customPosCurrent[i] - inv) / inv, 4));
+      } else if (inv < 0) {
+        spreadRoisExp[idx].push(roundTo_(customPosExp[i] / Math.abs(inv), 4));
+        spreadRoisCurrent[idx].push(roundTo_(customPosCurrent[i] / Math.abs(inv), 4));
+      } else {
+        spreadRoisExp[idx].push(0);
+        spreadRoisCurrent[idx].push(0);
+      }
+    }
+
+    // Aggregate by strategy (handles spreads, single legs, and custom positions)
     let sIdx = 0;
     let slIdx = 0;
     for (let g = 0; g < strategyGroups.length; g++) {
       let sumExp = 0, sumCurrent = 0;
-      if (strategyGroups[g].isSingleLeg) {
+      if (strategyGroups[g].isCustom) {
+        const cpIdx = strategyGroups[g].customIndex;
+        sumExp = customPosExp[cpIdx];
+        sumCurrent = customPosCurrent[cpIdx];
+      } else if (strategyGroups[g].isSingleLeg) {
         for (let i = 0; i < strategyGroups[g].spreads.length; i++) {
           sumExp += singleLegExp[slIdx];
           sumCurrent += singleLegCurrent[slIdx];
@@ -502,8 +611,10 @@ function computePortfolioGraphData_(ss, symbol) {
     }
 
     // Total values (excluding cash - cash doesn't change with price)
-    const optionsExp = individualExp.reduce((sum, v) => sum + v, 0) + singleLegExp.reduce((sum, v) => sum + v, 0);
-    const optionsCurrent = individualCurrent.reduce((sum, v) => sum + v, 0) + singleLegCurrent.reduce((sum, v) => sum + v, 0);
+    const customTotalExp = customPosExp.reduce((sum, v) => sum + v, 0);
+    const customTotalCurrent = customPosCurrent.reduce((sum, v) => sum + v, 0);
+    const optionsExp = individualExp.reduce((sum, v) => sum + v, 0) + singleLegExp.reduce((sum, v) => sum + v, 0) + customTotalExp;
+    const optionsCurrent = individualCurrent.reduce((sum, v) => sum + v, 0) + singleLegCurrent.reduce((sum, v) => sum + v, 0) + customTotalCurrent;
     totalValues.push(roundTo_(sharesValue + optionsExp, 2));
     totalValuesCurrent.push(roundTo_(sharesValue + optionsCurrent, 2));
   }

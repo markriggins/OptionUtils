@@ -371,6 +371,7 @@ function parsePositionsForSymbol_(rows, symbol) {
     shortCalls: [],
     longPuts: [],
     shortPuts: [],
+    customPositions: [],
     cash: 0
   };
 
@@ -386,6 +387,7 @@ function parsePositionsForSymbol_(rows, symbol) {
   const idxQty = findColumn_(headers, ["qty", "quantity", "contracts", "contract", "count", "shares"]);
   const idxPrice = findColumn_(headers, ["price", "cost", "entry", "premium", "basis", "costbasis", "avgprice", "pricepaid"]);
   const idxClosed = findColumn_(headers, ["closed", "actualclose", "closedat"]);
+  const idxDesc = findColumn_(headers, ["description", "desc", "label"]);
 
   // If Strategy and Type resolve to same column, disambiguate: Strategy needs its own column
   // Strategy aliases shouldn't include bare "type" if Type column also uses "type"
@@ -419,7 +421,8 @@ function parsePositionsForSymbol_(rows, symbol) {
     // Track closed status per group
     const groupKey = `${lastSym}|${lastGroup || r}`;
     if (!groups.has(groupKey)) {
-      groups.set(groupKey, { legs: [], firstRow: r, closedCount: 0, legCount: 0 });
+      const desc = idxDesc >= 0 ? String(row[idxDesc] ?? "").trim() : "";
+      groups.set(groupKey, { legs: [], firstRow: r, closedCount: 0, legCount: 0, groupName: lastGroup, description: desc });
     }
     const g = groups.get(groupKey);
     g.legCount++;
@@ -601,8 +604,48 @@ function parsePositionsForSymbol_(rows, symbol) {
       } else if (posType === "short-put") {
         result.shortPuts.push(optionPos);
       }
+    } else if (posType === null && legs.length > 0) {
+      // Custom multi-leg position that doesn't match known strategies
+      // Build label: user description, or "max(qty) - expiration strike1/strike2/..."
+      const maxQty = Math.max(...legs.map(l => Math.abs(l.qty)));
+      const expLeg = legs.find(l => l.expiration);
+      const expLabel = expLeg ? formatExpirationLabel_(expLeg.expiration) : null;
+      // Show strikes with - prefix for short positions: 500/-600/740/-900
+      const strikes = legs
+        .filter(l => Number.isFinite(l.strike))
+        .sort((a, b) => a.strike - b.strike)
+        .map(l => l.qty < 0 ? `-${l.strike}` : `${l.strike}`)
+        .join('/');
+
+      // Label without qty prefix (qty added in graph): "Jun 27 500/-600/740/-900 custom"
+      // If user provides description, use that (e.g., "500/-600/740/-900 custom")
+      let label = group.description;
+      if (!label) {
+        label = `${expLabel || '?'} ${strikes || '?'} custom`;
+      }
+
+      // Build custom position with all legs as individual options
+      const customLegs = legs.filter(l => l.type === "Call" || l.type === "Put").map(l => ({
+        qty: Math.abs(l.qty),
+        strike: l.strike,
+        price: l.price,
+        type: l.type,
+        expiration: l.expiration,
+        symbol: lastSym,
+        isLong: l.qty > 0,
+      }));
+
+      if (customLegs.length > 0) {
+        result.customPositions.push({
+          legs: customLegs,
+          label,
+          qty: maxQty,
+          symbol: lastSym,
+          expiration: expLeg?.expiration,
+          groupName: group.groupName,
+        });
+      }
     }
-    // Other unknown types are silently skipped
   }
 
   return result;
