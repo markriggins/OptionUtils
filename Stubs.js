@@ -91,6 +91,14 @@ function getSpreadFinderGraphData() {
   return SpreadFinder.getSpreadFinderGraphData();
 }
 
+function getSpreadFinderOptions() {
+  return SpreadFinder.getSpreadFinderOptions();
+}
+
+function runSpreadFinderWithSelection(symbols, expirations) {
+  return SpreadFinder.runSpreadFinderWithSelection(symbols, expirations);
+}
+
 function getPortfolioGraphData() {
   return SpreadFinder.getPortfolioGraphData();
 }

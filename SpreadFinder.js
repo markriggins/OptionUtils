@@ -23,6 +23,11 @@ const OPTION_PRICES_SHEET = "OptionPricesUploaded";
 const CONFIG_COL = 1; // Column A
 const CONFIG_START_ROW = 1;
 
+/** Test function to verify file loads */
+function testSpreadFinderLoaded() {
+  return "SpreadFinder.js loaded OK";
+}
+
 /**
  * Calculates the Expected Gain for a Bull Call Spread based on an 80%-of-max-profit early exit.
  * Uses the "Rule of Touch" (probTouch ≈ 1.6x delta) to estimate probability of reaching target.
@@ -51,25 +56,117 @@ function calculateExpectedGain(longMid, shortMid, longStrike, shortStrike, short
 }
 
 /**
- * Runs the spread finder analysis. Call from menu or script.
- * Ensures config exists, reads it, scans options, ranks spreads, outputs results.
+ * Gets distinct symbols and expirations from OptionPricesUploaded for the selection dialog.
+ * @returns {Object} { symbols: string[], expirations: {value: string, label: string}[] }
+ */
+function getSpreadFinderOptions() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(OPTION_PRICES_SHEET);
+  if (!sheet) {
+    throw new Error("No option prices loaded. Run 'Upload & Refresh' first.");
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    throw new Error("No option data found in " + OPTION_PRICES_SHEET);
+  }
+
+  // Read only header row first to find column indices
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]
+    .map(h => h.toString().trim().toLowerCase());
+  const symIdx = headers.indexOf("symbol");
+  const expIdx = headers.indexOf("expiration");
+
+  if (symIdx < 0 || expIdx < 0) {
+    throw new Error("Required columns 'symbol' and 'expiration' not found");
+  }
+
+  // Read only symbol and expiration columns (much faster than reading entire sheet)
+  const symCol = sheet.getRange(2, symIdx + 1, lastRow - 1, 1).getValues();
+  const expCol = sheet.getRange(2, expIdx + 1, lastRow - 1, 1).getValues();
+
+  const symbols = new Set();
+  const expirations = new Map(); // key: normalized date string, value: Date
+
+  for (let i = 0; i < symCol.length; i++) {
+    const sym = (symCol[i][0] || "").toString().trim().toUpperCase();
+    if (sym) symbols.add(sym);
+
+    let exp = expCol[i][0];
+    if (exp) {
+      let expDate;
+      if (exp instanceof Date) {
+        expDate = exp;
+      } else {
+        // Parse string date
+        const s = String(exp).trim();
+        const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (isoMatch) {
+          expDate = new Date(+isoMatch[1], +isoMatch[2] - 1, +isoMatch[3]);
+        } else {
+          expDate = new Date(s);
+        }
+      }
+      if (!isNaN(expDate.getTime())) {
+        // Normalize to YYYY-MM-DD
+        const key = expDate.getFullYear() + "-" +
+          String(expDate.getMonth() + 1).padStart(2, "0") + "-" +
+          String(expDate.getDate()).padStart(2, "0");
+        expirations.set(key, expDate);
+      }
+    }
+  }
+
+  // Sort symbols alphabetically
+  const sortedSymbols = Array.from(symbols).sort();
+
+  // Sort expirations by date and format labels
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const sortedExpirations = Array.from(expirations.entries())
+    .sort((a, b) => a[1] - b[1])
+    .map(([key, date]) => ({
+      value: key,
+      label: months[date.getMonth()] + " " + date.getDate() + ", " + date.getFullYear()
+    }));
+
+  return { symbols: sortedSymbols, expirations: sortedExpirations };
+}
+
+/**
+ * Shows the SpreadFinder selection dialog.
  */
 function runSpreadFinder() {
+  const html = HtmlService.createHtmlOutputFromFile("SpreadFinderSelect")
+    .setWidth(400)
+    .setHeight(450);
+  SpreadsheetApp.getUi().showModalDialog(html, "Run SpreadFinder");
+}
+
+/**
+ * Runs SpreadFinder with the selected symbols and expirations.
+ * @param {string[]} symbols - Selected symbols
+ * @param {string[]} expirations - Selected expiration dates (YYYY-MM-DD format)
+ */
+function runSpreadFinderWithSelection(symbols, expirations) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   // Ensure config sheet exists, load config
   const configSheet = ensureSpreadFinderConfigSheet_(ss);
   const config = loadSpreadFinderConfig_(configSheet);
 
+  // Override config with selection
+  config.symbols = symbols;
+  config.selectedExpirations = new Set(expirations);
+
   // Name results sheet after symbol(s)
-  const spreadsSheetName = config.symbols && config.symbols.length > 0
-    ? config.symbols.join(",") + "Spreads"
+  const spreadsSheetName = symbols.length > 0
+    ? symbols.join(",") + "Spreads"
     : SPREADS_SHEET;
   const sheet = ensureSpreadsSheet_(ss, spreadsSheetName);
   Logger.log("SpreadFinder config: " + JSON.stringify(config));
 
-  // Load option data
-  const options = loadOptionData_(ss);
+  // Load option data (filtered by selection)
+  const options = loadOptionData_(ss, config.symbols, config.selectedExpirations);
   Logger.log("Loaded " + options.length + " options");
 
   // Filter to calls only
@@ -112,8 +209,10 @@ function runSpreadFinder() {
   Logger.log("Loaded " + conflicts.size + " held positions: " + JSON.stringify([...conflicts]));
 
   // Filter by config constraints, mark conflicts instead of removing
+  // Skip expiration date range filter if user selected specific expirations
   const minExpDate = config.minExpirationDate;
   const maxExpDate = config.maxExpirationDate;
+  const skipExpDateFilter = !!config.selectedExpirations;
   const filtered = spreads.filter(s => {
     const expDate = new Date(s.expiration);
     // Mark conflicts as held (but keep them in results)
@@ -128,8 +227,7 @@ function runSpreadFinder() {
       s.upperVol >= config.minVolume &&
       s.lowerStrike >= config.minStrike &&
       s.upperStrike <= config.maxStrike &&
-      expDate >= minExpDate &&
-      expDate <= maxExpDate;
+      (skipExpDateFilter || (expDate >= minExpDate && expDate <= maxExpDate));
   });
   Logger.log("Filtered to " + filtered.length + " spreads meeting criteria");
 
@@ -296,10 +394,13 @@ function loadSpreadFinderConfig_(sheet) {
 }
 
 /**
- * Loads all options from OptionPricesUploaded.
- * Returns array of option objects.
+ * Loads options from OptionPricesUploaded, optionally filtered by symbols and expirations.
+ * @param {Spreadsheet} ss - The active spreadsheet
+ * @param {string[]} [filterSymbols] - Optional array of symbols to include
+ * @param {Set<string>} [filterExpirations] - Optional set of expiration dates (YYYY-MM-DD) to include
+ * @returns {Array} Array of option objects
  */
-function loadOptionData_(ss) {
+function loadOptionData_(ss, filterSymbols, filterExpirations) {
   const sheet = ss.getSheetByName(OPTION_PRICES_SHEET);
   if (!sheet) throw new Error(`Sheet '${OPTION_PRICES_SHEET}' not found`);
 
@@ -316,19 +417,44 @@ function loadOptionData_(ss) {
     if (!(r in idx)) throw new Error(`Required column '${r}' not found`);
   }
 
+  // Convert filterSymbols to a Set for O(1) lookup
+  const symbolSet = filterSymbols ? new Set(filterSymbols.map(s => s.toUpperCase())) : null;
+
   const options = [];
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const symbol = (row[idx.symbol] || "").toString().trim().toUpperCase();
     if (!symbol) continue;
 
+    // Filter by symbol if specified
+    if (symbolSet && !symbolSet.has(symbol)) continue;
+
     let exp = row[idx.expiration];
+    let expNormalized = null;
     if (exp instanceof Date) {
+      expNormalized = exp.getFullYear() + "-" +
+        String(exp.getMonth() + 1).padStart(2, "0") + "-" +
+        String(exp.getDate()).padStart(2, "0");
       exp = `${exp.getMonth() + 1}/${exp.getDate()}/${exp.getFullYear()}`;
     } else {
       exp = (exp || "").toString().trim();
+      // Parse for filtering
+      const isoMatch = exp.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (isoMatch) {
+        expNormalized = exp;
+      } else {
+        const d = new Date(exp);
+        if (!isNaN(d.getTime())) {
+          expNormalized = d.getFullYear() + "-" +
+            String(d.getMonth() + 1).padStart(2, "0") + "-" +
+            String(d.getDate()).padStart(2, "0");
+        }
+      }
     }
     if (!exp) continue;
+
+    // Filter by expiration if specified
+    if (filterExpirations && expNormalized && !filterExpirations.has(expNormalized)) continue;
 
     const strike = +row[idx.strike];
     if (!Number.isFinite(strike)) continue;
