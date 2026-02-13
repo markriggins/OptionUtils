@@ -18,8 +18,8 @@
         .chart-title { font-weight: bold; color: #3c4043; border-bottom: 1px dashed #1a73e8; cursor: help; position: relative; }
         .chart-div { width: 100%; height: 400px; position: relative; }
         .current-price-line {
-            position: absolute; top: 0; bottom: 0; width: 2px;
-            background: rgba(220, 53, 69, 0.7); pointer-events: none; z-index: 10;
+            position: absolute; top: 0; bottom: 0; width: 0;
+            border-left: 2px dashed rgba(220, 53, 69, 0.7); pointer-events: none; z-index: 10;
         }
         .current-price-label {
             position: absolute; top: 5px; transform: translateX(-50%);
@@ -89,6 +89,9 @@
             <span class="toggle-label">Value Mode:</span>
             <button id="btn-expiration" class="toggle-btn active" onclick="setValueMode('expiration')">At Expiration</button>
             <button id="btn-current" class="toggle-btn" onclick="setValueMode('current')">Current</button>
+        </div>
+        <div class="zoom-hint" style="font-size: 11px; color: #5f6368;">
+            Drag to zoom, right-click to reset
         </div>
     </div>
     <div>
@@ -195,6 +198,14 @@
     var valueMode = 'expiration'; // 'expiration' or 'current'
     var rawData = null;
     var charts = {};
+
+    // Explorer options for drag-to-zoom on all charts
+    var explorerOptions = {
+        actions: ['dragToZoom', 'rightClickToReset'],
+        axis: 'horizontal,vertical',
+        keepInBounds: true,
+        maxZoomIn: 0.01
+    };
 
     // Help modal
     function showHelp() {
@@ -367,7 +378,8 @@
             hAxis: { title: d.symbol + ' Price ($)', format: '#,##0' },
             vAxis: { title: 'Value ($)', format: '#,##0' },
             chartArea: { width: '75%', height: '80%' },
-            curveType: 'none'
+            curveType: 'none',
+            explorer: explorerOptions
         });
 
         // Chart 2: Portfolio ROI (%)
@@ -395,7 +407,8 @@
             hAxis: { title: d.symbol + ' Price ($)', format: '#,##0' },
             vAxis: { title: 'ROI (%)', format: '#,##0\'%\'' },
             chartArea: { width: '75%', height: '80%' },
-            curveType: 'none'
+            curveType: 'none',
+            explorer: explorerOptions
         });
 
         // Chart 3: Individual Spreads ($)
@@ -423,7 +436,8 @@
                 hAxis: { title: d.symbol + ' Price ($)', format: '#,##0' },
                 vAxis: { title: 'Value ($)', format: '#,##0' },
                 chartArea: { width: '70%', height: '80%' },
-                curveType: 'none'
+                curveType: 'none',
+                explorer: explorerOptions
             });
 
             // Chart 4: Individual Spreads ROI (%)
@@ -450,7 +464,8 @@
                 hAxis: { title: d.symbol + ' Price ($)', format: '#,##0' },
                 vAxis: { title: 'ROI (%)', format: '#,##0\'%\'' },
                 chartArea: { width: '70%', height: '80%' },
-                curveType: 'none'
+                curveType: 'none',
+                explorer: explorerOptions
             });
 
             // Double-click on legend or line to open OptionStrat

@@ -403,16 +403,31 @@ function computePortfolioGraphData_(ss, symbol) {
       let valueCurrent = 0;
 
       if (leg.type === "Call") {
-        // Call option: value = max(0, S - strike) at expiration
+        // Call option: intrinsic = max(0, S - strike) at expiration
         const intrinsic = Math.max(0, S - leg.strike);
-        valueExp = intrinsic * 100 * leg.qty * (leg.isLong ? 1 : -1);
-        // Current: use actual quote interpolated toward price S
-        valueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call") * 100 * leg.qty * (leg.isLong ? 1 : -1);
+        if (leg.isLong) {
+          // Long call: value = intrinsic at expiration
+          valueExp = intrinsic * 100 * leg.qty;
+          valueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call") * 100 * leg.qty;
+        } else {
+          // Short call: P&L = premium received - intrinsic at expiration
+          valueExp = (leg.price - intrinsic) * 100 * leg.qty;
+          const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call");
+          valueCurrent = (leg.price - optionValue) * 100 * leg.qty;
+        }
       } else {
-        // Put option: value = max(0, strike - S) at expiration
+        // Put option: intrinsic = max(0, strike - S) at expiration
         const intrinsic = Math.max(0, leg.strike - S);
-        valueExp = intrinsic * 100 * leg.qty * (leg.isLong ? 1 : -1);
-        valueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put") * 100 * leg.qty * (leg.isLong ? 1 : -1);
+        if (leg.isLong) {
+          // Long put: value = intrinsic at expiration
+          valueExp = intrinsic * 100 * leg.qty;
+          valueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put") * 100 * leg.qty;
+        } else {
+          // Short put: P&L = premium received - intrinsic at expiration
+          valueExp = (leg.price - intrinsic) * 100 * leg.qty;
+          const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put");
+          valueCurrent = (leg.price - optionValue) * 100 * leg.qty;
+        }
       }
 
       singleLegExp.push(roundTo_(valueExp, 2));
@@ -436,8 +451,18 @@ function computePortfolioGraphData_(ss, symbol) {
       spreadValuesCurrent[idx].push(singleLegCurrent[i]);
 
       const inv = singleLegInvestments[i];
-      spreadRoisExp[idx].push(inv > 0 ? roundTo_((singleLegExp[i] - inv) / inv, 4) : 0);
-      spreadRoisCurrent[idx].push(inv > 0 ? roundTo_((singleLegCurrent[i] - inv) / inv, 4) : 0);
+      // For long positions (inv > 0): ROI = (value - cost) / cost
+      // For short positions (inv < 0): value is P&L, ROI = P&L / |credit received|
+      if (inv > 0) {
+        spreadRoisExp[idx].push(roundTo_((singleLegExp[i] - inv) / inv, 4));
+        spreadRoisCurrent[idx].push(roundTo_((singleLegCurrent[i] - inv) / inv, 4));
+      } else if (inv < 0) {
+        spreadRoisExp[idx].push(roundTo_(singleLegExp[i] / Math.abs(inv), 4));
+        spreadRoisCurrent[idx].push(roundTo_(singleLegCurrent[i] / Math.abs(inv), 4));
+      } else {
+        spreadRoisExp[idx].push(0);
+        spreadRoisCurrent[idx].push(0);
+      }
     }
 
     // Aggregate by strategy (handles both spreads and single legs)
@@ -462,8 +487,18 @@ function computePortfolioGraphData_(ss, symbol) {
       strategyValuesCurrent[g].push(roundTo_(sumCurrent, 2));
 
       const inv = strategyInvestments[g];
-      strategyRoisExp[g].push(inv > 0 ? roundTo_((sumExp - inv) / inv, 4) : 0);
-      strategyRoisCurrent[g].push(inv > 0 ? roundTo_((sumCurrent - inv) / inv, 4) : 0);
+      // For debit strategies (inv > 0): ROI = (value - cost) / cost
+      // For credit strategies (inv < 0): value is P&L, ROI = P&L / |credit received|
+      if (inv > 0) {
+        strategyRoisExp[g].push(roundTo_((sumExp - inv) / inv, 4));
+        strategyRoisCurrent[g].push(roundTo_((sumCurrent - inv) / inv, 4));
+      } else if (inv < 0) {
+        strategyRoisExp[g].push(roundTo_(sumExp / Math.abs(inv), 4));
+        strategyRoisCurrent[g].push(roundTo_(sumCurrent / Math.abs(inv), 4));
+      } else {
+        strategyRoisExp[g].push(0);
+        strategyRoisCurrent[g].push(0);
+      }
     }
 
     // Total values (excluding cash - cash doesn't change with price)
