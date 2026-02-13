@@ -103,6 +103,14 @@ function uploadAndRebuildPortfolio(portfolio, transactions) {
   return SpreadFinder.uploadAndRebuildPortfolio(portfolio, transactions);
 }
 
+function completeInitialization(loadOptionPrices, loadPortfolio) {
+  return SpreadFinder.completeInitialization(loadOptionPrices, loadPortfolio);
+}
+
+function refreshPortfolioPrices() {
+  return SpreadFinder.refreshPortfolioPrices();
+}
+
 // ============================================================
 // CUSTOM SPREADSHEET FUNCTIONS (used in cell formulas)
 // ============================================================

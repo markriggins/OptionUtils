@@ -143,7 +143,7 @@ function normalizeSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, av
  * Returns null if invalid.
  *
  * @param {string|Date} expiration - Input expiration.
- * @returns {string|null} Normalized "YYYY-MM-DD" or null.
+ * @returns {string|null} Normalized "M/D/YYYY" or null.
  */
 
 function normalizeExpiration_(expiration) {
@@ -151,24 +151,24 @@ function normalizeExpiration_(expiration) {
   if (expiration instanceof Date || Object.prototype.toString.call(expiration) === '[object Date]') {
     // Add 12 hours to avoid timezone boundary issues
     const d = new Date(expiration.getTime() + 12 * 60 * 60 * 1000);
-    return Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
   }
 
   if (typeof expiration === "string") {
     const s = expiration.trim();
-    // Already in yyyy-MM-dd format
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    // Handle M/D/YYYY or MM/DD/YYYY format
-    const mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (mdyMatch) {
-      const [, m, d, y] = mdyMatch;
-      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    // Already in M/D/YYYY format - return as-is
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) return s;
+    // Handle yyyy-MM-dd (ISO) format - convert to M/D/YYYY
+    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) {
+      const [, y, m, d] = isoMatch;
+      return `${parseInt(m, 10)}/${parseInt(d, 10)}/${y}`;
     }
     // Try parsing the string as a date
     const parsed = new Date(s);
     if (!isNaN(parsed.getTime())) {
       const adjusted = new Date(parsed.getTime() + 12 * 60 * 60 * 1000);
-      return Utilities.formatDate(adjusted, Session.getScriptTimeZone(), "yyyy-MM-dd");
+      return `${adjusted.getMonth() + 1}/${adjusted.getDate()}/${adjusted.getFullYear()}`;
     }
   }
 
@@ -176,7 +176,7 @@ function normalizeExpiration_(expiration) {
   if (typeof expiration === "number") {
     const d = new Date((expiration - 25569) * 86400 * 1000 + 12 * 60 * 60 * 1000);
     if (!isNaN(d.getTime())) {
-      return Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
+      return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
     }
   }
 

@@ -146,9 +146,23 @@ function makeCompositeKey_(keyValues) {
 
 function normalize_(v) {
   if (v == null) return "";
-  if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  // Normalize dates to M/D/YYYY format (add 12 hours to avoid timezone boundary issues)
+  if (v instanceof Date) {
+    const d = new Date(v.getTime() + 12 * 60 * 60 * 1000);
+    return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+  }
   if (typeof v === "number") return v.toString();
-  return v.toString().trim();
+
+  const s = v.toString().trim();
+
+  // Convert ISO dates (YYYY-MM-DD) to M/D/YYYY
+  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch;
+    return `${parseInt(m, 10)}/${parseInt(d, 10)}/${y}`;
+  }
+
+  return s;
 }
 
 function flatten_(v) {

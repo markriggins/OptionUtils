@@ -547,22 +547,21 @@ function fetchSpreadQuotes_(symbol, expiration, kLong, kShort, optionType) {
 }
 
 /**
- * Formats expiration for XLookupByKeys lookup.
+ * Formats expiration for XLookupByKeys lookup (M/D/YYYY format).
  */
 function formatExpirationForLookup_(exp) {
   if (!exp) return "";
   if (exp instanceof Date) {
-    return Utilities.formatDate(exp, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    return `${exp.getMonth() + 1}/${exp.getDate()}/${exp.getFullYear()}`;
   }
   const s = String(exp).trim();
-  // If already yyyy-MM-dd format, return as is
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  // Try to parse MM/DD/YYYY
-  const match = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (match) {
-    const m = match[1].padStart(2, '0');
-    const d = match[2].padStart(2, '0');
-    return `${match[3]}-${m}-${d}`;
+  // If already M/D/YYYY format, return as is
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) return s;
+  // Convert yyyy-MM-dd (ISO) to M/D/YYYY
+  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch;
+    return `${parseInt(m, 10)}/${parseInt(d, 10)}/${y}`;
   }
   return s;
 }

@@ -32,39 +32,91 @@ function onOpen() {
 }
 
 /**
- * Initializes the project with README, Config, and option price data.
- * Deletes all sheets except README and Config.
+ * Shows the initialization dialog with options to load existing data.
  */
 function initializeProject() {
   const ss = SpreadsheetApp.getActive();
-  const ui = SpreadsheetApp.getUi();
 
   // Find sheets that will be deleted (everything except README and Config)
   const keepSheets = ["README", "Config"];
-  const sheetsToDelete = ss.getSheets().filter(s => !keepSheets.includes(s.getName()));
+  const sheetsToDelete = ss.getSheets().filter(s => !keepSheets.includes(s.getName())).map(s => s.getName());
 
-  if (sheetsToDelete.length > 0) {
-    const sheetNames = sheetsToDelete.map(s => "  • " + s.getName()).join("\n");
-    const resp = ui.alert(
-      "Initialize / Clear Project",
-      "This will delete the following sheets:\n" + sheetNames + "\n\nContinue?",
-      ui.ButtonSet.OK_CANCEL
-    );
-    if (resp !== ui.Button.OK) return;
+  // Check for existing data in Drive folders
+  const dataFolderPath = getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA");
+  let optionPricesCount = 0;
+  let portfolioCount = 0;
+
+  try {
+    let driveFolder = DriveApp.getRootFolder();
+    for (const part of dataFolderPath.split("/")) {
+      const it = driveFolder.getFoldersByName(part);
+      if (!it.hasNext()) break;
+      driveFolder = it.next();
+    }
+
+    // Check OptionPrices folder
+    const opIt = driveFolder.getFoldersByName("OptionPrices");
+    if (opIt.hasNext()) {
+      const opFolder = opIt.next();
+      const files = opFolder.getFilesByType(MimeType.CSV);
+      while (files.hasNext()) { files.next(); optionPricesCount++; }
+    }
+
+    // Check Etrade folder
+    const etIt = driveFolder.getFoldersByName("Etrade");
+    if (etIt.hasNext()) {
+      const etFolder = etIt.next();
+      const files = etFolder.getFilesByType(MimeType.CSV);
+      while (files.hasNext()) { files.next(); portfolioCount++; }
+    }
+  } catch (e) {
+    Logger.log("Error checking for existing data: " + e.message);
   }
 
-  // Delete all sheets except README and Config
+  // Show dialog with options
+  const html = HtmlService.createHtmlOutputFromFile("InitializeDialog")
+    .setWidth(450)
+    .setHeight(400);
+
+  // Inject the initialization data
+  const initData = JSON.stringify({
+    sheetsToDelete: sheetsToDelete,
+    optionPricesCount: optionPricesCount,
+    portfolioCount: portfolioCount
+  });
+
+  const content = html.getContent().replace(
+    '</body>',
+    `<script>init(${initData});</script></body>`
+  );
+
+  const output = HtmlService.createHtmlOutput(content)
+    .setWidth(450)
+    .setHeight(400);
+
+  SpreadsheetApp.getUi().showModalDialog(output, "Initialize / Clear Project");
+}
+
+/**
+ * Completes the initialization process (called from dialog).
+ * @param {boolean} loadOptionPrices - Whether to load option prices after init
+ * @param {boolean} loadPortfolio - Whether to load portfolio after init
+ * @returns {string} Status message
+ */
+function completeInitialization(loadOptionPrices, loadPortfolio) {
+  const ss = SpreadsheetApp.getActive();
+
+  // Find and delete sheets (everything except README and Config)
+  const keepSheets = ["README", "Config"];
+  const sheetsToDelete = ss.getSheets().filter(s => !keepSheets.includes(s.getName()));
   for (const sheet of sheetsToDelete) {
     ss.deleteSheet(sheet);
   }
 
-  // Remove any existing named ranges (except Config-related)
+  // Remove any existing named ranges
   for (const nr of ss.getNamedRanges()) {
     nr.remove();
   }
-
-  // Create OptionPricesUploaded sheet (will be populated by refreshOptionPrices)
-  const pricesSheet = ss.insertSheet("OptionPricesUploaded");
 
   // Create README sheet
   let readmeSheet = ss.getSheetByName("README");
@@ -76,32 +128,33 @@ function initializeProject() {
 
   const readmeRows = [
     ["SpreadFinder - Find and Analyze Bull Call Spread Opportunities"],
-    ["SpreadFinder scans option prices to find attractive bull call spread opportunities. It ranks spreads by expected ROI using a probability-of-touch model, filters by liquidity, and displays results in interactive charts. This spreadsheet includes real TSLA option prices for June 2028 and December 2028 LEAP expirations."],
+    ["SpreadFinder scans option prices to find attractive bull call spread opportunities. It ranks spreads by expected ROI using a probability-of-touch model, filters by liquidity, and displays results in interactive charts."],
     [""],
     ["--- Quick Start ---"],
-    ["  1. Run OptionTools > Initialize / Clear Project to set up sheets and load TSLA option data"],
-    ["  2. Run OptionTools > Run SpreadFinder to analyze spreads (results on TSLASpreads sheet)"],
-    ["  3. Run OptionTools > View SpreadFinder Graphs for visual analysis of Delta vs ROI and Strike vs ROI"],
+    ["  1. Download option prices from barchart.com: Options page > Select expiration > Stacked view > Download CSV"],
+    ["  2. Run OptionTools > SpreadFinder > Upload & Refresh and select your CSV file(s)"],
+    ["  3. Run OptionTools > SpreadFinder > Run SpreadFinder to analyze spreads"],
+    ["  4. Run OptionTools > SpreadFinder > View Graphs for visual analysis"],
+    [""],
     ["--- SpreadFinder Configuration ---"],
-    ["The SpreadFinderConfig sheet controls the analysis parameters: symbol filter, min/max spread width, min open interest, min volume, max debit, min ROI, strike range, and expiration range. Adjust these to narrow down the results to spreads that match your criteria. After changing settings, re-run OptionTools > Run SpreadFinder to see updated results."],
-    ["--- Adding More Option Prices ---"],
-    ["Download option prices from barchart.com: navigate to the options page for your symbol (e.g. barchart.com/stocks/quotes/TSLA/options), select an expiration, choose \"Stacked\" view, and download the CSV. Save it to Google Drive under SpreadFinder/DATA/OptionPrices/ with the filename format: <symbol>-options-exp-YYYY-MM-DD-....csv. Then run OptionTools > Refresh Option Prices to load the data, and re-run OptionTools > Run SpreadFinder to analyze the new prices."],
+    ["The SpreadFinderConfig sheet controls the analysis parameters: symbol filter, min/max spread width, min open interest, min volume, max debit, min ROI, strike range, and expiration range. Adjust these to narrow down the results."],
     [""],
-    ["--- Portfolio Modeling (Additional Feature) ---"],
-    ["Track your actual positions and visualize profit/loss scenarios. Bull-Call-Spreads, Long Calls and other strategies will be automatically detected and analyzed."],
+    ["--- Portfolio Modeling ---"],
+    ["Track your actual positions and visualize profit/loss scenarios. Bull-Call-Spreads, Long Calls, and other strategies will be automatically detected and analyzed."],
     [""],
-    ["To try it with sample data:"],
-    ["  • Run OptionTools > Load Sample Portfolio"],
-    ["  • Run OptionTools > View Portfolio Performance Graphs"],
+    ["To try with sample data:"],
+    ["  1. Run OptionTools > Portfolio > Load Sample Portfolio"],
+    ["  2. Run OptionTools > Portfolio > View Performance Graphs"],
     [""],
-    ["To import your real E*Trade positions:"],
-    ["  1. Download your Portfolio CSV and Transaction History CSV from E*Trade"],
-    ["  2. Save both files to Google Drive under SpreadFinder/DATA/Etrade/"],
-    ["  3. Run OptionTools > Import Portfolio from E*Trade"],
-    ["  4. Run OptionTools > View Portfolio Performance Graphs"],
+    ["To import your real positions:"],
+    ["  1. Download Portfolio CSV and Transaction History CSV from your brokerage"],
+    ["  2. Run OptionTools > Portfolio > Upload & Rebuild"],
+    ["  3. Select your files and click Upload"],
+    ["  4. Run OptionTools > Portfolio > View Performance Graphs"],
     [""],
     ["--- Apps Script Library ---"],
-    ["Available as a Google Apps Script library named SpreadFinder. Script ID: 1qvAlZ99zluKSr3ws4NsxH8xXo1FncbWzu6Yq6raBumHdCLpLDaKveM0T. Source: github.com/markriggins/OptionUtils"],
+    ["Available as a Google Apps Script library. Script ID: 1qvAlZ99zluKSr3ws4NsxH8xXo1FncbWzu6Yq6raBumHdCLpLDaKveM0T"],
+    ["Source: github.com/markriggins/OptionUtils"],
   ];
 
   readmeSheet.getRange(1, 1, readmeRows.length, 1).setValues(readmeRows);
@@ -139,44 +192,49 @@ function initializeProject() {
   configSheet.getRange(2, 1, 1, 2).setValues([["DataFolder", "SpreadFinder/DATA"]]);
   configSheet.autoResizeColumns(1, 2);
 
-  // ---- Create Google Drive folders and sample files from GitHub ----
+  // ---- Create Google Drive folder structure ----
   const dataFolderPath = getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA");
   try {
     let driveFolder = DriveApp.getRootFolder();
     for (const part of dataFolderPath.split("/")) {
       driveFolder = getOrCreateFolder_(driveFolder, part);
     }
-    const etradeFolder = getOrCreateFolder_(driveFolder, "Etrade");
-    const optionPricesFolder = getOrCreateFolder_(driveFolder, "OptionPrices");
-
-    const sampleFiles = [
-      { folder: etradeFolder, name: "PortfolioDownload-sample.csv", path: "DATA/Etrade/PortfolioDownload-sample.csv" },
-      { folder: etradeFolder, name: "DownloadTxnHistory-sample.csv", path: "DATA/Etrade/DownloadTxnHistory-sample.csv" },
-      { folder: optionPricesFolder, name: "tsla-options-exp-2028-06-16-monthly-show-all-stacked-02-04-2026.csv", path: "DATA/OptionPrices/tsla-options-exp-2028-06-16-monthly-show-all-stacked-02-04-2026.csv" },
-      { folder: optionPricesFolder, name: "tsla-options-exp-2028-12-15-monthly-show-all-stacked-02-04-2026.csv", path: "DATA/OptionPrices/tsla-options-exp-2028-12-15-monthly-show-all-stacked-02-04-2026.csv" },
-    ];
-
-    for (const sf of sampleFiles) {
-      if (!findFileByName_(sf.folder, sf.name)) {
-        const csv = fetchGitHubFile_(sf.path);
-        if (csv) sf.folder.createFile(sf.name, csv, MimeType.CSV);
-      }
-    }
+    getOrCreateFolder_(driveFolder, "Etrade");
+    getOrCreateFolder_(driveFolder, "OptionPrices");
   } catch (e) {
-    Logger.log("Drive sample file setup skipped: " + e.message);
-  }
-
-  // Load option prices from the downloaded CSV files
-  try {
-    refreshOptionPrices();
-  } catch (e) {
-    Logger.log("Option price refresh skipped: " + e.message);
+    Logger.log("Drive folder setup skipped: " + e.message);
   }
 
   // Activate the README sheet
   ss.setActiveSheet(readmeSheet);
 
-  ui.alert("Project initialized with real TSLA option prices for June 2028 and December 2028 LEAPs.\n\nTry it now:\n  OptionTools > Run SpreadFinder\n  OptionTools > View SpreadFinder Graphs\n\nTo track your own positions:\n  OptionTools > Import Portfolio from E*Trade\n  OptionTools > Load Sample Portfolio");
+  // Load existing data if requested
+  const loaded = [];
+
+  if (loadOptionPrices) {
+    try {
+      refreshOptionPrices();
+      loaded.push("Option Prices");
+    } catch (e) {
+      Logger.log("Error loading option prices: " + e.message);
+    }
+  }
+
+  if (loadPortfolio) {
+    try {
+      rebuildPortfolio();
+      loaded.push("Portfolio");
+    } catch (e) {
+      Logger.log("Error loading portfolio: " + e.message);
+    }
+  }
+
+  // Return status message
+  if (loaded.length > 0) {
+    return "Project initialized. Loaded: " + loaded.join(", ");
+  } else {
+    return "Project initialized.\n\nTo get started, run:\n  OptionTools > SpreadFinder > Upload & Refresh";
+  }
 }
 
 /**
@@ -247,7 +305,7 @@ function loadSamplePortfolio() {
     ss.setActiveSheet(portfolioSheet);
   }
 
-  ui.alert("Sample portfolio loaded with multiple TSLA positions.\n\nTry:\n  OptionTools > View Portfolio Performance Graphs\n\nTo import your real positions:\n  OptionTools > Import Portfolio from E*Trade");
+  ui.alert("Sample portfolio loaded with multiple TSLA positions.\n\nTry:\n  OptionTools > Portfolio > View Performance Graphs\n\nTo import your real positions:\n  OptionTools > Portfolio > Upload & Rebuild");
 }
 
 /**

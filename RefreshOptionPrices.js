@@ -148,7 +148,51 @@ function refreshOptionPrices() {
     summary += `  • ${f.symbol} ${f.expiration} (uploaded ${uploadDate})\n`;
   }
 
-  ui.alert("Option Prices Refreshed", summary, ui.ButtonSet.OK);
+  // Check if Portfolio sheet exists
+  const hasPortfolio = !!ss.getSheetByName("Portfolio");
+
+  // Show completion dialog with option to refresh Portfolio
+  const html = HtmlService.createHtmlOutputFromFile("RefreshCompleteDialog")
+    .setWidth(450)
+    .setHeight(350);
+
+  const initData = JSON.stringify({
+    summary: summary,
+    hasPortfolio: hasPortfolio
+  });
+
+  const content = html.getContent().replace(
+    '</body>',
+    `<script>init(${initData});</script></body>`
+  );
+
+  const output = HtmlService.createHtmlOutput(content)
+    .setWidth(450)
+    .setHeight(350);
+
+  ui.showModalDialog(output, "Option Prices");
+}
+
+/**
+ * Forces Portfolio sheet to recalculate custom functions.
+ * Called from dialog after refreshing option prices.
+ * @returns {string} Status message
+ */
+function refreshPortfolioPrices() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const portfolioSheet = ss.getSheetByName("Portfolio");
+
+  if (!portfolioSheet) {
+    return "No Portfolio sheet found.";
+  }
+
+  // Insert and delete a column after col 1 to force formula recalculation
+  portfolioSheet.insertColumnAfter(1);
+  SpreadsheetApp.flush();
+  portfolioSheet.deleteColumn(2);
+  SpreadsheetApp.flush();
+
+  return "Portfolio formulas refreshed with new option prices.";
 }
 
 /**

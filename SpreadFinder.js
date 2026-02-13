@@ -324,7 +324,7 @@ function loadOptionData_(ss) {
 
     let exp = row[idx.expiration];
     if (exp instanceof Date) {
-      exp = Utilities.formatDate(exp, Session.getScriptTimeZone(), "yyyy-MM-dd");
+      exp = `${exp.getMonth() + 1}/${exp.getDate()}/${exp.getFullYear()}`;
     } else {
       exp = (exp || "").toString().trim();
     }
@@ -547,11 +547,11 @@ function loadHeldPositions_(ss) {
           if (idxExp >= 0) {
             let rawExp = rows[r][idxExp];
             if (rawExp instanceof Date) {
-              lastExp = Utilities.formatDate(rawExp, Session.getScriptTimeZone(), "yyyy-MM-dd");
+              lastExp = `${rawExp.getMonth() + 1}/${rawExp.getDate()}/${rawExp.getFullYear()}`;
             } else if (rawExp) {
               const parsed = new Date(rawExp);
               if (!isNaN(parsed.getTime())) {
-                lastExp = Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
+                lastExp = `${parsed.getMonth() + 1}/${parsed.getDate()}/${parsed.getFullYear()}`;
               }
             }
           }
@@ -618,11 +618,11 @@ function loadHeldPositions_(ss) {
 
     let rawExp = expirationCol >= 0 ? data[r][expirationCol] : "";
     if (rawExp instanceof Date) {
-      lastExp = Utilities.formatDate(rawExp, Session.getScriptTimeZone(), "yyyy-MM-dd");
+      lastExp = `${rawExp.getMonth() + 1}/${rawExp.getDate()}/${rawExp.getFullYear()}`;
     } else if (rawExp) {
       const parsed = new Date(rawExp);
       if (!isNaN(parsed.getTime())) {
-        lastExp = Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
+        lastExp = `${parsed.getMonth() + 1}/${parsed.getDate()}/${parsed.getFullYear()}`;
       }
     }
 
