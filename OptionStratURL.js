@@ -114,13 +114,11 @@ function buildCustomOptionStratUrl(symbol, legs) {
   const legStrings = legs.map(leg => {
     if (!leg.strike || !leg.type || !leg.qty) return null;
 
-    const sign = leg.qty < 0 ? "-" : "";
     const dateCode = formatDateCode(leg.expiration);
     const typeChar = leg.type === "Call" ? "C" : "P";
-    const absQty = Math.abs(leg.qty);
-    const qtyStr = absQty > 1 ? `x${absQty}` : "";
+    const qtyStr = leg.qty === 1 ? "" : `x${leg.qty}`;
     const priceStr = leg.price && Number.isFinite(leg.price) ? `@${leg.price}` : "";
-    return `${sign}.${symbol}${dateCode}${typeChar}${leg.strike}${qtyStr}${priceStr}`;
+    return `.${symbol}${dateCode}${typeChar}${leg.strike}${qtyStr}${priceStr}`;
   }).filter(s => s);
 
   if (legStrings.length === 0) return null;
@@ -212,16 +210,15 @@ function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expira
     );
   }
 
-  // Build leg strings: [sign].SYMBOL[YYMMDD][C/P][STRIKE][xQTY][@PRICE]
-  // Format: .TSLA270617C740x2@37.175 or -.TSLA270617C900@24.075
+  // Build leg strings: .SYMBOL[YYMMDD][C/P][STRIKE][xQTY][@PRICE]
+  // Format: .TSLA270617C740x2@37.175 or .TSLA270617C600x-2@55.11
+  // Use signed qty (x-2 for short 2, x2 for long 2, omit for qty=1)
   const legStrings = legs.map(leg => {
-    const sign = leg.qty < 0 ? "-" : "";
     const dateCode = formatDateCode(leg.expiration);
     const typeChar = leg.type === "Call" ? "C" : "P";
-    const absQty = Math.abs(leg.qty);
-    const qtyStr = absQty > 1 ? `x${absQty}` : "";
+    const qtyStr = leg.qty === 1 ? "" : `x${leg.qty}`;
     const priceStr = leg.price && Number.isFinite(leg.price) ? `@${leg.price}` : "";
-    return `${sign}.${symbol}${dateCode}${typeChar}${leg.strike}${qtyStr}${priceStr}`;
+    return `.${symbol}${dateCode}${typeChar}${leg.strike}${qtyStr}${priceStr}`;
   });
 
   return `https://optionstrat.com/build/${strategy}/${symbol}/${legStrings.join(",")}`;

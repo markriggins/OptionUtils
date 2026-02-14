@@ -481,10 +481,10 @@ function computePortfolioGraphData_(ss, symbol) {
           valueExp = intrinsic * 100 * leg.qty;
           valueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call") * 100 * leg.qty;
         } else {
-          // Short call: P&L = premium received - intrinsic at expiration
-          valueExp = (leg.price - intrinsic) * 100 * leg.qty;
+          // Short call: value = -intrinsic (liability)
+          valueExp = -intrinsic * 100 * leg.qty;
           const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call");
-          valueCurrent = (leg.price - optionValue) * 100 * leg.qty;
+          valueCurrent = -optionValue * 100 * leg.qty;
         }
       } else {
         // Put option: intrinsic = max(0, strike - S) at expiration
@@ -494,10 +494,10 @@ function computePortfolioGraphData_(ss, symbol) {
           valueExp = intrinsic * 100 * leg.qty;
           valueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put") * 100 * leg.qty;
         } else {
-          // Short put: P&L = premium received - intrinsic at expiration
-          valueExp = (leg.price - intrinsic) * 100 * leg.qty;
+          // Short put: value = -intrinsic (liability)
+          valueExp = -intrinsic * 100 * leg.qty;
           const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put");
-          valueCurrent = (leg.price - optionValue) * 100 * leg.qty;
+          valueCurrent = -optionValue * 100 * leg.qty;
         }
       }
 
@@ -523,9 +523,10 @@ function computePortfolioGraphData_(ss, symbol) {
             legValueExp = intrinsic * 100 * leg.qty;
             legValueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call") * 100 * leg.qty;
           } else {
-            legValueExp = (leg.price - intrinsic) * 100 * leg.qty;
+            // Short: VALUE = -intrinsic (liability)
+            legValueExp = -intrinsic * 100 * leg.qty;
             const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call");
-            legValueCurrent = (leg.price - optionValue) * 100 * leg.qty;
+            legValueCurrent = -optionValue * 100 * leg.qty;
           }
         } else {
           const intrinsic = Math.max(0, leg.strike - S);
@@ -533,9 +534,10 @@ function computePortfolioGraphData_(ss, symbol) {
             legValueExp = intrinsic * 100 * leg.qty;
             legValueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put") * 100 * leg.qty;
           } else {
-            legValueExp = (leg.price - intrinsic) * 100 * leg.qty;
+            // Short: VALUE = -intrinsic (liability)
+            legValueExp = -intrinsic * 100 * leg.qty;
             const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put");
-            legValueCurrent = (leg.price - optionValue) * 100 * leg.qty;
+            legValueCurrent = -optionValue * 100 * leg.qty;
           }
         }
         sumExp += legValueExp;
