@@ -289,7 +289,8 @@ function detectStrategy(strikeRange, typeRange, qtyRange, _labels) {
 /**
  * Detects position type from an array of leg objects.
  * Each leg: { strike, type, qty }
- * Returns: "stock", "bull-call-spread", "bull-put-spread", "iron-condor", or null.
+ * Returns: "stock", "bull-call-spread", "bull-put-spread", "iron-condor", "custom", or null.
+ * Multi-leg positions with imbalanced quantities return "custom".
  */
 function detectPositionType_(legs) {
   if (!legs || legs.length === 0) return null;
@@ -304,19 +305,21 @@ function detectPositionType_(legs) {
     return null;
   }
 
+  // Multi-leg positions: check for known patterns with balanced quantities
   if (legs.length === 2) {
     const [a, b] = legs;
-    // Both must have types
-    if (!a.type || !b.type) return null;
-    if (a.type === "Stock" || b.type === "Stock") return null;
+    // Both must have option types
+    if (!a.type || !b.type) return "custom";
+    if (a.type === "Stock" || b.type === "Stock") return "custom";
 
     const sameType = a.type === b.type;
     const bothLong = a.qty > 0 && b.qty > 0;
     const bothShort = a.qty < 0 && b.qty < 0;
     const oppositeSigns = (a.qty > 0 && b.qty < 0) || (a.qty < 0 && b.qty > 0);
+    const equalQty = Math.abs(a.qty) === Math.abs(b.qty);
 
-    // Straddle/strangle: call + put, same direction
-    if (!sameType && (bothLong || bothShort)) {
+    // Straddle/strangle: call + put, same direction, equal qty
+    if (!sameType && (bothLong || bothShort) && equalQty) {
       const sameStrike = a.strike === b.strike;
       if (bothLong) {
         return sameStrike ? "long-straddle" : "long-strangle";
@@ -325,19 +328,25 @@ function detectPositionType_(legs) {
       }
     }
 
-    // Vertical spreads: same type, opposite signs
-    if (sameType && oppositeSigns) {
+    // Vertical spreads: same type, opposite signs, AND equal absolute quantities
+    if (sameType && oppositeSigns && equalQty) {
       if (a.type === "Call") return "bull-call-spread";
       if (a.type === "Put") return "bull-put-spread";
     }
 
-    return null;
+    // 2 option legs that don't match known patterns = custom
+    return "custom";
   }
 
   if (legs.length === 4) {
     const calls = legs.filter(l => l.type === "Call");
     const puts = legs.filter(l => l.type === "Put");
     if (calls.length === 2 && puts.length === 2) {
+      // All legs must have equal absolute quantities for balanced iron condor/butterfly
+      const absQtys = legs.map(l => Math.abs(l.qty));
+      const allEqualQty = absQtys.every(q => q === absQtys[0]);
+      if (!allEqualQty) return "custom"; // Unequal qty = custom
+
       // Distinguish iron-butterfly vs iron-condor
       // Iron butterfly: short put and short call have the same strike
       const shortCall = calls.find(l => l.qty < 0);
@@ -347,8 +356,12 @@ function detectPositionType_(legs) {
       }
       return "iron-condor";
     }
-    return null;
+    // 4 legs that don't match known patterns = custom
+    return "custom";
   }
+
+  // 3+ legs that don't match known patterns = custom
+  if (legs.length >= 2) return "custom";
 
   return null;
 }
@@ -615,8 +628,8 @@ function parsePositionsForSymbol_(rows, symbol) {
       } else if (posType === "short-put") {
         result.shortPuts.push(optionPos);
       }
-    } else if (posType === null && legs.length > 0) {
-      // Custom multi-leg position that doesn't match known strategies
+    } else if (posType === "custom") {
+      // Custom multi-leg position (imbalanced qty or unrecognized pattern)
       // Build label: user description, or "max(qty) - expiration strike1/strike2/..."
       const maxQty = Math.max(...legs.map(l => Math.abs(l.qty)));
       const expLeg = legs.find(l => l.expiration);
@@ -854,8 +867,25 @@ function test_detectPositionType_spreads() {
       { strike: 200, type: "Call", qty: 5 },
       { strike: 250, type: "Call", qty: 5 },
     ]),
-    null,
-    "same sign = null"
+    "custom",
+    "same sign = custom"
+  );
+  // Ratio spreads (unequal quantities) should be detected as custom
+  assertEqual(
+    detectPositionType_([
+      { strike: 740, type: "Call", qty: 2 },
+      { strike: 900, type: "Call", qty: -1 },
+    ]),
+    "custom",
+    "unequal qty = custom (ratio spread)"
+  );
+  assertEqual(
+    detectPositionType_([
+      { strike: 200, type: "Put", qty: 3 },
+      { strike: 250, type: "Put", qty: -1 },
+    ]),
+    "custom",
+    "unequal qty puts = custom (ratio spread)"
   );
   Logger.log("All detectPositionType spread tests passed");
 }
@@ -869,7 +899,18 @@ function test_detectPositionType_ironCondor() {
       { strike: 450, type: "Call", qty: 3 },
     ]),
     "iron-condor",
-    "IC: 2 puts + 2 calls"
+    "IC: 2 puts + 2 calls balanced"
+  );
+  // Imbalanced iron condor = custom
+  assertEqual(
+    detectPositionType_([
+      { strike: 200, type: "Put", qty: 2 },
+      { strike: 250, type: "Put", qty: -3 },
+      { strike: 400, type: "Call", qty: -3 },
+      { strike: 450, type: "Call", qty: 3 },
+    ]),
+    "custom",
+    "IC with imbalanced qty = custom"
   );
   Logger.log("All detectPositionType iron condor tests passed");
 }
