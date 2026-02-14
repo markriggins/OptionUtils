@@ -409,9 +409,10 @@ function parsePositionsForSymbol_(rows, symbol) {
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
 
-    // Carry-forward symbol
+    // Carry-forward symbol (skip summary rows)
     const rawSym = String(row[idxSym] ?? "").trim().toUpperCase();
-    if (rawSym) lastSym = rawSym;
+    const skipSymbols = new Set(["TOTAL", "REALIZED", "UNREALIZED", "CASH", "SUMMARY"]);
+    if (rawSym && !skipSymbols.has(rawSym)) lastSym = rawSym;
     if (lastSym !== symbol) continue;
 
     // Carry-forward group
@@ -486,7 +487,7 @@ function parsePositionsForSymbol_(rows, symbol) {
       if (!longLeg || !shortLeg) continue;
 
       const debit = longLeg.price - shortLeg.price;
-      let label = `${longLeg.strike}/${shortLeg.strike}`;
+      let label = `${longLeg.strike}/-${shortLeg.strike}`;
       if (longLeg.expiration) {
         const expLabel = formatExpirationLabel_(longLeg.expiration);
         if (expLabel) label = `${expLabel} ${label}`;
@@ -496,6 +497,8 @@ function parsePositionsForSymbol_(rows, symbol) {
         qty: Math.abs(longLeg.qty),
         kLong: longLeg.strike,
         kShort: shortLeg.strike,
+        priceLong: longLeg.price,
+        priceShort: shortLeg.price,
         debit,
         flavor: "CALL",
         label,
@@ -508,7 +511,7 @@ function parsePositionsForSymbol_(rows, symbol) {
       if (!longLeg || !shortLeg) continue;
 
       const debit = longLeg.price - shortLeg.price;
-      let label = `${longLeg.strike}/${shortLeg.strike}`;
+      let label = `${longLeg.strike}/-${shortLeg.strike}`;
       if (longLeg.expiration) {
         const expLabel = formatExpirationLabel_(longLeg.expiration);
         if (expLabel) label = `${expLabel} ${label}`;
@@ -518,6 +521,8 @@ function parsePositionsForSymbol_(rows, symbol) {
         qty: Math.abs(longLeg.qty),
         kLong: longLeg.strike,
         kShort: shortLeg.strike,
+        priceLong: longLeg.price,
+        priceShort: shortLeg.price,
         debit,
         flavor: "PUT",
         label,
@@ -537,7 +542,7 @@ function parsePositionsForSymbol_(rows, symbol) {
 
       if (longPut && shortPut) {
         const putDebit = longPut.price - shortPut.price;
-        let label = `IC ${longPut.strike}/${shortPut.strike}/${shortCall.strike}/${longCall.strike}`;
+        let label = `IC ${longPut.strike}/-${shortPut.strike}/-${shortCall.strike}/${longCall.strike}`;
         if (longPut.expiration) {
           const expLabel = formatExpirationLabel_(longPut.expiration);
           if (expLabel) label = `${expLabel} ${label}`;
@@ -546,6 +551,8 @@ function parsePositionsForSymbol_(rows, symbol) {
           qty: Math.abs(longPut.qty),
           kLong: longPut.strike,
           kShort: shortPut.strike,
+          priceLong: longPut.price,
+          priceShort: shortPut.price,
           debit: putDebit,
           flavor: "PUT",
           label: label + " (put)",
@@ -556,7 +563,7 @@ function parsePositionsForSymbol_(rows, symbol) {
 
       if (shortCall && longCall) {
         const callDebit = longCall.price - shortCall.price;
-        let label = `IC ${longPut.strike}/${shortPut.strike}/${shortCall.strike}/${longCall.strike}`;
+        let label = `IC ${longPut.strike}/-${shortPut.strike}/-${shortCall.strike}/${longCall.strike}`;
         if (shortCall.expiration) {
           const expLabel = formatExpirationLabel_(shortCall.expiration);
           if (expLabel) label = `${expLabel} ${label}`;
@@ -565,6 +572,8 @@ function parsePositionsForSymbol_(rows, symbol) {
           qty: Math.abs(shortCall.qty),
           kLong: shortCall.strike,
           kShort: longCall.strike,
+          priceLong: shortCall.price,
+          priceShort: longCall.price,
           debit: callDebit,
           flavor: "BEAR_CALL",
           label: label + " (call)",
@@ -578,7 +587,9 @@ function parsePositionsForSymbol_(rows, symbol) {
       const leg = legs[0];
       if (!leg || !Number.isFinite(leg.strike)) continue;
 
-      let label = `${leg.strike}`;
+      // Short positions show negative strike prefix
+      const isShort = posType === "short-call" || posType === "short-put";
+      let label = isShort ? `-${leg.strike}` : `${leg.strike}`;
       if (leg.expiration) {
         const expLabel = formatExpirationLabel_(leg.expiration);
         if (expLabel) label = `${expLabel} ${label}`;
@@ -617,8 +628,8 @@ function parsePositionsForSymbol_(rows, symbol) {
         .map(l => l.qty < 0 ? `-${l.strike}` : `${l.strike}`)
         .join('/');
 
-      // Label without qty prefix (qty added in graph): "Jun 27 500/-600/740/-900 custom"
-      // If user provides description, use that (e.g., "500/-600/740/-900 custom")
+      // Label: use Description from sheet, or auto-generate "Jun 27 500/-600/740/-900 custom"
+      // User can set Description with: =formatLegsDescription(strikeRange, qtyRange, "custom")
       let label = group.description;
       if (!label) {
         label = `${expLabel || '?'} ${strikes || '?'} custom`;

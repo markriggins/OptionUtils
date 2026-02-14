@@ -39,3 +39,40 @@ function coalesce(range) {
   }
   return "";
 }
+
+/**
+ * Formats option legs as a description string with negative prefixes for shorts.
+ * Example: =formatLegsDescription(D2:D5, E2:E5) → "500/-600/740/-900"
+ *
+ * @param {Range} strikeRange - Range containing strike prices
+ * @param {Range} qtyRange - Range containing quantities (negative = short)
+ * @param {string} [suffix] - Optional suffix to append (e.g., "custom")
+ * @return {string} Formatted description like "500/-600/740/-900 custom"
+ * @customfunction
+ */
+function formatLegsDescription(strikeRange, qtyRange, suffix) {
+  // Flatten inputs
+  const strikes = Array.isArray(strikeRange) ? strikeRange.flat() : [strikeRange];
+  const qtys = Array.isArray(qtyRange) ? qtyRange.flat() : [qtyRange];
+
+  // Build legs array with strike and qty
+  const legs = [];
+  const n = Math.min(strikes.length, qtys.length);
+  for (let i = 0; i < n; i++) {
+    const strike = parseFloat(strikes[i]);
+    const qty = parseFloat(qtys[i]);
+    if (Number.isFinite(strike) && Number.isFinite(qty) && qty !== 0) {
+      legs.push({ strike, qty });
+    }
+  }
+
+  if (legs.length === 0) return "";
+
+  // Sort by strike and format with negative prefix for shorts
+  const formatted = legs
+    .sort((a, b) => a.strike - b.strike)
+    .map(l => l.qty < 0 ? `-${l.strike}` : `${l.strike}`)
+    .join('/');
+
+  return suffix ? `${formatted} ${suffix}` : formatted;
+}

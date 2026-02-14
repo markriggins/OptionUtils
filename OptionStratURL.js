@@ -73,6 +73,62 @@ function testbuildOptionStratUrl () {
 }
 
 /**
+ * Builds an OptionStrat URL for a custom multi-leg position.
+ * Uses the /build/custom/ endpoint with full leg notation.
+ *
+ * @param {string} symbol - Ticker symbol (e.g., "TSLA")
+ * @param {Array<Object>} legs - Array of leg objects with:
+ *   - strike: number
+ *   - type: "Call" or "Put"
+ *   - qty: number (positive=long, negative=short)
+ *   - expiration: Date or string
+ *   - price: number (optional, entry price)
+ * @returns {string} OptionStrat URL
+ */
+function buildCustomOptionStratUrl(symbol, legs) {
+  if (!symbol || !legs || legs.length === 0) return null;
+
+  symbol = symbol.toString().trim().toUpperCase();
+
+  // Format date code (YYMMDD)
+  function formatDateCode(exp) {
+    let d = exp;
+    if (!(d instanceof Date)) {
+      // Try ISO format
+      const isoMatch = String(d).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (isoMatch) {
+        d = new Date(parseInt(isoMatch[1], 10), parseInt(isoMatch[2], 10) - 1, parseInt(isoMatch[3], 10), 12, 0, 0);
+      } else {
+        d = new Date(d);
+      }
+    }
+    if (isNaN(d.getTime())) return "000000";
+    return (
+      String(d.getFullYear() % 100).padStart(2, "0") +
+      String(d.getMonth() + 1).padStart(2, "0") +
+      String(d.getDate()).padStart(2, "0")
+    );
+  }
+
+  // Build leg strings: [sign].SYMBOL[YYMMDD][C/P][STRIKE][xQTY][@PRICE]
+  const legStrings = legs.map(leg => {
+    if (!leg.strike || !leg.type || !leg.qty) return null;
+
+    const sign = leg.qty < 0 ? "-" : "";
+    const dateCode = formatDateCode(leg.expiration);
+    const typeChar = leg.type === "Call" ? "C" : "P";
+    const absQty = Math.abs(leg.qty);
+    const qtyStr = absQty > 1 ? `x${absQty}` : "";
+    const priceStr = leg.price && Number.isFinite(leg.price) ? `@${leg.price}` : "";
+    return `${sign}.${symbol}${dateCode}${typeChar}${leg.strike}${qtyStr}${priceStr}`;
+  }).filter(s => s);
+
+  if (legStrings.length === 0) return null;
+
+  return `https://optionstrat.com/build/custom/${symbol}/${legStrings.join(",")}`;
+}
+
+/**
  * Builds an OptionStrat URL from multi-leg position data.
  *
  * @param {Range|string} symbolRange - Symbol or range to search upward for first non-blank
@@ -80,10 +136,11 @@ function testbuildOptionStratUrl () {
  * @param {Range} typeRange - Type column (Call/Put) for the group
  * @param {Range} expirationRange - Expiration column for the group
  * @param {Range} qtyRange - Qty column for the group (positive=long, negative=short)
+ * @param {Range} [priceRange] - Optional price column for the group
  * @return {string} OptionStrat URL
  * @customfunction
  */
-function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange) {
+function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange, priceRange) {
   // Find symbol (with upward lookup if range)
   let symbol = symbolRange;
   if (Array.isArray(symbolRange)) {
@@ -102,6 +159,7 @@ function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expira
   const types = Array.isArray(typeRange) ? typeRange.flat() : [typeRange];
   const expirations = Array.isArray(expirationRange) ? expirationRange.flat() : [expirationRange];
   const qtys = Array.isArray(qtyRange) ? qtyRange.flat() : [qtyRange];
+  const prices = priceRange ? (Array.isArray(priceRange) ? priceRange.flat() : [priceRange]) : [];
 
   // Build legs array
   const legs = [];
@@ -111,12 +169,13 @@ function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expira
     const type = parseOptionType_(types[i] ?? "");
     const qty = parseNumber_(qtys[i] ?? "");
     const exp = expirations[i];
+    const price = prices[i] != null ? parseNumber_(prices[i]) : null;
 
     if (!Number.isFinite(qty) || qty === 0) continue;
     if (!Number.isFinite(strike)) continue;
     if (!type || type === "Stock") continue;
 
-    legs.push({ strike, type, qty, expiration: exp });
+    legs.push({ strike, type, qty, expiration: exp, price });
   }
 
   if (legs.length === 0) return "#No valid option legs";
@@ -153,12 +212,16 @@ function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expira
     );
   }
 
-  // Build leg strings: [sign].SYMBOL[YYMMDD][C/P][STRIKE]
+  // Build leg strings: [sign].SYMBOL[YYMMDD][C/P][STRIKE][xQTY][@PRICE]
+  // Format: .TSLA270617C740x2@37.175 or -.TSLA270617C900@24.075
   const legStrings = legs.map(leg => {
     const sign = leg.qty < 0 ? "-" : "";
     const dateCode = formatDateCode(leg.expiration);
     const typeChar = leg.type === "Call" ? "C" : "P";
-    return `${sign}.${symbol}${dateCode}${typeChar}${leg.strike}`;
+    const absQty = Math.abs(leg.qty);
+    const qtyStr = absQty > 1 ? `x${absQty}` : "";
+    const priceStr = leg.price && Number.isFinite(leg.price) ? `@${leg.price}` : "";
+    return `${sign}.${symbol}${dateCode}${typeChar}${leg.strike}${qtyStr}${priceStr}`;
   });
 
   return `https://optionstrat.com/build/${strategy}/${symbol}/${legStrings.join(",")}`;

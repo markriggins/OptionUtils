@@ -1706,6 +1706,7 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
   // Column letters for formulas
   const colLetter = (idx) => String.fromCharCode(65 + idx);
   const symCol = idxSym >= 0 ? colLetter(idxSym) : "A";
+  const descCol = idxDescription >= 0 ? colLetter(idxDescription) : "C";
   const strikeCol = idxStrike >= 0 ? colLetter(idxStrike) : "D";
   const typeCol = idxType >= 0 ? colLetter(idxType) : "E";
   const expCol = idxExp >= 0 ? colLetter(idxExp) : "F";
@@ -1898,6 +1899,18 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
         }
       }
 
+      // Description formula (strikes with -prefix for shorts)
+      if (idxDescription >= 0) {
+        if (isStock) {
+          sheet.getRange(firstRow, startCol + idxDescription).setValue("Stock");
+        } else if (isCash) {
+          sheet.getRange(firstRow, startCol + idxDescription).setValue("Cash");
+        } else {
+          const formula = `=formatLegsDescription($${strikeCol}${firstRow}:$${strikeCol}${lastLegRow}, $${qtyCol}${firstRow}:$${qtyCol}${lastLegRow})`;
+          sheet.getRange(firstRow, startCol + idxDescription).setFormula(formula);
+        }
+      }
+
       // Investment formula (stocks and cash: no *100 multiplier)
       if (idxInvestment >= 0) {
         if (isCash) {
@@ -1952,7 +1965,7 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
 
       // Link formula: HYPERLINK with "OptionStrat" display text (skip for stocks and cash)
       if (idxLink >= 0 && !isStock && !isCash) {
-        const urlFormula = `buildOptionStratUrlFromLegs($${symCol}$1:$${symCol}${firstRow}, $${strikeCol}${firstRow}:$${strikeCol}${lastLegRow}, $${typeCol}${firstRow}:$${typeCol}${lastLegRow}, $${expCol}${firstRow}:$${expCol}${lastLegRow}, $${qtyCol}${firstRow}:$${qtyCol}${lastLegRow})`;
+        const urlFormula = `buildOptionStratUrlFromLegs($${symCol}$1:$${symCol}${firstRow}, $${strikeCol}${firstRow}:$${strikeCol}${lastLegRow}, $${typeCol}${firstRow}:$${typeCol}${lastLegRow}, $${expCol}${firstRow}:$${expCol}${lastLegRow}, $${qtyCol}${firstRow}:$${qtyCol}${lastLegRow}, $${priceCol}${firstRow}:$${priceCol}${lastLegRow})`;
         const formula = `=HYPERLINK(${urlFormula}, "OptionStrat")`;
         sheet.getRange(firstRow, startCol + idxLink).setFormula(formula);
       }

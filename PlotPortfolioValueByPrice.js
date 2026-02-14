@@ -365,25 +365,50 @@ function computePortfolioGraphData_(ss, symbol) {
   const spreadRoisCurrent = Array.from({ length: allPositions }, () => []);
 
   // Build OptionStrat URLs for spreads and single-leg options
+  // Use custom URL format to include qty
   const spreadUrls = [
     ...allSpreads.map(sp => {
       try {
-        const strikes = `${sp.kLong}/${sp.kShort}`;
-        const strategy = sp.flavor === "CALL" ? "bull-call-spread" :
-                         sp.flavor === "PUT" ? "bull-put-spread" : "bear-call-spread";
-        return buildOptionStratUrl(strikes, symbol, strategy, sp.expiration);
+        const optionType = sp.flavor === "PUT" ? "Put" : "Call";
+        const legs = [
+          { strike: sp.kLong, type: optionType, qty: sp.qty, expiration: sp.expiration, price: sp.priceLong },
+          { strike: sp.kShort, type: optionType, qty: -sp.qty, expiration: sp.expiration, price: sp.priceShort }
+        ];
+        return buildCustomOptionStratUrl(symbol, legs);
       } catch (e) {
         return null;
       }
     }),
     ...allSingleLegs.map(leg => {
       try {
-        return buildSingleLegOptionStratUrl_(symbol, leg.strike, leg.type, leg.expiration, leg.isLong);
+        const legs = [{
+          strike: leg.strike,
+          type: leg.type,
+          qty: leg.isLong ? leg.qty : -leg.qty,
+          expiration: leg.expiration,
+          price: leg.price
+        }];
+        return buildCustomOptionStratUrl(symbol, legs);
       } catch (e) {
         return null;
       }
     }),
-    ...customPositions.map(() => null) // Custom positions don't have OptionStrat URLs
+    ...customPositions.map(cp => {
+      try {
+        // Convert legs to format expected by buildCustomOptionStratUrl
+        // (signed qty: positive=long, negative=short)
+        const legs = cp.legs.map(l => ({
+          strike: l.strike,
+          type: l.type,
+          qty: l.isLong ? l.qty : -l.qty,
+          expiration: l.expiration,
+          price: l.price
+        }));
+        return buildCustomOptionStratUrl(cp.symbol, legs);
+      } catch (e) {
+        return null;
+      }
+    })
   ];
 
   for (let S = minPrice; S <= maxPrice + 1e-9; S += step) {

@@ -159,8 +159,8 @@ function detectStrategy(strikeRange, typeRange, qtyRange, _labels) {
  * Builds OptionStrat URL from leg ranges.
  * @customfunction
  */
-function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange) {
-  return SpreadFinder.buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange);
+function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange, priceRange) {
+  return SpreadFinder.buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange, priceRange);
 }
 
 /**
@@ -169,6 +169,13 @@ function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expira
  */
 function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
   return SpreadFinder.buildOptionStratUrl(strikes, ticker, strategy, expiration);
+}
+
+/**
+ * Builds OptionStrat URL for custom multi-leg positions.
+ */
+function buildCustomOptionStratUrl(symbol, legs) {
+  return SpreadFinder.buildCustomOptionStratUrl(symbol, legs);
 }
 
 /**
@@ -225,4 +232,12 @@ function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecu
  */
 function coalesce(range) {
   return SpreadFinder.coalesce(range);
+}
+
+/**
+ * Formats option legs as description with negative prefixes for shorts.
+ * @customfunction
+ */
+function formatLegsDescription(strikeRange, qtyRange, suffix) {
+  return SpreadFinder.formatLegsDescription(strikeRange, qtyRange, suffix);
 }
