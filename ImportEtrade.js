@@ -1900,8 +1900,10 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
             // Naked short — this is the first (only) row, needs symbol/group
             if (idxSym >= 0) row[idxSym] = spread.ticker;
             if (idxGroup >= 0) row[idxGroup] = nextGroup;
+            // Description only on first row (formula set later for multi-leg)
+            if (idxDescription >= 0) row[idxDescription] = spreadDescription;
           }
-          if (idxDescription >= 0) row[idxDescription] = spreadDescription;
+          // Leave description blank on second row of 2-leg spreads
           if (idxStrike >= 0) row[idxStrike] = spread.upperStrike;
           if (idxType >= 0) row[idxType] = spread.optionType;
           if (idxExp >= 0) row[idxExp] = normalizedExp;
