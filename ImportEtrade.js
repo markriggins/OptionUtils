@@ -392,6 +392,16 @@ function generateSpreadDescription_(spread) {
     return `${strikes} ${isButterfly ? "iron-butterfly" : "iron-condor"}`;
   }
 
+  // Custom multi-leg position (imbalanced qty or more than 2 strikes of same type)
+  if (spread.type === "custom" && spread.legs) {
+    // Format strikes with - prefix for shorts: 500/-600/740/-900
+    const formattedStrikes = spread.legs
+      .sort((a, b) => a.strike - b.strike)
+      .map(l => l.qty < 0 ? `-${l.strike}` : `${l.strike}`)
+      .join("/");
+    return `${formattedStrikes} custom`;
+  }
+
   // Straddle/strangle (2 legs: call + put)
   if (spread.legs && spread.legs.length === 2) {
     const strikes = spread.legs.map(l => l.strike).sort((a, b) => a - b);
@@ -1107,17 +1117,50 @@ function pairTransactionsIntoSpreads_(transactions) {
       }
     }
 
-    // Normal pairing: pair calls with calls, puts with puts
+    // Check for custom multi-leg positions:
+    // - More than 2 distinct strikes of same type, OR
+    // - Imbalanced quantities (total long != total short)
     for (const optionType of ["Call", "Put"]) {
       const legsOfType = txns.filter(t => t.optionType === optionType);
-      const longs = legsOfType.filter(t => t.qty > 0).sort((a, b) => a.strike - b.strike);
-      const shorts = legsOfType.filter(t => t.qty < 0).sort((a, b) => a.strike - b.strike);
+      if (legsOfType.length === 0) continue;
+
+      const longs = legsOfType.filter(t => t.qty > 0);
+      const shorts = legsOfType.filter(t => t.qty < 0);
+      const distinctStrikes = new Set(legsOfType.map(t => t.strike)).size;
+      const totalLongQty = longs.reduce((sum, t) => sum + t.qty, 0);
+      const totalShortQty = shorts.reduce((sum, t) => sum + Math.abs(t.qty), 0);
+      const isImbalanced = totalLongQty !== totalShortQty;
+      const isMultiLeg = distinctStrikes > 2;
+
+      if (isImbalanced || isMultiLeg) {
+        // Create a custom multi-leg position
+        const legs = legsOfType.map(t => ({
+          strike: t.strike,
+          optionType: t.optionType,
+          qty: t.qty,
+          price: t.price,
+        })).sort((a, b) => a.strike - b.strike);
+
+        spreads.push({
+          type: "custom",
+          ticker: legsOfType[0].ticker,
+          expiration: legsOfType[0].expiration,
+          qty: Math.max(totalLongQty, totalShortQty),
+          date: legsOfType[0].date,
+          legs: legs,
+        });
+        continue; // Skip normal pairing for this option type
+      }
+
+      // Normal pairing: pair calls with calls, puts with puts (balanced 2-leg spreads)
+      const longsToProcess = longs.map(t => ({ ...t })).sort((a, b) => a.strike - b.strike);
+      const shortsToProcess = shorts.map(t => ({ ...t })).sort((a, b) => a.strike - b.strike);
 
       // Pair by matching quantities
       let li = 0, si = 0;
-      while (li < longs.length && si < shorts.length) {
-        const long = longs[li];
-        const short = shorts[si];
+      while (li < longsToProcess.length && si < shortsToProcess.length) {
+        const long = longsToProcess[li];
+        const short = shortsToProcess[si];
 
         const pairQty = Math.min(long.qty, Math.abs(short.qty));
 
@@ -1141,8 +1184,8 @@ function pairTransactionsIntoSpreads_(transactions) {
       }
 
       // Handle unmatched legs (naked positions)
-      while (li < longs.length) {
-        const long = longs[li];
+      while (li < longsToProcess.length) {
+        const long = longsToProcess[li];
         if (long.qty > 0) {
           spreads.push({
             ticker: long.ticker,
@@ -1158,8 +1201,8 @@ function pairTransactionsIntoSpreads_(transactions) {
         }
         li++;
       }
-      while (si < shorts.length) {
-        const short = shorts[si];
+      while (si < shortsToProcess.length) {
+        const short = shortsToProcess[si];
         if (short.qty < 0) {
           spreads.push({
             ticker: short.ticker,
@@ -1707,13 +1750,14 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
   const colLetter = (idx) => String.fromCharCode(65 + idx);
   const symCol = idxSym >= 0 ? colLetter(idxSym) : "A";
   const descCol = idxDescription >= 0 ? colLetter(idxDescription) : "C";
-  const strikeCol = idxStrike >= 0 ? colLetter(idxStrike) : "D";
-  const typeCol = idxType >= 0 ? colLetter(idxType) : "E";
-  const expCol = idxExp >= 0 ? colLetter(idxExp) : "F";
-  const qtyCol = idxQty >= 0 ? colLetter(idxQty) : "G";
-  const priceCol = idxPrice >= 0 ? colLetter(idxPrice) : "H";
-  const recCloseCol = idxRecClose >= 0 ? colLetter(idxRecClose) : "J";
-  const closedCol = idxClosed >= 0 ? colLetter(idxClosed) : "K";
+  const stratCol = idxStrategy >= 0 ? colLetter(idxStrategy) : "D";
+  const strikeCol = idxStrike >= 0 ? colLetter(idxStrike) : "E";
+  const typeCol = idxType >= 0 ? colLetter(idxType) : "F";
+  const expCol = idxExp >= 0 ? colLetter(idxExp) : "G";
+  const qtyCol = idxQty >= 0 ? colLetter(idxQty) : "H";
+  const priceCol = idxPrice >= 0 ? colLetter(idxPrice) : "I";
+  const recCloseCol = idxRecClose >= 0 ? colLetter(idxRecClose) : "K";
+  const closedCol = idxClosed >= 0 ? colLetter(idxClosed) : "L";
 
   // Update existing rows
   for (const pos of updatedLegs) {
@@ -1805,17 +1849,18 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
         if (idxPrice >= 0) row[idxPrice] = roundTo_(spread.price, 2);
         rows.push(row);
       }
-      // Handle iron condor (4 legs) or straddle/strangle (2 legs)
+      // Handle iron condor (4 legs), straddle/strangle (2 legs), or custom multi-leg
       else if (spread.legs && spread.legs.length > 0) {
         for (let i = 0; i < spread.legs.length; i++) {
           const leg = spread.legs[i];
           const row = new Array(headers.length).fill("");
           if (i === 0) {
-            // First row gets symbol and group
+            // First row gets symbol, group, and description (formula set later)
             if (idxSym >= 0) row[idxSym] = spread.ticker;
             if (idxGroup >= 0) row[idxGroup] = nextGroup;
           }
-          if (idxDescription >= 0) row[idxDescription] = spreadDescription;
+          // Description only on first row (will be replaced by formula later)
+          // Leave other rows blank so they don't show stale data
           if (idxStrike >= 0) row[idxStrike] = leg.strike;
           if (idxType >= 0) row[idxType] = leg.optionType;
           if (idxExp >= 0) row[idxExp] = formatExpirationForKey_(spread.expiration);
@@ -1899,14 +1944,15 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
         }
       }
 
-      // Description formula (strikes with -prefix for shorts)
+      // Description formula (strikes with -prefix for shorts + strategy name)
       if (idxDescription >= 0) {
         if (isStock) {
           sheet.getRange(firstRow, startCol + idxDescription).setValue("Stock");
         } else if (isCash) {
           sheet.getRange(firstRow, startCol + idxDescription).setValue("Cash");
         } else {
-          const formula = `=formatLegsDescription($${strikeCol}${firstRow}:$${strikeCol}${lastLegRow}, $${qtyCol}${firstRow}:$${qtyCol}${lastLegRow})`;
+          // Include Strategy column as suffix: "500/-600 bull-call-spread"
+          const formula = `=formatLegsDescription($${strikeCol}${firstRow}:$${strikeCol}${lastLegRow}, $${qtyCol}${firstRow}:$${qtyCol}${lastLegRow}, $${stratCol}${firstRow})`;
           sheet.getRange(firstRow, startCol + idxDescription).setFormula(formula);
         }
       }
