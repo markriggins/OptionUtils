@@ -1,7 +1,9 @@
 /**
  * Configurable logging with levels and function filtering.
  *
- * Configuration via Script Properties:
+ * Configuration is per-document (each spreadsheet has its own settings).
+ *
+ * Configuration via Document Properties:
  *   logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" | "OFF" (default: "INFO")
  *   logMode: "blacklist" | "whitelist" (default: "blacklist")
  *   logFunctions: comma-separated function tags to filter (default: "")
@@ -33,7 +35,7 @@ const LogLevel = {
 function getLogConfig_() {
   if (getLogConfig_.cache) return getLogConfig_.cache;
 
-  const props = PropertiesService.getScriptProperties();
+  const props = PropertiesService.getDocumentProperties();
   const levelStr = (props.getProperty("logLevel") || "INFO").toUpperCase();
   const mode = (props.getProperty("logMode") || "blacklist").toLowerCase();
   const functionsStr = props.getProperty("logFunctions") || "";
@@ -134,7 +136,7 @@ const log = {
  * @param {string[]} [options.functions] - Array of function tags to filter
  */
 function configureLogging(options) {
-  const props = PropertiesService.getScriptProperties();
+  const props = PropertiesService.getDocumentProperties();
 
   if (options.level) {
     props.setProperty("logLevel", options.level.toUpperCase());
@@ -168,7 +170,7 @@ function showLogConfig() {
  * @param {...string} tags - Function tags to blacklist
  */
 function blacklistLogs(...tags) {
-  const props = PropertiesService.getScriptProperties();
+  const props = PropertiesService.getDocumentProperties();
   const existing = props.getProperty("logFunctions") || "";
   const existingSet = new Set(existing.split(",").map(s => s.trim()).filter(s => s));
 
@@ -186,7 +188,7 @@ function blacklistLogs(...tags) {
  * @param {...string} tags - Function tags to whitelist (only these will log)
  */
 function whitelistLogs(...tags) {
-  const props = PropertiesService.getScriptProperties();
+  const props = PropertiesService.getDocumentProperties();
 
   props.setProperty("logMode", "whitelist");
   props.setProperty("logFunctions", tags.join(","));
@@ -199,7 +201,7 @@ function whitelistLogs(...tags) {
  * Reset logging to defaults (INFO level, no filtering).
  */
 function resetLogConfig() {
-  const props = PropertiesService.getScriptProperties();
+  const props = PropertiesService.getDocumentProperties();
   props.deleteProperty("logLevel");
   props.deleteProperty("logMode");
   props.deleteProperty("logFunctions");
