@@ -8,6 +8,8 @@ TransactionDate,TransactionType,SecurityType,Symbol,Quantity,Amount,Price,Commis
 02/10/26,Sold Short,OPTN,TSLA Jun 17 '27 $600 Call,-2,11022.00,55.11,0,TSLA Jun 17 '27 $600 Call
 02/08/26,Bought To Open,OPTN,TSLA Jun 17 '27 $740 Call,2,-7170.00,35.85,0,TSLA Jun 17 '27 $740 Call
 02/08/26,Sold Short,OPTN,TSLA Jun 17 '27 $900 Call,-1,2294.00,22.94,0,TSLA Jun 17 '27 $900 Call
+02/07/26,Bought To Open,OPTN,TSLA Jun 17 '27 $300 Put,1,-8550.00,85.50,0,TSLA Jun 17 '27 $300 Put
+02/07/26,Sold Short,OPTN,TSLA Jun 17 '27 $400 Put,-1,12320.00,123.20,0,TSLA Jun 17 '27 $400 Put
 02/06/26,Sold Short,OPTN,TSLA Jun 17 '27 $500 Put,-1,14280.00,142.80,0,TSLA Jun 17 '27 $500 Put
 02/04/26,Sold Short,OPTN,TSLA Jun 17 '27 $500 Call,-1,7776.00,77.76,0,TSLA Jun 17 '27 $500 Call
 02/03/26,Bought To Open,OPTN,TSLA Jun 17 '27 $700 Put,1,-30412.00,304.12,0,TSLA Jun 17 '27 $700 Put
