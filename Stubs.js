@@ -241,3 +241,12 @@ function coalesce(range) {
 function formatLegsDescription(strikeRange, qtyRange, suffix) {
   return SpreadFinder.formatLegsDescription(strikeRange, qtyRange, suffix);
 }
+
+/**
+ * Formats descriptions for all position groups in one call.
+ * Place formula in first data row of Description column - it fills down automatically.
+ * @customfunction
+ */
+function formatAllDescriptions(groups, strikes, qtys, strategies) {
+  return SpreadFinder.formatAllDescriptions(groups, strikes, qtys, strategies);
+}
