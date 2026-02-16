@@ -488,10 +488,12 @@ function computePortfolioGraphData_(ss, symbol) {
           valueExp = intrinsic * 100 * leg.qty;
           valueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call") * 100 * leg.qty;
         } else {
-          // Short call: value = -intrinsic (liability)
-          valueExp = -intrinsic * 100 * leg.qty;
+          // Short call: value = credit - liability = premium - intrinsic
+          // At max profit (OTM): value = premium (credit kept)
+          // At max loss (ITM): value = premium - intrinsic (could be negative)
+          valueExp = (leg.price - intrinsic) * 100 * leg.qty;
           const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call");
-          valueCurrent = -optionValue * 100 * leg.qty;
+          valueCurrent = (leg.price - optionValue) * 100 * leg.qty;
         }
       } else {
         // Put option: intrinsic = max(0, strike - S) at expiration
@@ -501,10 +503,12 @@ function computePortfolioGraphData_(ss, symbol) {
           valueExp = intrinsic * 100 * leg.qty;
           valueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put") * 100 * leg.qty;
         } else {
-          // Short put: value = -intrinsic (liability)
-          valueExp = -intrinsic * 100 * leg.qty;
+          // Short put: value = credit - liability = premium - intrinsic
+          // At max profit (OTM): value = premium (credit kept)
+          // At max loss (ITM): value = premium - intrinsic (could be negative)
+          valueExp = (leg.price - intrinsic) * 100 * leg.qty;
           const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put");
-          valueCurrent = -optionValue * 100 * leg.qty;
+          valueCurrent = (leg.price - optionValue) * 100 * leg.qty;
         }
       }
 
@@ -530,10 +534,10 @@ function computePortfolioGraphData_(ss, symbol) {
             legValueExp = intrinsic * 100 * leg.qty;
             legValueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call") * 100 * leg.qty;
           } else {
-            // Short: VALUE = -intrinsic (liability)
-            legValueExp = -intrinsic * 100 * leg.qty;
+            // Short: value = credit - liability = premium - intrinsic
+            legValueExp = (leg.price - intrinsic) * 100 * leg.qty;
             const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Call");
-            legValueCurrent = -optionValue * 100 * leg.qty;
+            legValueCurrent = (leg.price - optionValue) * 100 * leg.qty;
           }
         } else {
           const intrinsic = Math.max(0, leg.strike - S);
@@ -541,10 +545,10 @@ function computePortfolioGraphData_(ss, symbol) {
             legValueExp = intrinsic * 100 * leg.qty;
             legValueCurrent = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put") * 100 * leg.qty;
           } else {
-            // Short: VALUE = -intrinsic (liability)
-            legValueExp = -intrinsic * 100 * leg.qty;
+            // Short: value = credit - liability = premium - intrinsic
+            legValueExp = (leg.price - intrinsic) * 100 * leg.qty;
             const optionValue = estimateSingleOptionValueAtPrice_(S, leg.strike, currentMid, leg.dte || 365, currentPrice, "Put");
-            legValueCurrent = -optionValue * 100 * leg.qty;
+            legValueCurrent = (leg.price - optionValue) * 100 * leg.qty;
           }
         }
         sumExp += legValueExp;
@@ -578,17 +582,17 @@ function computePortfolioGraphData_(ss, symbol) {
 
       const inv = singleLegInvestments[i];
       // For long positions (inv > 0): ROI = (value - cost) / cost
-      // For short positions (inv < 0): ROI = (value + premium) / premium = (value - inv) / |inv|
-      //   value = -intrinsic, inv = -premium
-      //   At max profit (OTM): value=0, ROI = (0 - (-prem))/prem = 100%
-      //   At max loss: value=-X, ROI = (-X + prem)/prem = (prem-X)/prem
+      // For short positions (inv < 0): value already includes credit (value = P&L = premium - intrinsic)
+      //   ROI = value / |inv| = (premium - intrinsic) / premium
+      //   At max profit (OTM): ROI = premium / premium = 100%
+      //   At max loss: ROI = (premium - intrinsic) / premium (negative when intrinsic > premium)
       if (inv > 0) {
         spreadRoisExp[idx].push(roundTo_((singleLegExp[i] - inv) / inv, 4));
         spreadRoisCurrent[idx].push(roundTo_((singleLegCurrent[i] - inv) / inv, 4));
       } else if (inv < 0) {
-        // P&L = value + premium_received = value - inv (since inv is negative)
-        spreadRoisExp[idx].push(roundTo_((singleLegExp[i] - inv) / Math.abs(inv), 4));
-        spreadRoisCurrent[idx].push(roundTo_((singleLegCurrent[i] - inv) / Math.abs(inv), 4));
+        // Value already includes credit, so ROI = value / |inv|
+        spreadRoisExp[idx].push(roundTo_(singleLegExp[i] / Math.abs(inv), 4));
+        spreadRoisCurrent[idx].push(roundTo_(singleLegCurrent[i] / Math.abs(inv), 4));
       } else {
         spreadRoisExp[idx].push(0);
         spreadRoisCurrent[idx].push(0);
@@ -606,9 +610,9 @@ function computePortfolioGraphData_(ss, symbol) {
         spreadRoisExp[idx].push(roundTo_((customPosExp[i] - inv) / inv, 4));
         spreadRoisCurrent[idx].push(roundTo_((customPosCurrent[i] - inv) / inv, 4));
       } else if (inv < 0) {
-        // Net credit position: P&L = value + credit = value - inv
-        spreadRoisExp[idx].push(roundTo_((customPosExp[i] - inv) / Math.abs(inv), 4));
-        spreadRoisCurrent[idx].push(roundTo_((customPosCurrent[i] - inv) / Math.abs(inv), 4));
+        // Net credit position: value already includes credits, ROI = value / |inv|
+        spreadRoisExp[idx].push(roundTo_(customPosExp[i] / Math.abs(inv), 4));
+        spreadRoisCurrent[idx].push(roundTo_(customPosCurrent[i] / Math.abs(inv), 4));
       } else {
         spreadRoisExp[idx].push(0);
         spreadRoisCurrent[idx].push(0);
@@ -620,17 +624,19 @@ function computePortfolioGraphData_(ss, symbol) {
     let slIdx = 0;
     for (let g = 0; g < strategyGroups.length; g++) {
       let sumExp = 0, sumCurrent = 0;
-      let totalDebit = 0; // Track total debit for ROI calculation
+      let totalDebit = 0; // Track total debit for ROI calculation (spreads only)
+      const isCustomOrSingleLeg = strategyGroups[g].isCustom || strategyGroups[g].isSingleLeg;
+
       if (strategyGroups[g].isCustom) {
         const cpIdx = strategyGroups[g].customIndex;
         sumExp = customPosExp[cpIdx];
         sumCurrent = customPosCurrent[cpIdx];
-        totalDebit = customPositionInvestments[cpIdx]; // For custom, debit = investment
+        // Don't set totalDebit - value already includes credits for custom positions
       } else if (strategyGroups[g].isSingleLeg) {
         for (let i = 0; i < strategyGroups[g].spreads.length; i++) {
           sumExp += singleLegExp[slIdx];
           sumCurrent += singleLegCurrent[slIdx];
-          totalDebit += singleLegInvestments[slIdx]; // For single legs, debit = investment
+          // Don't add to totalDebit - value already includes credits for single legs
           slIdx++;
         }
       } else {
@@ -651,22 +657,36 @@ function computePortfolioGraphData_(ss, symbol) {
       strategyValuesCurrent[g].push(roundTo_(sumCurrent, 2));
 
       const inv = strategyInvestments[g];
-      // ROI = P&L / investment = (value - debit) / investment
-      // This works for all position types:
-      // - Debit spreads: debit > 0, inv = debit
-      // - Credit spreads: debit < 0 (credit), inv = collateral
-      // - Long options: debit = cost, inv = cost
-      // - Short options: debit < 0 (credit), inv = -credit, so formula becomes (value - debit) / |debit|
-      if (inv > 0) {
-        strategyRoisExp[g].push(roundTo_((sumExp - totalDebit) / inv, 4));
-        strategyRoisCurrent[g].push(roundTo_((sumCurrent - totalDebit) / inv, 4));
-      } else if (inv < 0) {
-        // Net credit position: P&L = value - debit = value + credit
-        strategyRoisExp[g].push(roundTo_((sumExp - totalDebit) / Math.abs(inv), 4));
-        strategyRoisCurrent[g].push(roundTo_((sumCurrent - totalDebit) / Math.abs(inv), 4));
+
+      if (isCustomOrSingleLeg) {
+        // For single legs and custom positions, value already includes credits
+        // ROI = value / |inv| (long: (value - cost)/cost, short: value/credit)
+        if (inv > 0) {
+          // Long position: value is intrinsic, need to subtract cost
+          strategyRoisExp[g].push(roundTo_((sumExp - inv) / inv, 4));
+          strategyRoisCurrent[g].push(roundTo_((sumCurrent - inv) / inv, 4));
+        } else if (inv < 0) {
+          // Short position: value already includes credit
+          strategyRoisExp[g].push(roundTo_(sumExp / Math.abs(inv), 4));
+          strategyRoisCurrent[g].push(roundTo_(sumCurrent / Math.abs(inv), 4));
+        } else {
+          strategyRoisExp[g].push(0);
+          strategyRoisCurrent[g].push(0);
+        }
       } else {
-        strategyRoisExp[g].push(0);
-        strategyRoisCurrent[g].push(0);
+        // For spreads, value is just intrinsic, need to account for debit/credit
+        // ROI = (value - debit) / investment
+        if (inv > 0) {
+          strategyRoisExp[g].push(roundTo_((sumExp - totalDebit) / inv, 4));
+          strategyRoisCurrent[g].push(roundTo_((sumCurrent - totalDebit) / inv, 4));
+        } else if (inv < 0) {
+          // Credit spread: P&L = value + credit = value - debit
+          strategyRoisExp[g].push(roundTo_((sumExp - totalDebit) / Math.abs(inv), 4));
+          strategyRoisCurrent[g].push(roundTo_((sumCurrent - totalDebit) / Math.abs(inv), 4));
+        } else {
+          strategyRoisExp[g].push(0);
+          strategyRoisCurrent[g].push(0);
+        }
       }
     }
 
