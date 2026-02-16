@@ -32,7 +32,7 @@
 var selectedSymbolForGraph_ = null;
 
 function PlotPortfolioValueByPrice() {
-  Logger.log("PlotPortfolioValueByPrice Started");
+  log.info("plotPerformance", "PlotPortfolioValueByPrice Started");
 
   const ss = SpreadsheetApp.getActive();
 
@@ -94,22 +94,22 @@ function plotSelectedSymbols(symbols) {
  */
 function getPortfolioGraphData() {
   try {
-    Logger.log("getPortfolioGraphData: Starting...");
+    log.debug("getPortfolioGraphData", "Starting...");
     const ss = SpreadsheetApp.getActive();
     const props = PropertiesService.getDocumentProperties();
     const symbol = props.getProperty("portfolioGraphSymbol") || "";
 
-    Logger.log("getPortfolioGraphData: symbol = " + symbol);
+    log.debug("getPortfolioGraphData", "symbol = " + symbol);
 
     if (!symbol) {
       throw new Error("No symbol selected for portfolio graphs");
     }
 
     const result = computePortfolioGraphData_(ss, symbol);
-    Logger.log("getPortfolioGraphData: Computed data, prices count = " + (result.prices ? result.prices.length : 0));
+    log.debug("getPortfolioGraphData", "Computed data, prices count = " + (result.prices ? result.prices.length : 0));
     return result;
   } catch (e) {
-    Logger.log("getPortfolioGraphData ERROR: " + e.message + "\n" + e.stack);
+    log.error("getPortfolioGraphData", e.message + "\n" + e.stack);
     throw e;
   }
 }
@@ -168,7 +168,7 @@ function computePortfolioGraphData_(ss, symbol) {
       }
     }
     if (!sp.dte) sp.dte = 365; // Default fallback
-    Logger.log(`Spread ${sp.label}: expiration=${sp.expiration}, dte=${sp.dte}`);
+    log.debug("positions", `Spread ${sp.label}: expiration=${sp.expiration}, dte=${sp.dte}`);
   }
   for (const leg of allSingleLegs) {
     if (leg.expiration) {
@@ -182,7 +182,7 @@ function computePortfolioGraphData_(ss, symbol) {
       }
     }
     if (!leg.dte) leg.dte = 365;
-    Logger.log(`Single leg ${leg.label}: expiration=${leg.expiration}, dte=${leg.dte}`);
+    log.debug("positions", `Single leg ${leg.label}: expiration=${leg.expiration}, dte=${leg.dte}`);
   }
   // Calculate DTE for custom position legs
   for (const leg of allCustomLegs) {
@@ -205,14 +205,14 @@ function computePortfolioGraphData_(ss, symbol) {
     const quotes = fetchSpreadQuotes_(symbol, sp.expiration, sp.kLong, sp.kShort, sp.flavor === "CALL" ? "Call" : "Put");
     // Log for debugging
     const spreadValue = quotes.longMid != null && quotes.shortMid != null ? quotes.longMid - quotes.shortMid : null;
-    Logger.log(`Spread ${sp.label}: longMid=${quotes.longMid}, shortMid=${quotes.shortMid}, spreadValue=${spreadValue}, debit=${sp.debit}`);
+    log.debug("quotes", `Spread ${sp.label}: longMid=${quotes.longMid}, shortMid=${quotes.shortMid}, spreadValue=${spreadValue}, debit=${sp.debit}`);
     return quotes;
   });
 
   // Pre-fetch quotes for single-leg options
   const singleLegQuotes = allSingleLegs.map(leg => {
     const quote = getOptionQuote_(symbol, leg.expiration, leg.strike, leg.type);
-    Logger.log(`Single leg ${leg.label}: mid=${quote?.mid}, price=${leg.price}`);
+    log.debug("quotes", `Single leg ${leg.label}: mid=${quote?.mid}, price=${leg.price}`);
     return quote;
   });
 
@@ -221,7 +221,7 @@ function computePortfolioGraphData_(ss, symbol) {
     const quote = getOptionQuote_(symbol, leg.expiration, leg.strike, leg.type);
     return quote;
   });
-  Logger.log(`Custom positions: ${customPositions.length}, total legs: ${allCustomLegs.length}`);
+  log.debug("positions", `Custom positions: ${customPositions.length}, total legs: ${allCustomLegs.length}`);
 
   // Compute smart price range
   const smart = computeSmartDefaults_(ss, symbol);
@@ -233,17 +233,17 @@ function computePortfolioGraphData_(ss, symbol) {
   const sharesCost = shares.reduce((sum, sh) => sum + sh.qty * sh.basis, 0);
   const totalShares = shares.reduce((sum, sh) => sum + sh.qty, 0);
 
-  // Summary logging for debugging
-  Logger.log(`=== Portfolio Summary for ${symbol} ===`);
-  Logger.log(`Shares: ${totalShares} shares, cost basis = $${sharesCost.toFixed(2)}`);
-  Logger.log(`Bull Call Spreads: ${bullCallSpreads.length} positions`);
-  Logger.log(`Bull Put Spreads: ${bullPutSpreads.length} positions`);
-  Logger.log(`Bear Call Spreads: ${bearCallSpreads.length} positions`);
-  Logger.log(`Long Calls: ${longCalls.length} positions`);
-  Logger.log(`Short Calls: ${shortCalls.length} positions`);
-  Logger.log(`Long Puts: ${longPuts.length} positions`);
-  Logger.log(`Short Puts: ${shortPuts.length} positions`);
-  Logger.log(`Cash: $${cash.toFixed(2)}`);
+  // Summary logging
+  log.info("summary", `=== Portfolio Summary for ${symbol} ===`);
+  log.info("summary", `Shares: ${totalShares} shares, cost basis = $${sharesCost.toFixed(2)}`);
+  log.info("summary", `Bull Call Spreads: ${bullCallSpreads.length} positions`);
+  log.info("summary", `Bull Put Spreads: ${bullPutSpreads.length} positions`);
+  log.info("summary", `Bear Call Spreads: ${bearCallSpreads.length} positions`);
+  log.info("summary", `Long Calls: ${longCalls.length} positions`);
+  log.info("summary", `Short Calls: ${shortCalls.length} positions`);
+  log.info("summary", `Long Puts: ${longPuts.length} positions`);
+  log.info("summary", `Short Puts: ${shortPuts.length} positions`);
+  log.info("summary", `Cash: $${cash.toFixed(2)}`);
 
   const spreadInvestments = allSpreads.map((sp) => {
     if (sp.flavor === "CALL") {
@@ -328,9 +328,9 @@ function computePortfolioGraphData_(ss, symbol) {
     }
 
     ss.deleteSheet(tempSheet);
-    Logger.log("GOOGLEFINANCE returned currentPrice: " + currentPrice + " for " + symbol);
+    log.debug("price", "GOOGLEFINANCE returned currentPrice: " + currentPrice + " for " + symbol);
   } catch (e) {
-    Logger.log("Could not get current price: " + e);
+    log.warn("price", "Could not get current price: " + e);
     // Clean up temp sheet if it exists
     try {
       const tempSheet = ss.getSheetByName("__temp_price__");
@@ -766,7 +766,7 @@ function fetchSpreadQuotes_(symbol, expiration, kLong, kShort, optionType) {
       result.shortAsk = parseFloat(shortRes[0][2]) || null;
     }
   } catch (e) {
-    Logger.log("fetchSpreadQuotes_ error: " + e.message);
+    log.warn("quotes", "fetchSpreadQuotes_ error: " + e.message);
   }
 
   return result;
