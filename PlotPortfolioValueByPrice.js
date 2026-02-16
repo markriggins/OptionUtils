@@ -352,10 +352,10 @@ function computePortfolioGraphData_(ss, symbol) {
   const strategyRoisCurrent = strategyGroups.map(() => []);
 
   // Individual spread and option values: [idx][priceIdx]
-  // Include qty in label: "5 - Dec 28 480/490" or "3 - Dec 28 500 Call"
+  // Include qty in label: "5 - Dec 28 480/490 BCS" or "3 - Dec 28 500 Long Call"
   const spreadLabels = [
     ...allSpreads.map(sp => `${sp.qty} - ${sp.label}`),
-    ...allSingleLegs.map(leg => `${leg.qty} - ${leg.label} ${leg.type}`),
+    ...allSingleLegs.map(leg => `${leg.qty} - ${leg.label} ${leg.isLong ? 'Long' : 'Short'} ${leg.type}`),
     ...customPositions.map(cp => `${cp.qty} - ${cp.label}`)
   ];
   const allPositions = allSpreads.length + allSingleLegs.length + customPositions.length;

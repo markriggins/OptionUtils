@@ -500,7 +500,7 @@ function parsePositionsForSymbol_(rows, symbol) {
       if (!longLeg || !shortLeg) continue;
 
       const debit = longLeg.price - shortLeg.price;
-      let label = `${longLeg.strike}/-${shortLeg.strike}`;
+      let label = `${longLeg.strike}/-${shortLeg.strike} BCS`;
       if (longLeg.expiration) {
         const expLabel = formatExpirationLabel_(longLeg.expiration);
         if (expLabel) label = `${expLabel} ${label}`;
@@ -524,7 +524,7 @@ function parsePositionsForSymbol_(rows, symbol) {
       if (!longLeg || !shortLeg) continue;
 
       const debit = longLeg.price - shortLeg.price;
-      let label = `${longLeg.strike}/-${shortLeg.strike}`;
+      let label = `${longLeg.strike}/-${shortLeg.strike} BPS`;
       if (longLeg.expiration) {
         const expLabel = formatExpirationLabel_(longLeg.expiration);
         if (expLabel) label = `${expLabel} ${label}`;
