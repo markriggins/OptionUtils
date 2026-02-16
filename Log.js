@@ -1,9 +1,6 @@
 /**
  * Configurable logging with levels and function filtering.
- * Outputs to Cloud Logging (Stackdriver) for searchable, filterable logs.
- *
- * View logs: Apps Script editor > Executions > Cloud logs link
- * Or: https://console.cloud.google.com/logs
+ * Outputs to a "Logs" sheet in the spreadsheet for easy searching/filtering.
  *
  * Configuration is per-document (each spreadsheet has its own settings).
  *
@@ -81,31 +78,43 @@ function shouldLog_(level, tag) {
 }
 
 /**
- * Format and output a log message to Cloud Logging.
- * Uses console methods for proper severity levels in Stackdriver.
+ * Get or create the Logs sheet.
+ * @private
+ */
+function getLogsSheet_() {
+  const ss = SpreadsheetApp.getActive();
+  if (!ss) return null;
+
+  let sheet = ss.getSheetByName("Logs");
+  if (!sheet) {
+    sheet = ss.insertSheet("Logs");
+    // Set up headers
+    sheet.getRange(1, 1, 1, 4).setValues([["Timestamp", "Level", "Tag", "Message"]]);
+    sheet.getRange(1, 1, 1, 4).setFontWeight("bold");
+    sheet.setFrozenRows(1);
+    // Set column widths
+    sheet.setColumnWidth(1, 150); // Timestamp
+    sheet.setColumnWidth(2, 60);  // Level
+    sheet.setColumnWidth(3, 120); // Tag
+    sheet.setColumnWidth(4, 600); // Message
+  }
+  return sheet;
+}
+
+/**
+ * Append a log message to the Logs sheet.
  */
 function logMessage_(level, levelName, tag, message) {
   if (!shouldLog_(level, tag)) return;
 
-  const prefix = tag ? `[${tag}] ` : "";
-  const msg = prefix + message;
+  try {
+    const sheet = getLogsSheet_();
+    if (!sheet) return;
 
-  // Use appropriate console method for Cloud Logging severity
-  switch (level) {
-    case LogLevel.DEBUG:
-      console.log(msg);
-      break;
-    case LogLevel.INFO:
-      console.info(msg);
-      break;
-    case LogLevel.WARN:
-      console.warn(msg);
-      break;
-    case LogLevel.ERROR:
-      console.error(msg);
-      break;
-    default:
-      console.log(msg);
+    const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19);
+    sheet.appendRow([timestamp, levelName, tag || "", message]);
+  } catch (e) {
+    // Silently fail if we can't log (avoid infinite loops)
   }
 }
 
@@ -231,4 +240,57 @@ function resetLogConfig() {
   getLogConfig_.cache = null;
 
   console.log("Log configuration reset to defaults (INFO level, no filtering)");
+}
+
+/**
+ * Clear all logs from the Logs sheet.
+ */
+function clearLogs() {
+  const ss = SpreadsheetApp.getActive();
+  if (!ss) return;
+
+  const sheet = ss.getSheetByName("Logs");
+  if (!sheet) {
+    console.log("No Logs sheet to clear");
+    return;
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    sheet.deleteRows(2, lastRow - 1);
+  }
+  console.log("Logs cleared");
+}
+
+/**
+ * Clear logs older than specified days.
+ * @param {number} days - Delete logs older than this many days (default: 7)
+ */
+function clearOldLogs(days) {
+  days = days || 7;
+  const ss = SpreadsheetApp.getActive();
+  if (!ss) return;
+
+  const sheet = ss.getSheetByName("Logs");
+  if (!sheet) return;
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return;
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  let deleteCount = 0;
+
+  // Find rows to delete (from bottom up to avoid shifting issues)
+  for (let i = data.length - 1; i >= 0; i--) {
+    const timestamp = new Date(data[i][0]);
+    if (timestamp < cutoff) {
+      sheet.deleteRow(i + 2);
+      deleteCount++;
+    }
+  }
+
+  console.log(`Deleted ${deleteCount} logs older than ${days} days`);
 }
