@@ -761,8 +761,9 @@ function findFilesByPrefix_(folder, prefix) {
     while (iter.hasNext()) {
       const f = iter.next();
       Logger.log(`  Found file: ${f.getName()} (MIME: ${f.getMimeType()})`);
-      // Only include files that look like CSVs (by extension)
-      if (f.getName().toLowerCase().endsWith('.csv')) {
+      // Include CSV files and other text formats (e.g., .cindy)
+      const name = f.getName().toLowerCase();
+      if (name.endsWith('.csv') || name.endsWith('.cindy') || name.endsWith('.txt')) {
         files.push(f);
       }
     }
@@ -1117,42 +1118,17 @@ function pairTransactionsIntoSpreads_(transactions) {
       }
     }
 
-    // Check for custom multi-leg positions:
-    // - More than 2 distinct strikes of same type, OR
-    // - Imbalanced quantities (total long != total short)
+    // Normal pairing: pair calls with calls, puts with puts
+    // Pairs what it can into 2-leg spreads, leaves remainder as single legs
+    // Custom position detection happens in Parsing.js when reading the Positions sheet
     for (const optionType of ["Call", "Put"]) {
       const legsOfType = txns.filter(t => t.optionType === optionType);
       if (legsOfType.length === 0) continue;
 
       const longs = legsOfType.filter(t => t.qty > 0);
       const shorts = legsOfType.filter(t => t.qty < 0);
-      const distinctStrikes = new Set(legsOfType.map(t => t.strike)).size;
-      const totalLongQty = longs.reduce((sum, t) => sum + t.qty, 0);
-      const totalShortQty = shorts.reduce((sum, t) => sum + Math.abs(t.qty), 0);
-      const isImbalanced = totalLongQty !== totalShortQty;
-      const isMultiLeg = distinctStrikes > 2;
 
-      if (isImbalanced || isMultiLeg) {
-        // Create a custom multi-leg position
-        const legs = legsOfType.map(t => ({
-          strike: t.strike,
-          optionType: t.optionType,
-          qty: t.qty,
-          price: t.price,
-        })).sort((a, b) => a.strike - b.strike);
-
-        spreads.push({
-          type: "custom",
-          ticker: legsOfType[0].ticker,
-          expiration: legsOfType[0].expiration,
-          qty: Math.max(totalLongQty, totalShortQty),
-          date: legsOfType[0].date,
-          legs: legs,
-        });
-        continue; // Skip normal pairing for this option type
-      }
-
-      // Normal pairing: pair calls with calls, puts with puts (balanced 2-leg spreads)
+      // Clone and sort for pairing
       const longsToProcess = longs.map(t => ({ ...t })).sort((a, b) => a.strike - b.strike);
       const shortsToProcess = shorts.map(t => ({ ...t })).sort((a, b) => a.strike - b.strike);
 
