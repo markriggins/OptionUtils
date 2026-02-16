@@ -1,5 +1,9 @@
 /**
  * Configurable logging with levels and function filtering.
+ * Outputs to Cloud Logging (Stackdriver) for searchable, filterable logs.
+ *
+ * View logs: Apps Script editor > Executions > Cloud logs link
+ * Or: https://console.cloud.google.com/logs
  *
  * Configuration is per-document (each spreadsheet has its own settings).
  *
@@ -77,13 +81,32 @@ function shouldLog_(level, tag) {
 }
 
 /**
- * Format and output a log message.
+ * Format and output a log message to Cloud Logging.
+ * Uses console methods for proper severity levels in Stackdriver.
  */
 function logMessage_(level, levelName, tag, message) {
   if (!shouldLog_(level, tag)) return;
 
-  const prefix = tag ? `[${levelName}] ${tag}: ` : `[${levelName}] `;
-  Logger.log(prefix + message);
+  const prefix = tag ? `[${tag}] ` : "";
+  const msg = prefix + message;
+
+  // Use appropriate console method for Cloud Logging severity
+  switch (level) {
+    case LogLevel.DEBUG:
+      console.log(msg);
+      break;
+    case LogLevel.INFO:
+      console.info(msg);
+      break;
+    case LogLevel.WARN:
+      console.warn(msg);
+      break;
+    case LogLevel.ERROR:
+      console.error(msg);
+      break;
+    default:
+      console.log(msg);
+  }
 }
 
 /**
@@ -159,10 +182,10 @@ function showLogConfig() {
   const config = getLogConfig_();
   const levelName = Object.keys(LogLevel).find(k => LogLevel[k] === config.level);
 
-  Logger.log("=== Log Configuration ===");
-  Logger.log(`Level: ${levelName}`);
-  Logger.log(`Mode: ${config.mode}`);
-  Logger.log(`Functions: ${config.functions.size > 0 ? Array.from(config.functions).join(", ") : "(none)"}`);
+  console.log("=== Log Configuration ===");
+  console.log(`Level: ${levelName}`);
+  console.log(`Mode: ${config.mode}`);
+  console.log(`Functions: ${config.functions.size > 0 ? Array.from(config.functions).join(", ") : "(none)"}`);
 }
 
 /**
@@ -180,7 +203,7 @@ function blacklistLogs(...tags) {
   props.setProperty("logFunctions", Array.from(existingSet).join(","));
   getLogConfig_.cache = null;
 
-  Logger.log(`Blacklisted: ${tags.join(", ")}`);
+  console.log(`Blacklisted: ${tags.join(", ")}`);
 }
 
 /**
@@ -194,7 +217,7 @@ function whitelistLogs(...tags) {
   props.setProperty("logFunctions", tags.join(","));
   getLogConfig_.cache = null;
 
-  Logger.log(`Whitelist mode - only logging: ${tags.join(", ")}`);
+  console.log(`Whitelist mode - only logging: ${tags.join(", ")}`);
 }
 
 /**
@@ -207,5 +230,5 @@ function resetLogConfig() {
   props.deleteProperty("logFunctions");
   getLogConfig_.cache = null;
 
-  Logger.log("Log configuration reset to defaults (INFO level, no filtering)");
+  console.log("Log configuration reset to defaults (INFO level, no filtering)");
 }
