@@ -24,7 +24,7 @@
 // ============================================================
 
 function onOpen(e) {
-  SpreadFinder.onOpen(e);
+  SpreadFinder.setupSpreadFinderMenu(e);
 }
 
 // ============================================================

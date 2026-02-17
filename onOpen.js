@@ -5,7 +5,7 @@
  *    Warm XLookup Cache
  **/
 
-function onOpen() {
+function setupSpreadFinderMenu() {
   const ui = SpreadsheetApp.getUi();
 
   const spreadFinderMenu = ui.createMenu('SpreadFinder')
