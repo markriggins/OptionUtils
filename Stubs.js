@@ -35,6 +35,16 @@ function initializeProject() {
   SpreadFinder.initializeProject();
 }
 
+// Setup logging
+function setupLogging() {
+  configureLogging({
+    level: "INFO",
+    mode: "blacklist",
+    functions: ["quotes", "positions"]
+  });
+  showLogConfig();
+}
+
 function warmXLookupCache() {
   SpreadFinder.warmXLookupCache();
 }
