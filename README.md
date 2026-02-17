@@ -48,8 +48,8 @@ This is beta code, so please keep your expectations low.  But I wrote it for mys
 
 ## Installation
 
-1. Open the [SpreadFinder Template Spreadsheet](https://docs.google.com/spreadsheets/d/1MYMzTpoGlKuAXFyN8eGePmAsZ8R6379zhDoe-JHm7D0/copy)
-2. Click "Make a copy"
+1. Open the [SpreadFinder Template Spreadsheet](https://docs.google.com/spreadsheets/d/1MYMzTpoGlKuAXFyN8eGePmAsZ8R6379zhDoe-JHm7D0/edit?usp=sharing)
+2. Click "File | Make a copy"
 3. The Apps Scripts will be automatically installed
 4. Wait for the OptionUtils menu to appear
 5. Try to run the first Initialize/Clear Project menu item
