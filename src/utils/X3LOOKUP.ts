@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * X3LOOKUP - Generic 3-key exact lookup with caching
  * Does NOT assume anything about dates, symbols, strikes, or sheet structure.  But note that

@@ -1,3 +1,4 @@
+// @ts-check
 
 /**
  * X2LOOKUP(expiration, strike, ExpCol, StrikeCol, ReturnCol)

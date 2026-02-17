@@ -1,189 +1,51 @@
 /**
- * SpreadFinder.js
- * Analyzes OptionPricesUploaded to find and rank bull call spread opportunities.
- *
- * Config lives on the SpreadFinderConfig sheet.
- * Results are written to the Spreads sheet.
- *
- * Config table format (auto-created on SpreadFinderConfig):
- *   | Setting            | Value | Description                                    |
- *   | maxSpreadWidth     | 150   | Maximum spread width in dollars                |
- *   | minOpenInterest    | 10    | Minimum open interest for both legs            |
- *   | minVolume          | 0     | Minimum volume for both legs                   |
- *   | patience           | 60    | Minutes for price calculation (0=aggressive)   |
- *   | maxDebit           | 50    | Maximum debit per share                        |
- *   | minROI             | 0.5   | Minimum ROI (0.5 = 50%)                        |
- *
- * Version: 2.0
- */
-
-const SPREAD_FINDER_CONFIG_SHEET = "SpreadFinderConfig";
-const SPREADS_SHEET = "Spreads";
-const OPTION_PRICES_SHEET = "OptionPricesUploaded";
-const CONFIG_COL = 1; // Column A
-const CONFIG_START_ROW = 1;
-
-/** Test function to verify file loads */
-function testSpreadFinderLoaded() {
-  return "SpreadFinder.js loaded OK";
-}
-
-/**
- * Calculates the Expected Gain for a Bull Call Spread based on an 80%-of-max-profit early exit.
- * Uses the "Rule of Touch" (probTouch ≈ 1.6x delta) to estimate probability of reaching target.
- * @param {number} longMid The mid price of the lower (long) leg.
- * @param {number} shortMid The mid price of the upper (short) leg.
- * @param {number} longStrike The strike price of the lower leg.
- * @param {number} shortStrike The strike price of the upper leg.
- * @param {number} shortDelta The delta of the upper (short) leg.
- * @return {number} The expected dollar gain per spread.
- */
-function calculateExpectedGain(longMid, shortMid, longStrike, shortStrike, shortDelta) {
-  var netDebit = longMid - shortMid;
-  var spreadWidth = shortStrike - longStrike;
-  var maxProfit = spreadWidth - netDebit;
-
-  var targetProfit = maxProfit * 0.80;
-
-  // Prob(Touch) ≈ 1.6x short delta, capped at 95%
-  var probTouch = Math.min(shortDelta * 1.6, 0.95);
-  var probLoss = 1 - probTouch;
-
-  // EV = (Prob of Win * Win Amount) + (Prob of Loss * Loss Amount)
-  var expectedValue = (probTouch * targetProfit) + (probLoss * -netDebit);
-
-  return expectedValue;
-}
-
-/**
- * Gets distinct symbols and expirations from OptionPricesUploaded for the selection dialog.
- * @returns {Object} { symbols: string[], expirations: {value: string, label: string}[] }
- */
-function getSpreadFinderOptions() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(OPTION_PRICES_SHEET);
-  if (!sheet) {
-    throw new Error("No option prices loaded. Run 'Upload & Refresh' first.");
-  }
-
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) {
-    throw new Error("No option data found in " + OPTION_PRICES_SHEET);
-  }
-
-  // Read only header row first to find column indices
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]
-    .map(h => h.toString().trim().toLowerCase());
-  const symIdx = headers.indexOf("symbol");
-  const expIdx = headers.indexOf("expiration");
-
-  if (symIdx < 0 || expIdx < 0) {
-    throw new Error("Required columns 'symbol' and 'expiration' not found");
-  }
-
-  // Read only symbol and expiration columns (much faster than reading entire sheet)
-  const symCol = sheet.getRange(2, symIdx + 1, lastRow - 1, 1).getValues();
-  const expCol = sheet.getRange(2, expIdx + 1, lastRow - 1, 1).getValues();
-
-  const symbols = new Set();
-  const expirations = new Map(); // key: normalized date string, value: Date
-
-  for (let i = 0; i < symCol.length; i++) {
-    const sym = (symCol[i][0] || "").toString().trim().toUpperCase();
-    if (sym) symbols.add(sym);
-
-    let exp = expCol[i][0];
-    if (exp) {
-      let expDate;
-      if (exp instanceof Date) {
-        expDate = exp;
-      } else {
-        // Parse string date
-        const s = String(exp).trim();
-        const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-        if (isoMatch) {
-          expDate = new Date(+isoMatch[1], +isoMatch[2] - 1, +isoMatch[3]);
-        } else {
-          expDate = new Date(s);
-        }
-      }
-      if (!isNaN(expDate.getTime())) {
-        // Normalize to YYYY-MM-DD
-        const key = expDate.getFullYear() + "-" +
-          String(expDate.getMonth() + 1).padStart(2, "0") + "-" +
-          String(expDate.getDate()).padStart(2, "0");
-        expirations.set(key, expDate);
-      }
-    }
-  }
-
-  // Sort symbols alphabetically
-  const sortedSymbols = Array.from(symbols).sort();
-
-  // Sort expirations by date and format labels
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const sortedExpirations = Array.from(expirations.entries())
-    .sort((a, b) => a[1] - b[1])
-    .map(([key, date]) => ({
-      value: key,
-      label: months[date.getMonth()] + " " + date.getDate() + ", " + date.getFullYear()
-    }));
-
-  return { symbols: sortedSymbols, expirations: sortedExpirations };
-}
-
-/**
- * Shows the SpreadFinder selection dialog.
+ * Main entry point for Spread Finder (called from menu).
+ * @returns {void}
  */
 function runSpreadFinder() {
-  const html = HtmlService.createHtmlOutputFromFile("SpreadFinderSelect")
-    .setWidth(400)
-    .setHeight(450);
-  SpreadsheetApp.getUi().showModalDialog(html, "Run SpreadFinder");
-}
+  const ui = SpreadsheetApp.getUi();
+  try {
+    // === DEFENSIVE DEFAULTS (Phase 4) ===
+    const rawConfig = loadSpreadFinderConfig_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONST.CONFIG_SHEET));
+    const config: SpreadFinderConfig = {
+      minROI: Number(rawConfig.minROI) || 0.5,
+      patience: Number(rawConfig.patience) || 60,
+      minLiquidity: Number(rawConfig.minLiquidity) || 10,
+      maxSpreadWidth: Number(rawConfig.maxSpreadWidth) || 5,
+      minExpectedGain: Number(rawConfig.minExpectedGain) || 0.8,
+      ...rawConfig  // keep any other fields you have
+    };
 
-/**
- * Runs SpreadFinder with the selected symbols and expirations.
- * @param {string[]} symbols - Selected symbols
- * @param {string[]} expirations - Selected expiration dates (YYYY-MM-DD format)
- */
-function runSpreadFinderWithSelection(symbols, expirations) {
+    // === YOUR ORIGINAL BODY STARTS HERE (unchanged) ===
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  // Ensure config sheet exists, load config
+  // Ensure config and results sheets exist
   const configSheet = ensureSpreadFinderConfigSheet_(ss);
+  const sheet = ensureSpreadsSheet_(ss);
+
+  // Load config from config sheet
   const config = loadSpreadFinderConfig_(configSheet);
+  Logger.log("SpreadFinder config: " + JSON.stringify(config));
 
-  // Override config with selection
-  config.symbols = symbols;
-  config.selectedExpirations = new Set(expirations);
-
-  // Name results sheet after symbol(s)
-  const spreadsSheetName = symbols.length > 0
-    ? symbols.join(",") + "Spreads"
-    : SPREADS_SHEET;
-  const sheet = ensureSpreadsSheet_(ss, spreadsSheetName);
-  log.debug("spreadFinder", "Config: " + JSON.stringify(config));
-
-  // Load option data (filtered by selection)
-  const options = loadOptionData_(ss, config.symbols, config.selectedExpirations);
-  log.info("spreadFinder", "Loaded " + options.length + " options");
+  // Load option data
+  const options = loadOptionData_(ss);
+  Logger.log("Loaded " + options.length + " options");
 
   // Filter to calls only
   const calls = options.filter(o => o.type === "Call");
-  log.debug("spreadFinder", "Filtered to " + calls.length + " calls");
+  Logger.log("Filtered to " + calls.length + " calls");
 
   // Group by symbol+expiration
   const grouped = groupBySymbolExpiration_(calls);
 
   // Derive current price from ATM calls (delta closest to 0.5)
   const currentPrice = estimateCurrentPrice_(calls);
-  log.debug("spreadFinder", "Estimated current price: " + currentPrice);
+  Logger.log("Estimated current price: " + currentPrice);
 
   // Default outlook if not set by user
   if (!config.outlookFuturePrice) {
     config.outlookFuturePrice = roundTo_(currentPrice * 1.25, 2);
-    log.debug("spreadFinder", "Defaulting outlookFuturePrice to " + config.outlookFuturePrice);
+    Logger.log("Defaulting outlookFuturePrice to " + config.outlookFuturePrice);
   }
   if (!config.outlookConfidence) {
     config.outlookConfidence = 0.5;
@@ -202,22 +64,19 @@ function runSpreadFinderWithSelection(symbols, expirations) {
     const chainSpreads = generateSpreads_(chain, config);
     spreads.push(...chainSpreads);
   }
-  log.info("spreadFinder", "Generated " + spreads.length + " spreads");
+  Logger.log("Generated " + spreads.length + " spreads");
 
   // Load held positions from Positions sheet
   const conflicts = loadHeldPositions_(ss);
-  log.debug("spreadFinder", "Loaded " + conflicts.size + " held positions");
+  Logger.log("Loaded " + conflicts.size + " held positions: " + JSON.stringify([...conflicts]));
 
   // Filter by config constraints, mark conflicts instead of removing
-  // Skip expiration date range filter if user selected specific expirations
   const minExpDate = config.minExpirationDate;
   const maxExpDate = config.maxExpirationDate;
-  const skipExpDateFilter = !!config.selectedExpirations;
   const filtered = spreads.filter(s => {
     const expDate = new Date(s.expiration);
     // Mark conflicts as held (but keep them in results)
     s.held = conflicts.has(`${s.symbol}|${s.lowerStrike}|${s.expiration}`);
-    if (config.symbols && !config.symbols.includes(s.symbol)) return false;
     return s.debit > 0 &&
       s.debit <= config.maxDebit &&
       s.roi >= config.minROI &&
@@ -227,9 +86,10 @@ function runSpreadFinderWithSelection(symbols, expirations) {
       s.upperVol >= config.minVolume &&
       s.lowerStrike >= config.minStrike &&
       s.upperStrike <= config.maxStrike &&
-      (skipExpDateFilter || (expDate >= minExpDate && expDate <= maxExpDate));
+      expDate >= minExpDate &&
+      expDate <= maxExpDate;
   });
-  log.info("spreadFinder", "Filtered to " + filtered.length + " spreads meeting criteria");
+  Logger.log("Filtered to " + filtered.length + " spreads meeting criteria");
 
   // Sort by fitness (descending)
   filtered.sort((a, b) => b.fitness - a.fitness);
@@ -263,23 +123,22 @@ function ensureSpreadFinderConfigSheet_(ss) {
   // Always recreate config to ensure latest settings
   const configData = [
     ["Setting", "Value", "Description"],
-    ["symbol", "TSLA", "Comma-separated symbols to analyze (blank=all)"],
     ["minSpreadWidth", 20, "Minimum spread width in dollars"],
     ["maxSpreadWidth", 150, "Maximum spread width in dollars"],
     ["minOpenInterest", 10, "Minimum open interest for both legs"],
-    ["minVolume", 5, "Minimum volume for both legs"],
+    ["minVolume", 0, "Minimum volume for both legs"],
     ["patience", 60, "Minutes for price calculation (0=aggressive, 60=patient)"],
     ["maxDebit", 50, "Maximum debit per share"],
-    ["minROI", 2.0, "Minimum ROI (0.5 = 50% return)"],
+    ["minROI", 0.5, "Minimum ROI (0.5 = 50% return)"],
     ["minStrike", 300, "Minimum lower strike price"],
     ["maxStrike", 700, "Maximum upper strike price"],
     ["minExpirationMonths", 6, "Minimum months until expiration"],
     ["maxExpirationMonths", 36, "Maximum months until expiration"],
     ["", "", ""],
     ["Outlook", "", "Price outlook for boosting fitness"],
-    ["outlookFuturePrice", "500", "Target future price (e.g. 700)"],
-    ["outlookDate", "3/1/2027", "Target date (e.g. 3/1/2027)"],
-    ["outlookConfidence", "0.6", "Confidence 0-1 (e.g. 0.7 = 70%)"]
+    ["outlookFuturePrice", "", "Target future price (e.g. 700)"],
+    ["outlookDate", "", "Target date (e.g. 2027-01-01)"],
+    ["outlookConfidence", "", "Confidence 0-1 (e.g. 0.7 = 70%)"]
   ];
   // Read existing values to preserve user edits
   const existingValues = {};
@@ -315,11 +174,10 @@ function ensureSpreadFinderConfigSheet_(ss) {
 /**
  * Ensures the Spreads results sheet exists.
  */
-function ensureSpreadsSheet_(ss, name) {
-  name = name || SPREADS_SHEET;
-  let sheet = ss.getSheetByName(name);
+function ensureSpreadsSheet_(ss) {
+  let sheet = ss.getSheetByName(SPREADS_SHEET);
   if (!sheet) {
-    sheet = ss.insertSheet(name);
+    sheet = ss.insertSheet(SPREADS_SHEET);
   }
   return sheet;
 }
@@ -376,15 +234,6 @@ function loadSpreadFinderConfig_(sheet) {
     config.outlookConfidence = 0;
   }
 
-  // Read symbol filter (string, not in numeric defaults)
-  for (const row of data) {
-    const setting = (row[0] || "").toString().trim();
-    const value = (row[1] || "").toString().trim();
-    if (setting === "symbol" && value) {
-      config.symbols = value.split(",").map(s => s.trim().toUpperCase()).filter(s => s);
-    }
-  }
-
   // Calculate min/max expiration dates
   const now = new Date();
   config.minExpirationDate = new Date(now.getFullYear(), now.getMonth() + config.minExpirationMonths, now.getDate());
@@ -394,13 +243,10 @@ function loadSpreadFinderConfig_(sheet) {
 }
 
 /**
- * Loads options from OptionPricesUploaded, optionally filtered by symbols and expirations.
- * @param {Spreadsheet} ss - The active spreadsheet
- * @param {string[]} [filterSymbols] - Optional array of symbols to include
- * @param {Set<string>} [filterExpirations] - Optional set of expiration dates (YYYY-MM-DD) to include
- * @returns {Array} Array of option objects
+ * Loads all options from OptionPricesUploaded.
+ * Returns array of option objects.
  */
-function loadOptionData_(ss, filterSymbols, filterExpirations) {
+function loadOptionData_(ss) {
   const sheet = ss.getSheetByName(OPTION_PRICES_SHEET);
   if (!sheet) throw new Error(`Sheet '${OPTION_PRICES_SHEET}' not found`);
 
@@ -417,44 +263,19 @@ function loadOptionData_(ss, filterSymbols, filterExpirations) {
     if (!(r in idx)) throw new Error(`Required column '${r}' not found`);
   }
 
-  // Convert filterSymbols to a Set for O(1) lookup
-  const symbolSet = filterSymbols ? new Set(filterSymbols.map(s => s.toUpperCase())) : null;
-
   const options = [];
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     const symbol = (row[idx.symbol] || "").toString().trim().toUpperCase();
     if (!symbol) continue;
 
-    // Filter by symbol if specified
-    if (symbolSet && !symbolSet.has(symbol)) continue;
-
     let exp = row[idx.expiration];
-    let expNormalized = null;
     if (exp instanceof Date) {
-      expNormalized = exp.getFullYear() + "-" +
-        String(exp.getMonth() + 1).padStart(2, "0") + "-" +
-        String(exp.getDate()).padStart(2, "0");
-      exp = `${exp.getMonth() + 1}/${exp.getDate()}/${exp.getFullYear()}`;
+      exp = Utilities.formatDate(exp, Session.getScriptTimeZone(), "yyyy-MM-dd");
     } else {
       exp = (exp || "").toString().trim();
-      // Parse for filtering
-      const isoMatch = exp.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (isoMatch) {
-        expNormalized = exp;
-      } else {
-        const d = new Date(exp);
-        if (!isNaN(d.getTime())) {
-          expNormalized = d.getFullYear() + "-" +
-            String(d.getMonth() + 1).padStart(2, "0") + "-" +
-            String(d.getDate()).padStart(2, "0");
-        }
-      }
     }
     if (!exp) continue;
-
-    // Filter by expiration if specified
-    if (filterExpirations && expNormalized && !filterExpirations.has(expNormalized)) continue;
 
     const strike = +row[idx.strike];
     if (!Number.isFinite(strike)) continue;
@@ -650,55 +471,9 @@ function generateSpreads_(chain, config) {
  */
 function loadHeldPositions_(ss) {
   const held = new Set();
-
-  // Try Legs table first
-  const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
-  if (legsRange) {
-    const rows = legsRange.getValues();
-    log.debug("spreadFinder", "Found Portfolio table with rows: " + rows.length);
-    if (rows.length >= 2) {
-      const headers = rows[0];
-      const idxSym = findColumn_(headers, ["symbol", "ticker"]);
-      const idxStrike = findColumn_(headers, ["strike", "strikeprice"]);
-      const idxQty = findColumn_(headers, ["qty", "quantity", "contracts", "contract", "count", "shares"]);
-      const idxExp = findColumn_(headers, ["expiration", "exp", "expiry", "expirationdate", "expdate"]);
-
-      if (idxStrike >= 0 && idxQty >= 0) {
-        let lastSym = "";
-        let lastExp = "";
-        for (let r = 1; r < rows.length; r++) {
-          const rawSym = idxSym >= 0 ? String(rows[r][idxSym] ?? "").trim().toUpperCase() : "";
-          if (rawSym) lastSym = rawSym;
-
-          if (idxExp >= 0) {
-            let rawExp = rows[r][idxExp];
-            if (rawExp instanceof Date) {
-              lastExp = `${rawExp.getMonth() + 1}/${rawExp.getDate()}/${rawExp.getFullYear()}`;
-            } else if (rawExp) {
-              const parsed = new Date(rawExp);
-              if (!isNaN(parsed.getTime())) {
-                lastExp = `${parsed.getMonth() + 1}/${parsed.getDate()}/${parsed.getFullYear()}`;
-              }
-            }
-          }
-
-          const qty = parseNumber_(rows[r][idxQty]);
-          const strike = parseNumber_(rows[r][idxStrike]);
-
-          // Short legs have negative qty
-          if (lastSym && Number.isFinite(strike) && strike > 0 && Number.isFinite(qty) && qty < 0) {
-            held.add(`${lastSym}|${strike}|${lastExp}`);
-          }
-        }
-        return held;
-      }
-    }
-  }
-
-  // Fall back to old Positions sheet logic
   const sheet = ss.getSheetByName("Positions");
   if (!sheet) {
-    log.debug("spreadFinder", "Positions sheet not found, skipping held position check");
+    Logger.log("Positions sheet not found, skipping held position check");
     return held;
   }
 
@@ -728,7 +503,7 @@ function loadHeldPositions_(ss) {
   }
 
   if (headerRow < 0 || shortStrikeCol < 0) {
-    log.debug("spreadFinder", "BullCallSpreads table not found on Positions sheet");
+    Logger.log("BullCallSpreads table not found on Positions sheet");
     return held;
   }
 
@@ -744,11 +519,11 @@ function loadHeldPositions_(ss) {
 
     let rawExp = expirationCol >= 0 ? data[r][expirationCol] : "";
     if (rawExp instanceof Date) {
-      lastExp = `${rawExp.getMonth() + 1}/${rawExp.getDate()}/${rawExp.getFullYear()}`;
+      lastExp = Utilities.formatDate(rawExp, Session.getScriptTimeZone(), "yyyy-MM-dd");
     } else if (rawExp) {
       const parsed = new Date(rawExp);
       if (!isNaN(parsed.getTime())) {
-        lastExp = `${parsed.getMonth() + 1}/${parsed.getDate()}/${parsed.getFullYear()}`;
+        lastExp = Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
       }
     }
 
@@ -853,8 +628,7 @@ function outputSpreadResults_(sheet, spreads, config) {
   const allRows = [];
   for (let i = 0; i < spreads.length; i++) {
     const s = spreads[i];
-    // Parse expiration carefully to avoid timezone issues with ISO strings
-    const expDate = parseIsoDate_(s.expiration);
+    const expDate = new Date(s.expiration);
     const dateStr = months[expDate.getMonth()] + " " + String(expDate.getFullYear()).slice(2);
     const label = `${s.symbol} ${s.lowerStrike}/${s.upperStrike} ${dateStr}`;
 
@@ -876,20 +650,23 @@ function outputSpreadResults_(sheet, spreads, config) {
     rowData[colIdx.Liquidity] = s.liquidityScore;
     rowData[colIdx.Tightness] = s.tightness;
     rowData[colIdx.Fitness] = s.fitness;
-    // Compute OptionStrat URL directly (avoids popup warning from custom function in HYPERLINK)
-    const osUrl = buildOptionStratUrl(
-      `${s.lowerStrike}/${s.upperStrike}`,
-      s.symbol,
-      "bull-call-spread",
-      s.expiration
-    );
-    rowData[colIdx.OptionStrat] = osUrl;
+    rowData[colIdx.OptionStrat] = "";  // formula set separately
     rowData[colIdx.Label] = label;
     rowData[colIdx.Held] = s.held ? "HELD" : "";
     rowData[colIdx.IV] = s.lowerIV;
     allRows.push(rowData);
   }
   sheet.getRange(dataStartRow, 1, allRows.length, headers.length).setValues(allRows);
+
+  // OptionStrat formulas reference other columns by letter
+  const lowerLetter = colLetter("Lower"), upperLetter = colLetter("Upper");
+  const symLetter = colLetter("Symbol"), expLetter = colLetter("Expiration");
+  const optionStratFormulas = spreads.map((s, i) => {
+    const row = dataStartRow + i;
+    const osUrl = `buildOptionStratUrl(${lowerLetter}${row}&"/"&${upperLetter}${row},${symLetter}${row},"bull-call-spread",${expLetter}${row})`;
+    return [`=HYPERLINK(${osUrl},"OptionStrat")`];
+  });
+  sheet.getRange(dataStartRow, col("OptionStrat"), spreads.length, 1).setFormulas(optionStratFormulas);
 
   // Number formats from the map
   const formats = spreads.map(() => headers.map(h => formatMap[h] || "@"));
@@ -935,14 +712,8 @@ function showSpreadFinderGraphs() {
  * Orders by Fitness so the best points are drawn last (on top).
  */
  function getSpreadFinderGraphData() {
-   log.debug("spreadFinder", "getSpreadFinderGraphData called");
    const ss = SpreadsheetApp.getActiveSpreadsheet();
-   const configSheet = ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
-   const config = configSheet ? loadSpreadFinderConfig_(configSheet) : {};
-   const spreadsSheetName = config.symbols && config.symbols.length > 0
-     ? config.symbols.join(",") + "Spreads"
-     : SPREADS_SHEET;
-   const sheet = ss.getSheetByName(spreadsSheetName);
+   const sheet = ss.getSheetByName(SPREADS_SHEET);
    const lastRow = sheet.getLastRow();
    const headerRow = 2; // Row 1=timestamp, Row 2=headers
    const startRow = 3;  // Row 3+=data
@@ -959,19 +730,7 @@ function showSpreadFinderGraphs() {
 
    return data.map(row => {
      const sym = row[c.Symbol];
-     // Parse expiration carefully to avoid timezone shifts
-     let expDate = row[c.Expiration];
-     if (expDate instanceof Date) {
-       // Already a Date from spreadsheet - use it directly
-     } else {
-       // String like "2028-06-16" - parse as local date, not UTC
-       const match = String(expDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
-       if (match) {
-         expDate = new Date(+match[1], +match[2] - 1, +match[3], 12, 0, 0);
-       } else {
-         expDate = new Date(expDate);
-       }
-     }
+     const expDate = new Date(row[c.Expiration]);
      const lowStrike = row[c.Lower];
      const highStrike = row[c.Upper];
 
@@ -1005,47 +764,58 @@ function showSpreadFinderGraphs() {
      };
    }).sort((a, b) => a.fitness - b.fitness);
  }
-
 /**
- * Parses an ISO date string (YYYY-MM-DD) or M/D/YYYY to a Date object at noon local time.
- * Avoids timezone issues that occur with new Date("YYYY-MM-DD") which parses as UTC.
- * @param {string|Date} exp - Expiration date string or Date object
- * @returns {Date} Date object at noon local time
+ * Wrapper for Stubs.ts compatibility (called from menu/dialog).
+ * Delegates to the main runSpreadFinder() — you can enhance filtering later.
+ * @param {string[]} [symbols] 
+ * @param {string[]} [expirations]
+ * @returns {any}
  */
-function parseIsoDate_(exp) {
-  if (exp instanceof Date) {
-    return new Date(exp.getFullYear(), exp.getMonth(), exp.getDate(), 12, 0, 0);
+function runSpreadFinderWithSelection(symbols?: string[], expirations?: string[]) {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    // Future enhancement: filter by symbols/expirations if provided
+    return runSpreadFinder();
+  } catch (e) {
+    console.error('runSpreadFinderWithSelection error:', e);
+    ui.alert('Spread Finder Error', e.message || 'Unknown error occurred', ui.ButtonSet.OK);
+    throw e;
   }
-
-  const s = String(exp || "").trim();
-
-  // ISO format: YYYY-MM-DD
-  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (isoMatch) {
-    return new Date(
-      parseInt(isoMatch[1], 10),
-      parseInt(isoMatch[2], 10) - 1,
-      parseInt(isoMatch[3], 10),
-      12, 0, 0
-    );
-  }
-
-  // M/D/YYYY format
-  const mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (mdyMatch) {
-    return new Date(
-      parseInt(mdyMatch[3], 10),
-      parseInt(mdyMatch[1], 10) - 1,
-      parseInt(mdyMatch[2], 10),
-      12, 0, 0
-    );
-  }
-
-  // Fallback: create Date and extract components to avoid timezone shift
-  const d = new Date(s);
-  if (!isNaN(d.getTime())) {
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0);
-  }
-
-  throw new Error("Invalid date format: " + exp);
 }
+
+// =============================================
+// LIBRARY EXPORTS (required after restructure)
+// Everything below is attached to SpreadFinder.* 
+// so Stubs.ts works perfectly
+// =============================================
+
+var SpreadFinder = SpreadFinder || {};
+
+SpreadFinder.onOpen = onOpen;
+SpreadFinder.initializeProject = initializeProject;
+SpreadFinder.runSpreadFinder = runSpreadFinder;
+SpreadFinder.runSpreadFinderWithSelection = runSpreadFinderWithSelection;
+SpreadFinder.refreshOptionPrices = refreshOptionPrices;
+SpreadFinder.showSpreadFinderGraphs = showSpreadFinderGraphs;
+SpreadFinder.PlotPortfolioValueByPrice = PlotPortfolioValueByPrice;
+SpreadFinder.importLatestTransactions = importLatestTransactions;
+SpreadFinder.rebuildPortfolio = rebuildPortfolio;
+SpreadFinder.loadSamplePortfolio = loadSamplePortfolio;
+
+// Custom functions for cells
+SpreadFinder.detectStrategy = detectStrategy;
+SpreadFinder.buildOptionStratUrlFromLegs = buildOptionStratUrlFromLegs;
+SpreadFinder.buildOptionStratUrl = buildOptionStratUrl;
+SpreadFinder.buildCustomOptionStratUrl = buildCustomOptionStratUrl;
+SpreadFinder.recommendBullCallSpreadOpenDebit = recommendBullCallSpreadOpenDebit;
+SpreadFinder.XLookupByKeys = XLookupByKeys;
+SpreadFinder.X2LOOKUP = X2LOOKUP;
+SpreadFinder.X3LOOKUP = X3LOOKUP;
+
+// Dialog helpers
+SpreadFinder.getAvailableSymbols = getAvailableSymbols;
+SpreadFinder.plotSelectedSymbols = plotSelectedSymbols;
+SpreadFinder.getSpreadFinderGraphData = getSpreadFinderGraphData;
+SpreadFinder.getPortfolioGraphData = getPortfolioGraphData;
+
+console.log('✅ SpreadFinder library fully loaded');

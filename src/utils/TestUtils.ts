@@ -1,3 +1,4 @@
+// @ts-check
 function assertEqual(actual, expected, message = "", eps = 1e-9) {
     // Same reference or primitive equality (covers identical strings, numbers, booleans)
     if (actual === expected) return;

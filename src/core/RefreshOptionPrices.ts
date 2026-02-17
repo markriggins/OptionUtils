@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * refreshOptionPrices
  * Menu action: Refresh OptionPricesUploaded CSV files that have been uploaded into

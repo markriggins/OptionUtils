@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Configurable logging with levels and function filtering.
  * Outputs to a "Logs" sheet in the spreadsheet for easy searching/filtering.

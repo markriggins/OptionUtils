@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Stubs.js - Library wrapper stubs for SpreadFinder
  *
@@ -260,3 +261,17 @@ function formatLegsDescription(strikeRange, qtyRange, suffix) {
 function formatAllDescriptions(groups, strikes, qtys, strategies) {
   return SpreadFinder.formatAllDescriptions(groups, strikes, qtys, strategies);
 }
+
+/* =============================================
+   EXPLICIT LIBRARY EXPORTS (Phase 5 fix)
+   These make sure every @customfunction still works
+   ============================================= */
+
+// Re-export all custom functions so they appear on SpreadFinder.*
+SpreadFinder.detectStrategy = detectStrategy;
+SpreadFinder.buildOptionStratUrlFromLegs = buildOptionStratUrlFromLegs;
+SpreadFinder.buildOptionStratUrl = buildOptionStratUrl;
+SpreadFinder.buildCustomOptionStratUrl = buildCustomOptionStratUrl;
+SpreadFinder.recommendBullCallSpreadOpenDebit = recommendBullCallSpreadOpenDebit;
+
+// Add any other missing ones you see errors for later

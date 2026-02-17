@@ -1,9 +1,7 @@
-# Files to exclude from clasp push to the library
-# These are for users to copy into their own spreadsheets
-
-Stubs.js
-README.md
-CLAUDE.md
-.git/**
-node_modules/**
-*.md
+**/.*
+**/.DS_Store
+**/node_modules/**
+**/*.ts
+!src/**/*.ts
+Stubs.ts
+src/lib/Stubs.ts

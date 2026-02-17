@@ -1,3 +1,4 @@
+// @ts-check
 /** ========= CONFIG ========= */
 const CACHE_TTL_SECONDS = 6 * 60 * 1; // 1 hour
 const CACHE_KEY_PREFIX = "XLookupByKeys:v3:";

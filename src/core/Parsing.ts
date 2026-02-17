@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Parsing utilities for option data.
  * All parse functions return null or NaN on invalid input.
