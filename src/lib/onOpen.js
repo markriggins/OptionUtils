@@ -1,3 +1,4 @@
+// @ts-check
 // your original onOpen with small cleanups + use of CONST
 function onOpen() {
   const ui = SpreadsheetApp.getUi();

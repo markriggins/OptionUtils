@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Stubs.js - Library wrapper stubs for SpreadFinder
  *

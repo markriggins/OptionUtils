@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * ImportEtrade.js
  * Imports E*Trade portfolio and transactions into the Portfolio sheet.

@@ -1,3 +1,4 @@
+// @ts-check
 // (your full original SpreadFinder.js with the following improvements applied)
 // - Defensive defaults added right after config merge
 // - Magic strings replaced with CONST.XXX

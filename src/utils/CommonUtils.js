@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * CommonUtils.js
  * Shared small helpers used across OptionUtils.
