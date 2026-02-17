@@ -8,3 +8,12 @@ function onOpen() {
     // etc
     .addToUi();
 }
+
+// =============================================
+// LIBRARY EXPORT (required after src/ refactor)
+// Makes SpreadFinder.onOpen work from Stubs.ts
+// =============================================
+if (typeof SpreadFinder === 'undefined') {
+  var SpreadFinder = {};
+}
+SpreadFinder.onOpen = onOpen;

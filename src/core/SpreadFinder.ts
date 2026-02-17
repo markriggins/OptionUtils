@@ -782,3 +782,40 @@ function runSpreadFinderWithSelection(symbols?: string[], expirations?: string[]
     throw e;
   }
 }
+
+// =============================================
+// LIBRARY EXPORTS (required after restructure)
+// Everything below is attached to SpreadFinder.* 
+// so Stubs.ts works perfectly
+// =============================================
+
+var SpreadFinder = SpreadFinder || {};
+
+SpreadFinder.onOpen = onOpen;
+SpreadFinder.initializeProject = initializeProject;
+SpreadFinder.runSpreadFinder = runSpreadFinder;
+SpreadFinder.runSpreadFinderWithSelection = runSpreadFinderWithSelection;
+SpreadFinder.refreshOptionPrices = refreshOptionPrices;
+SpreadFinder.showSpreadFinderGraphs = showSpreadFinderGraphs;
+SpreadFinder.PlotPortfolioValueByPrice = PlotPortfolioValueByPrice;
+SpreadFinder.importLatestTransactions = importLatestTransactions;
+SpreadFinder.rebuildPortfolio = rebuildPortfolio;
+SpreadFinder.loadSamplePortfolio = loadSamplePortfolio;
+
+// Custom functions for cells
+SpreadFinder.detectStrategy = detectStrategy;
+SpreadFinder.buildOptionStratUrlFromLegs = buildOptionStratUrlFromLegs;
+SpreadFinder.buildOptionStratUrl = buildOptionStratUrl;
+SpreadFinder.buildCustomOptionStratUrl = buildCustomOptionStratUrl;
+SpreadFinder.recommendBullCallSpreadOpenDebit = recommendBullCallSpreadOpenDebit;
+SpreadFinder.XLookupByKeys = XLookupByKeys;
+SpreadFinder.X2LOOKUP = X2LOOKUP;
+SpreadFinder.X3LOOKUP = X3LOOKUP;
+
+// Dialog helpers
+SpreadFinder.getAvailableSymbols = getAvailableSymbols;
+SpreadFinder.plotSelectedSymbols = plotSelectedSymbols;
+SpreadFinder.getSpreadFinderGraphData = getSpreadFinderGraphData;
+SpreadFinder.getPortfolioGraphData = getPortfolioGraphData;
+
+console.log('✅ SpreadFinder library fully loaded');
