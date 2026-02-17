@@ -1,61 +1,22 @@
-// @ts-check
 /**
- * SpreadFinder.js
- * Analyzes OptionPricesUploaded to find and rank bull call spread opportunities.
- *
- * Config lives on the SpreadFinderConfig sheet.
- * Results are written to the Spreads sheet.
- *
- * Config table format (auto-created on SpreadFinderConfig):
- *   | Setting            | Value | Description                                    |
- *   | maxSpreadWidth     | 150   | Maximum spread width in dollars                |
- *   | minOpenInterest    | 10    | Minimum open interest for both legs            |
- *   | minVolume          | 0     | Minimum volume for both legs                   |
- *   | patience           | 60    | Minutes for price calculation (0=aggressive)   |
- *   | maxDebit           | 50    | Maximum debit per share                        |
- *   | minROI             | 0.5   | Minimum ROI (0.5 = 50%)                        |
- *
- * Version: 2.0
- */
-
-const SPREAD_FINDER_CONFIG_SHEET = "SpreadFinderConfig";
-const SPREADS_SHEET = "Spreads";
-const OPTION_PRICES_SHEET = "OptionPricesUploaded";
-const CONFIG_COL = 1; // Column A
-const CONFIG_START_ROW = 1;
-
-/**
- * Calculates the Expected Gain for a Bull Call Spread based on an 80%-of-max-profit early exit.
- * Uses the "Rule of Touch" (probTouch ≈ 1.6x delta) to estimate probability of reaching target.
- * @param {number} longMid The mid price of the lower (long) leg.
- * @param {number} shortMid The mid price of the upper (short) leg.
- * @param {number} longStrike The strike price of the lower leg.
- * @param {number} shortStrike The strike price of the upper leg.
- * @param {number} shortDelta The delta of the upper (short) leg.
- * @return {number} The expected dollar gain per spread.
- */
-function calculateExpectedGain(longMid, shortMid, longStrike, shortStrike, shortDelta) {
-  var netDebit = longMid - shortMid;
-  var spreadWidth = shortStrike - longStrike;
-  var maxProfit = spreadWidth - netDebit;
-
-  var targetProfit = maxProfit * 0.80;
-
-  // Prob(Touch) ≈ 1.6x short delta, capped at 95%
-  var probTouch = Math.min(shortDelta * 1.6, 0.95);
-  var probLoss = 1 - probTouch;
-
-  // EV = (Prob of Win * Win Amount) + (Prob of Loss * Loss Amount)
-  var expectedValue = (probTouch * targetProfit) + (probLoss * -netDebit);
-
-  return expectedValue;
-}
-
-/**
- * Runs the spread finder analysis. Call from menu or script.
- * Ensures config exists, reads it, scans options, ranks spreads, outputs results.
+ * Main entry point for Spread Finder (called from menu).
+ * @returns {void}
  */
 function runSpreadFinder() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    // === DEFENSIVE DEFAULTS (Phase 4) ===
+    const rawConfig = loadSpreadFinderConfig_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONST.CONFIG_SHEET));
+    const config: SpreadFinderConfig = {
+      minROI: Number(rawConfig.minROI) || 0.5,
+      patience: Number(rawConfig.patience) || 60,
+      minLiquidity: Number(rawConfig.minLiquidity) || 10,
+      maxSpreadWidth: Number(rawConfig.maxSpreadWidth) || 5,
+      minExpectedGain: Number(rawConfig.minExpectedGain) || 0.8,
+      ...rawConfig  // keep any other fields you have
+    };
+
+    // === YOUR ORIGINAL BODY STARTS HERE (unchanged) ===
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   // Ensure config and results sheets exist
@@ -803,3 +764,21 @@ function showSpreadFinderGraphs() {
      };
    }).sort((a, b) => a.fitness - b.fitness);
  }
+/**
+ * Wrapper for Stubs.ts compatibility (called from menu/dialog).
+ * Delegates to the main runSpreadFinder() — you can enhance filtering later.
+ * @param {string[]} [symbols] 
+ * @param {string[]} [expirations]
+ * @returns {any}
+ */
+function runSpreadFinderWithSelection(symbols?: string[], expirations?: string[]) {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    // Future enhancement: filter by symbols/expirations if provided
+    return runSpreadFinder();
+  } catch (e) {
+    console.error('runSpreadFinderWithSelection error:', e);
+    ui.alert('Spread Finder Error', e.message || 'Unknown error occurred', ui.ButtonSet.OK);
+    throw e;
+  }
+}
