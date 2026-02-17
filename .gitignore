@@ -1,0 +1,8 @@
+
+# Grok refactor backups (auto-generated during Phase scripts)
+grok-backup*
+/tmp/grok_*.sh
+
+# Grok refactor backups (auto-generated during Phase scripts)
+grok-backup*
+/tmp/grok_*.sh
