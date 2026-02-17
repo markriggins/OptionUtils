@@ -70,7 +70,7 @@ function initializeProject() {
       while (files.hasNext()) { files.next(); portfolioCount++; }
     }
   } catch (e) {
-    Logger.log("Error checking for existing data: " + e.message);
+    log.warn("init", "Error checking for existing data: " + e.message);
   }
 
   // Show dialog with options
@@ -202,7 +202,7 @@ function completeInitialization(loadOptionPrices, loadPortfolio) {
     getOrCreateFolder_(driveFolder, "Etrade");
     getOrCreateFolder_(driveFolder, "OptionPrices");
   } catch (e) {
-    Logger.log("Drive folder setup skipped: " + e.message);
+    log.warn("init", "Drive folder setup skipped: " + e.message);
   }
 
   // Activate the README sheet
@@ -216,7 +216,7 @@ function completeInitialization(loadOptionPrices, loadPortfolio) {
       refreshOptionPrices();
       loaded.push("Option Prices");
     } catch (e) {
-      Logger.log("Error loading option prices: " + e.message);
+      log.error("init", "Error loading option prices: " + e.message);
     }
   }
 
@@ -225,7 +225,7 @@ function completeInitialization(loadOptionPrices, loadPortfolio) {
       rebuildPortfolio();
       loaded.push("Portfolio");
     } catch (e) {
-      Logger.log("Error loading portfolio: " + e.message);
+      log.error("init", "Error loading portfolio: " + e.message);
     }
   }
 
@@ -354,9 +354,9 @@ function fetchGitHubFile_(path) {
   try {
     const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
     if (resp.getResponseCode() === 200) return resp.getContentText();
-    Logger.log("GitHub fetch " + resp.getResponseCode() + " for " + path);
+    log.warn("github", "GitHub fetch " + resp.getResponseCode() + " for " + path);
   } catch (e) {
-    Logger.log("GitHub fetch failed for " + path + ": " + e.message);
+    log.error("github", "GitHub fetch failed for " + path + ": " + e.message);
   }
   return null;
 }

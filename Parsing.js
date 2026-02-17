@@ -759,7 +759,7 @@ function test_parseSpreadStrategy() {
   assertEqual(parseSpreadStrategy_("stock spread"), null, "mixed invalid");
   assertEqual(parseSpreadStrategy_("sto\u0301ck"), null, "accented stock");
 
-  Logger.log("All parseSpreadStrategy tests passed");
+  log.info("test", "All parseSpreadStrategy tests passed");
 }
 
 function test_parseOptionType() {
@@ -780,7 +780,7 @@ function test_parseOptionType() {
   assertEqual(parseOptionType_("stock"), null, "stock is not an option type");
   assertEqual(parseOptionType_("bcs"), null, "bcs is not an option type");
 
-  Logger.log("All parseOptionType tests passed");
+  log.info("test", "All parseOptionType tests passed");
 }
 
 function test_loadCsvData_columnOrders() {
@@ -834,7 +834,7 @@ function test_loadCsvData_columnOrders() {
   const rows4 = loadCsvData_(csv4, symbol, expDate);
   assertArrayDeepEqual(rows4, [], "Test 4: Missing Bid -> empty");
 
-  Logger.log("All parseCsvData column order tests passed");
+  log.info("test", "All parseCsvData column order tests passed");
 }
 
 function test_detectPositionType_stock() {
@@ -842,7 +842,7 @@ function test_detectPositionType_stock() {
   assertEqual(detectPositionType_([{ strike: NaN, type: null, qty: 100 }]), "stock", "no type no strike = stock");
   assertEqual(detectPositionType_([]), null, "empty legs");
   assertEqual(detectPositionType_(null), null, "null");
-  Logger.log("All detectPositionType stock tests passed");
+  log.info("test", "All detectPositionType stock tests passed");
 }
 
 function test_detectPositionType_spreads() {
@@ -887,7 +887,7 @@ function test_detectPositionType_spreads() {
     "custom",
     "unequal qty puts = custom (ratio spread)"
   );
-  Logger.log("All detectPositionType spread tests passed");
+  log.info("test", "All detectPositionType spread tests passed");
 }
 
 function test_detectPositionType_ironCondor() {
@@ -912,7 +912,7 @@ function test_detectPositionType_ironCondor() {
     "custom",
     "IC with imbalanced qty = custom"
   );
-  Logger.log("All detectPositionType iron condor tests passed");
+  log.info("test", "All detectPositionType iron condor tests passed");
 }
 
 function test_detectPositionType_ironButterfly() {
@@ -926,7 +926,7 @@ function test_detectPositionType_ironButterfly() {
     "iron-butterfly",
     "IB: short put and short call at same strike"
   );
-  Logger.log("All detectPositionType iron butterfly tests passed");
+  log.info("test", "All detectPositionType iron butterfly tests passed");
 }
 
 function test_parsePositionsForSymbol_stock() {
@@ -938,7 +938,7 @@ function test_parsePositionsForSymbol_stock() {
   assertEqual(result.shares.length, 1, "one stock position");
   assertEqual(result.shares[0].qty, 600, "stock qty");
   assertEqual(result.shares[0].basis, 333, "stock basis");
-  Logger.log("All parsePositionsForSymbol stock tests passed");
+  log.info("test", "All parsePositionsForSymbol stock tests passed");
 }
 
 function test_parsePositionsForSymbol_bullCallSpread() {
@@ -955,7 +955,7 @@ function test_parsePositionsForSymbol_bullCallSpread() {
   assertEqual(bcs.kShort, 440, "BCS short strike");
   assertEqual(bcs.debit, 58, "BCS debit = 223.50 - 165.50");
   assertEqual(bcs.flavor, "CALL", "BCS flavor");
-  Logger.log("All parsePositionsForSymbol BCS tests passed");
+  log.info("test", "All parsePositionsForSymbol BCS tests passed");
 }
 
 function test_parsePositionsForSymbol_ironCondor() {
@@ -973,5 +973,5 @@ function test_parsePositionsForSymbol_ironCondor() {
   assertEqual(result.bullPutSpreads[0].kShort, 250, "BPS short strike");
   assertEqual(result.bearCallSpreads[0].kLong, 400, "bear call long (short) strike");
   assertEqual(result.bearCallSpreads[0].kShort, 450, "bear call short (long) strike");
-  Logger.log("All parsePositionsForSymbol iron condor tests passed");
+  log.info("test", "All parsePositionsForSymbol iron condor tests passed");
 }

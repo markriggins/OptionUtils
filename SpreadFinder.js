@@ -163,27 +163,27 @@ function runSpreadFinderWithSelection(symbols, expirations) {
     ? symbols.join(",") + "Spreads"
     : SPREADS_SHEET;
   const sheet = ensureSpreadsSheet_(ss, spreadsSheetName);
-  Logger.log("SpreadFinder config: " + JSON.stringify(config));
+  log.debug("spreadFinder", "Config: " + JSON.stringify(config));
 
   // Load option data (filtered by selection)
   const options = loadOptionData_(ss, config.symbols, config.selectedExpirations);
-  Logger.log("Loaded " + options.length + " options");
+  log.info("spreadFinder", "Loaded " + options.length + " options");
 
   // Filter to calls only
   const calls = options.filter(o => o.type === "Call");
-  Logger.log("Filtered to " + calls.length + " calls");
+  log.debug("spreadFinder", "Filtered to " + calls.length + " calls");
 
   // Group by symbol+expiration
   const grouped = groupBySymbolExpiration_(calls);
 
   // Derive current price from ATM calls (delta closest to 0.5)
   const currentPrice = estimateCurrentPrice_(calls);
-  Logger.log("Estimated current price: " + currentPrice);
+  log.debug("spreadFinder", "Estimated current price: " + currentPrice);
 
   // Default outlook if not set by user
   if (!config.outlookFuturePrice) {
     config.outlookFuturePrice = roundTo_(currentPrice * 1.25, 2);
-    Logger.log("Defaulting outlookFuturePrice to " + config.outlookFuturePrice);
+    log.debug("spreadFinder", "Defaulting outlookFuturePrice to " + config.outlookFuturePrice);
   }
   if (!config.outlookConfidence) {
     config.outlookConfidence = 0.5;
@@ -202,11 +202,11 @@ function runSpreadFinderWithSelection(symbols, expirations) {
     const chainSpreads = generateSpreads_(chain, config);
     spreads.push(...chainSpreads);
   }
-  Logger.log("Generated " + spreads.length + " spreads");
+  log.info("spreadFinder", "Generated " + spreads.length + " spreads");
 
   // Load held positions from Positions sheet
   const conflicts = loadHeldPositions_(ss);
-  Logger.log("Loaded " + conflicts.size + " held positions: " + JSON.stringify([...conflicts]));
+  log.debug("spreadFinder", "Loaded " + conflicts.size + " held positions");
 
   // Filter by config constraints, mark conflicts instead of removing
   // Skip expiration date range filter if user selected specific expirations
@@ -229,7 +229,7 @@ function runSpreadFinderWithSelection(symbols, expirations) {
       s.upperStrike <= config.maxStrike &&
       (skipExpDateFilter || (expDate >= minExpDate && expDate <= maxExpDate));
   });
-  Logger.log("Filtered to " + filtered.length + " spreads meeting criteria");
+  log.info("spreadFinder", "Filtered to " + filtered.length + " spreads meeting criteria");
 
   // Sort by fitness (descending)
   filtered.sort((a, b) => b.fitness - a.fitness);
@@ -655,7 +655,7 @@ function loadHeldPositions_(ss) {
   const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
   if (legsRange) {
     const rows = legsRange.getValues();
-    Logger.log("found Legs table with rows:" + rows.length);
+    log.debug("spreadFinder", "Found Portfolio table with rows: " + rows.length);
     if (rows.length >= 2) {
       const headers = rows[0];
       const idxSym = findColumn_(headers, ["symbol", "ticker"]);
@@ -698,7 +698,7 @@ function loadHeldPositions_(ss) {
   // Fall back to old Positions sheet logic
   const sheet = ss.getSheetByName("Positions");
   if (!sheet) {
-    Logger.log("Positions sheet not found, skipping held position check");
+    log.debug("spreadFinder", "Positions sheet not found, skipping held position check");
     return held;
   }
 
@@ -728,7 +728,7 @@ function loadHeldPositions_(ss) {
   }
 
   if (headerRow < 0 || shortStrikeCol < 0) {
-    Logger.log("BullCallSpreads table not found on Positions sheet");
+    log.debug("spreadFinder", "BullCallSpreads table not found on Positions sheet");
     return held;
   }
 
@@ -935,7 +935,7 @@ function showSpreadFinderGraphs() {
  * Orders by Fitness so the best points are drawn last (on top).
  */
  function getSpreadFinderGraphData() {
-   Logger.log("getSpreadFinderGraphData");
+   log.debug("spreadFinder", "getSpreadFinderGraphData called");
    const ss = SpreadsheetApp.getActiveSpreadsheet();
    const configSheet = ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
    const config = configSheet ? loadSpreadFinderConfig_(configSheet) : {};

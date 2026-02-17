@@ -308,7 +308,7 @@ function test_XLookupByKeys_returns_expected_values() {
     sheetName
   );
   assertArrayEqual(result[0], [203.15, 206.00, 208.85], "lookup returned wrong bid/mid/ask");
-  Logger.log("✅ test_XLookupByKeys_returns_expected_values PASSED");
+  log.info("test", "✅ test_XLookupByKeys_returns_expected_values PASSED");
 }
 
 function test_XLookupByKeys_cache_reused_in_memory() {
@@ -333,7 +333,7 @@ function test_XLookupByKeys_cache_reused_in_memory() {
   assertArrayEqual(r2[0], [6.10, 6.30, 6.50], "second call wrong");
   const afterSecondKeys = Object.keys(__MEMO).length;
   assertEqual_XLookupByKeys_(afterSecondKeys, afterFirstKeys, "Memo should be reused without creating new entries");
-  Logger.log("✅ test_XLookupByKeys_cache_reused_in_memory PASSED");
+  log.info("test", "✅ test_XLookupByKeys_cache_reused_in_memory PASSED");
 }
 
 function test_XLookupByKeys_missing_row_returns_blanks() {
@@ -346,7 +346,7 @@ function test_XLookupByKeys_missing_row_returns_blanks() {
     sheetName
   );
   assertArrayEqual(result[0], ["", "", ""], "missing row should return blanks");
-  Logger.log("✅ test_XLookupByKeys_missing_row_returns_blanks PASSED");
+  log.info("test", "✅ test_XLookupByKeys_missing_row_returns_blanks PASSED");
 }
 
 function test_XLookupByKeys_all() {
@@ -354,10 +354,10 @@ function test_XLookupByKeys_all() {
   const tests = Object.keys(globalObj)
     .filter(k => typeof globalObj[k] === "function" && k.startsWith("test_XLookupByKeys") && k !== "test_XLookupByKeys_all")
     .sort();
-  Logger.log(`Found ${tests.length} tests`);
+  log.info("test", `Found ${tests.length} tests`);
   tests.forEach(fn => {
-    Logger.log(`Running ${fn}`);
+    log.info("test", `Running ${fn}`);
     globalObj[fn]();
   });
-  Logger.log("✅ All tests completed");
+  log.info("test", "✅ All tests completed");
 }

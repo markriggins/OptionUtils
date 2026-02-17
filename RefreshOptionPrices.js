@@ -263,9 +263,9 @@ function findInputFiles_(path) {
     }
   }
 
-  Logger.log(`findInputFiles_: scanned ${filesScanned} files, skipped ${filesSkippedNoExp}, found ${Object.keys(bestBySymbol).length} symbols`);
+  log.info("files", `findInputFiles_: scanned ${filesScanned} files, skipped ${filesSkippedNoExp}, found ${Object.keys(bestBySymbol).length} symbols`);
   for (const sym in bestBySymbol) {
-    Logger.log(`  ${sym}: ${Object.keys(bestBySymbol[sym]).length} expirations`);
+    log.debug("files", `  ${sym}: ${Object.keys(bestBySymbol[sym]).length} expirations`);
   }
 
   return { bestBySymbol, filesScanned, filesSkippedNoExp, folderPath: path };
@@ -292,12 +292,12 @@ function loadCsvData_(csvData, symbol, expDate) {
   const { strikeIdx, bidIdx, midIdx, askIdx, typeIdx, ivIdx, deltaIdx, volumeIdx, openIntIdx, moneynessIdx } = findColumnIndexes_(headers);
 
   if (strikeIdx === -1 || bidIdx === -1 || askIdx === -1 || typeIdx === -1) {
-    Logger.log(`Skipping ${symbol} for exp ${expDate}: missing required columns`);
+    log.warn("csv", `Skipping ${symbol} for exp ${expDate}: missing required columns`);
     return rows;
   }
 
   if (midIdx === -1) {
-    Logger.log(`Note ${symbol} for exp ${expDate}: no mid column found (mid will be null)`);
+    log.debug("csv", `Note ${symbol} for exp ${expDate}: no mid column found (mid will be null)`);
   }
 
   for (let i = 1; i < csvData.length; i++) {

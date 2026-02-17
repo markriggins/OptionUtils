@@ -127,7 +127,7 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
   }
 
   // Process all transaction CSVs, dedup across file boundaries (overlapping date ranges)
-  Logger.log(`Processing ${txnFiles.length} transaction CSV(s)`);
+  log.info("import", `Processing ${txnFiles.length} transaction CSV(s)`);
 
   let transactions = [];
   let stockTxns = [];
@@ -151,7 +151,7 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
       seenStockTxns.add(key);
       stockTxns.push(stk);
     }
-    Logger.log(`  ${file.getName()}: ${txnAdded} transactions (${txnDupes} dupes skipped)`);
+    log.debug("import", `${file.getName()}: ${txnAdded} transactions (${txnDupes} dupes skipped)`);
   }
 
   if (transactions.length === 0) {
@@ -175,7 +175,7 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
       const portfolioResult = parsePortfolioStocksAndCashFromFile_(portfolioFiles[0], stockTxns);
       stockPositions = portfolioResult.stocks;
       portfolioCash = portfolioResult.cash || 0;
-      Logger.log(`Found ${stockPositions.length} stock positions and $${portfolioCash} cash from portfolio CSV`);
+      log.info("import", `Found ${stockPositions.length} stock positions and $${portfolioCash} cash from portfolio CSV`);
     }
   } else {
     // For update mode: aggregate only NEW stock transactions (after existing LastTxnDate)
@@ -190,7 +190,7 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
       }
     }
     stockPositions = aggregateStockTransactions_(stockTxns, stockCutoffDates);
-    Logger.log(`Found ${stockPositions.length} stock positions with new transactions`);
+    log.info("import", `Found ${stockPositions.length} stock positions with new transactions`);
   }
 
   // Pair into spreads (opens only)
@@ -209,16 +209,16 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
       upperStrike: null,
       optionType: "Cash",
     });
-    Logger.log(`Added cash position: $${portfolioCash}`);
+    log.debug("import", `Added cash position: $${portfolioCash}`);
   }
 
   // Pre-merge spreads with the same key, keeping latest date and summing quantities
   const spreads = preMergeSpreads_(rawSpreads);
-  Logger.log(`Paired into ${spreads.length} spread orders (including stocks)`);
+  log.info("import", `Paired into ${spreads.length} spread orders (including stocks)`);
 
   // Build map of closing prices by leg key
   const closingPrices = buildClosingPricesMap_(transactions, stockTxns);
-  Logger.log(`Found closing prices for ${closingPrices.size} legs`);
+  log.debug("import", `Found closing prices for ${closingPrices.size} legs`);
 
   // Validate option quantities against portfolio CSV (for rebuild/fresh mode)
   let validationWarnings = "";
@@ -253,7 +253,7 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
 
         const direction = isLong ? "long" : "short";
         validationWarnings += `  • Added ${ticker} ${exp} $${strike} ${type}: ${m.portfolio} contracts (${direction})\n`;
-        Logger.log(`Added orphaned option: ${m.key} qty=${m.portfolio}`);
+        log.debug("import", `Added orphaned option: ${m.key} qty=${m.portfolio}`);
       }
     }
 
@@ -268,12 +268,12 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
     // Note: validation.extra (in transactions but not in portfolio) is expected for closed positions
     // Only log for debugging, don't show as warning
     if (validation.extra.length > 0) {
-      Logger.log("Closed positions (in transactions but not in portfolio): " +
+      log.debug("import", "Closed positions (in transactions but not in portfolio): " +
         validation.extra.map(m => m.key).join(", "));
     }
 
     if (validationWarnings) {
-      Logger.log("Validation warnings: " + validationWarnings);
+      log.warn("import", "Validation warnings: " + validationWarnings);
     }
   }
 
@@ -501,7 +501,7 @@ function importEtradePortfolioFromFolder_(folder, txnFileName, portfolioFileName
   // Write to Portfolio table (fresh, no merge)
   writePortfolioTable_(ss, [], [], spreads, closingPrices);
 
-  Logger.log(`Sample portfolio imported: ${spreads.length} positions`);
+  log.info("import", `Sample portfolio imported: ${spreads.length} positions`);
 }
 
 /**
@@ -555,7 +555,7 @@ function parsePortfolioStocksAndCashFromFile_(file, stockTxns) {
       if (idxMarketValue >= 0) {
         cash = parseFloat((cols[idxMarketValue] || "").replace(/[$,]/g, "")) || 0;
       }
-      Logger.log(`Found cash in portfolio: $${cash} (column ${idxMarketValue})`);
+      log.debug("import", `Found cash in portfolio: $${cash} (column ${idxMarketValue})`);
       continue;
     }
 
@@ -747,36 +747,36 @@ function buildLatestStockDates_(stockTxns) {
  * Finds all files in a folder whose name starts with prefix, sorted newest first by name.
  */
 function findFilesByPrefix_(folder, prefix) {
-  Logger.log(`findFilesByPrefix_: Looking for '${prefix}' in folder '${folder.getName()}'`);
+  log.debug("files", `Looking for '${prefix}' in folder '${folder.getName()}'`);
 
   // Try CSV MIME type first
   let iter = folder.searchFiles(`title contains '${prefix}' and mimeType = 'text/csv'`);
   let files = [];
   while (iter.hasNext()) files.push(iter.next());
-  Logger.log(`  CSV MIME type search found: ${files.length} files`);
+  log.debug("files", `CSV MIME type search found: ${files.length} files`);
 
   // If no CSV files found, try any file with the prefix (MIME type might be wrong)
   if (files.length === 0) {
     iter = folder.searchFiles(`title contains '${prefix}'`);
     while (iter.hasNext()) {
       const f = iter.next();
-      Logger.log(`  Found file: ${f.getName()} (MIME: ${f.getMimeType()})`);
+      log.debug("files", `Found file: ${f.getName()} (MIME: ${f.getMimeType()})`);
       // Include CSV files and other text formats (e.g., .cindy)
       const name = f.getName().toLowerCase();
       if (name.endsWith('.csv') || name.endsWith('.cindy') || name.endsWith('.txt')) {
         files.push(f);
       }
     }
-    Logger.log(`  After extension filter: ${files.length} files`);
+    log.debug("files", `After extension filter: ${files.length} files`);
   }
 
   // If still nothing, list all files in folder for debugging
   if (files.length === 0) {
-    Logger.log(`  No files found. Listing all files in folder:`);
+    log.warn("files", `No files found. Listing all files in folder:`);
     const allFiles = folder.getFiles();
     while (allFiles.hasNext()) {
       const f = allFiles.next();
-      Logger.log(`    - ${f.getName()} (MIME: ${f.getMimeType()})`);
+      log.debug("files", `  - ${f.getName()} (MIME: ${f.getMimeType()})`);
     }
   }
 
@@ -785,7 +785,7 @@ function findFilesByPrefix_(folder, prefix) {
   const result = realFiles.length > 0 ? realFiles : files;
 
   result.sort((a, b) => b.getName().localeCompare(a.getName()));
-  Logger.log(`  Returning ${result.length} files`);
+  log.debug("files", `Returning ${result.length} files`);
   return result;
 }
 
@@ -1679,7 +1679,7 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
 
   const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
   if (!legsRange || headers.length === 0) {
-    Logger.log("Portfolio table not found, creating new one");
+    log.info("import", "Portfolio table not found, creating new one");
     // Create new Portfolio sheet
     let sheet = ss.getSheetByName("Portfolio");
     if (!sheet) sheet = ss.insertSheet("Portfolio");
