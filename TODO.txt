@@ -20,3 +20,5 @@
   Performance
   8. Batch sheet writes - Some code writes row-by-row. Using setValues() with a 2D array is much faster.
 
+  9. MOVE all HTML files into a UI folder
+  10. Be sure that the DATA/OptionPrices support the sample portfolio.  Put "sample" in their name, so they will be ignored later
