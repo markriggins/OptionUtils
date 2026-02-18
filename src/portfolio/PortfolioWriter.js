@@ -255,9 +255,14 @@ function parsePortfolioTable_(rows) {
 
 /**
  * Validates spread positions against E*Trade portfolio option quantities.
+ * Accounts for closed/exercised/assigned positions when calculating expected.
  * Returns a list of discrepancies.
+ *
+ * @param {Object[]} spreads - Spread positions from pairing
+ * @param {Map} portfolioOptions - Quantities from portfolio CSV
+ * @param {Object[]} transactions - All transactions (to find closes)
  */
-function validateOptionQuantities_(spreads, portfolioOptions) {
+function validateOptionQuantities_(spreads, portfolioOptions, transactions) {
   const expected = new Map();
 
   for (const spread of spreads) {
@@ -282,6 +287,25 @@ function validateOptionQuantities_(spreads, portfolioOptions) {
         expected.set(key, (expected.get(key) || 0) + shortQty);
       }
     }
+  }
+
+  // Subtract closed/exercised/assigned quantities from expected
+  for (const txn of (transactions || [])) {
+    if (!txn.isClosed && !txn.isExercised && !txn.isAssigned) continue;
+
+    const expiration = formatExpirationForKey_(txn.expiration);
+    const key = `${txn.ticker}|${expiration}|${txn.strike}|${txn.optionType}`;
+
+    if (expected.has(key)) {
+      // Closes have opposite sign from opens, so we add the qty (which reduces the position)
+      const closeQty = txn.qty; // negative for sells, positive for buys
+      expected.set(key, expected.get(key) + closeQty);
+    }
+  }
+
+  // Remove entries that netted to zero (fully closed positions)
+  for (const [key, qty] of expected) {
+    if (qty === 0) expected.delete(key);
   }
 
   const mismatches = [];

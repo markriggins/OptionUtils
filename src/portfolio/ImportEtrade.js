@@ -219,20 +219,21 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
   let validationWarnings = "";
   if ((importMode === "rebuild" || importMode === "fresh") && portfolioFiles.length > 0) {
     const portfolioOptionData = parsePortfolioOptionsWithPricesFromFile_(portfolioFiles[0]);
-    const validation = validateOptionQuantities_(spreads, portfolioOptionData.quantities);
+    log.debug("import", `Portfolio options map has ${portfolioOptionData.quantities.size} entries`);
+    const validation = validateOptionQuantities_(spreads, portfolioOptionData.quantities, transactions);
 
-    // Add orphaned options as single-leg positions
-    if (validation.missing.length > 0) {
+    // Add orphaned options as single-leg positions (in portfolio but not matched by transactions)
+    if (validation.extra.length > 0) {
       validationWarnings += "\n\n⚠️ ORPHANED OPTIONS (added as single legs):\n";
-      for (const m of validation.missing) {
+      for (const m of validation.extra) {
         const [ticker, exp, strike, type] = m.key.split("|");
         const priceInfo = portfolioOptionData.prices.get(m.key) || { pricePaid: 0 };
 
-        const isLong = m.portfolio > 0;
+        const isLong = m.qty > 0;
         const singleLeg = {
           type: "single-option",
           ticker: ticker,
-          qty: isLong ? m.portfolio : Math.abs(m.portfolio),
+          qty: isLong ? m.qty : Math.abs(m.qty),
           expiration: exp,
           optionType: type,
           lowerStrike: isLong ? parseFloat(strike) : null,
@@ -244,8 +245,8 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
         spreads.push(singleLeg);
 
         const direction = isLong ? "long" : "short";
-        validationWarnings += `  • Added ${ticker} ${exp} $${strike} ${type}: ${m.portfolio} contracts (${direction})\n`;
-        log.debug("import", `Added orphaned option: ${m.key} qty=${m.portfolio}`);
+        validationWarnings += `  • Added ${ticker} ${exp} $${strike} ${type}: ${m.qty} contracts (${direction})\n`;
+        log.debug("import", `Added orphaned option: ${m.key} qty=${m.qty}`);
       }
     }
 
@@ -253,13 +254,8 @@ function importEtradePortfolio_(importMode, fileName, folderPath) {
       validationWarnings += "\n⚠️ QUANTITY MISMATCHES (check transactions):\n";
       for (const m of validation.mismatches) {
         const [ticker, exp, strike, type] = m.key.split("|");
-        validationWarnings += `  • ${ticker} ${exp} $${strike} ${type}: expected ${m.expected}, portfolio has ${m.portfolio}\n`;
+        validationWarnings += `  • ${ticker} ${exp} $${strike} ${type}: expected ${m.expected}, portfolio has ${m.actual}\n`;
       }
-    }
-
-    if (validation.extra.length > 0) {
-      log.debug("import", "Closed positions (in transactions but not in portfolio): " +
-        validation.extra.map(m => m.key).join(", "));
     }
 
     if (validationWarnings) {
