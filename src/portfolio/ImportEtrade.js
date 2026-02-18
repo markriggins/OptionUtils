@@ -529,7 +529,7 @@ function parsePortfolioStocksAndCashFromFile_(file, stockTxns) {
 
   const headers = parseCsvLine_(lines[headerIdx]);
   const idxSym = headers.findIndex(h => h === "Symbol");
-  const idxQty = headers.findIndex(h => h === "Quantity");
+  const idxQty = headers.findIndex(h => h === "Quantity" || h === "Qty #");
   const idxPricePaid = headers.findIndex(h => h.startsWith("Price Paid"));
   const idxMarketValue = headers.findIndex(h => h.startsWith("Market Value") || h.startsWith("Value"));
 
@@ -610,7 +610,7 @@ function parsePortfolioOptionsWithPricesFromFile_(file) {
 
   const headers = parseCsvLine_(lines[headerIdx]);
   const idxSym = headers.findIndex(h => h === "Symbol");
-  const idxQty = headers.findIndex(h => h === "Quantity");
+  const idxQty = headers.findIndex(h => h === "Quantity" || h === "Qty #");
   const idxPricePaid = headers.findIndex(h => h.startsWith("Price Paid"));
 
   if (idxSym < 0 || idxQty < 0) return { quantities, prices };
@@ -685,7 +685,10 @@ function validateOptionQuantities_(spreads, portfolioOptions) {
       }
       if (spread.upperStrike != null) {
         const key = `${ticker}|${expiration}|${spread.upperStrike}|${spread.optionType}`;
-        expected.set(key, (expected.get(key) || 0) - spread.qty); // Short leg
+        // For 2-leg spread, qty is positive so negate for short leg
+        // For naked short (lowerStrike is null), qty is already negative so use directly
+        const shortQty = spread.lowerStrike != null ? -spread.qty : spread.qty;
+        expected.set(key, (expected.get(key) || 0) + shortQty);
       }
     }
   }
@@ -810,28 +813,59 @@ function parseEtradeTransactionsFromCsv_(csvContent) {
   const transactions = [];
   const stockTxns = [];
 
-  // Find header row
+  // Find header row - support both old and new formats
   let headerIdx = -1;
+  let isNewCsvFormat = false;
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].startsWith("TransactionDate,")) {
       headerIdx = i;
+      isNewCsvFormat = false;
+      break;
+    }
+    if (lines[i].startsWith("Activity/Trade Date,")) {
+      headerIdx = i;
+      isNewCsvFormat = true;
       break;
     }
   }
   if (headerIdx < 0) return { transactions, stockTxns };
 
-  const optionTypes = [
+  const optionTxnTypes = [
     "Bought To Open", "Sold Short",
     "Sold To Close", "Bought To Cover",
     "Option Assigned", "Option Exercised",
   ];
 
-  // New-format types: "Bought"/"Sold" with OPENING/CLOSING in Description
-  const newFormatTypes = ["Bought", "Sold"];
+  // Old-format types: "Bought"/"Sold" with OPENING/CLOSING in Description
+  const oldFormatSimpleTypes = ["Bought", "Sold"];
 
-  // Find Description column index from header
+  // Find column indices from header
   const headerCols = parseCsvLine_(lines[headerIdx]);
-  const descIdx = headerCols.findIndex(h => h.trim().toLowerCase() === "description");
+  const colIndex = (name) => headerCols.findIndex(h => h.trim().toLowerCase() === name.toLowerCase());
+
+  // Column mappings differ between formats
+  let dateIdx, txnTypeIdx, secTypeIdx, symbolIdx, qtyIdx, amountIdx, priceIdx, descIdx;
+  if (isNewCsvFormat) {
+    // New format: Activity/Trade Date, Transaction Date, Settlement Date, Activity Type, Description, Symbol, Cusip, Quantity #, Price $, Amount $, Commission, Category, Note
+    dateIdx = colIndex("Activity/Trade Date");
+    txnTypeIdx = colIndex("Activity Type");
+    secTypeIdx = -1;  // No SecurityType in new format
+    symbolIdx = colIndex("Symbol");
+    qtyIdx = colIndex("Quantity #");
+    priceIdx = colIndex("Price $");
+    amountIdx = colIndex("Amount $");
+    descIdx = colIndex("Description");
+  } else {
+    // Old format: TransactionDate, TransactionType, SecurityType, Symbol, Quantity, Amount, Price, Commission, Description
+    dateIdx = 0;
+    txnTypeIdx = 1;
+    secTypeIdx = 2;
+    symbolIdx = 3;
+    qtyIdx = 4;
+    amountIdx = 5;
+    priceIdx = 6;
+    descIdx = colIndex("Description");
+  }
 
   // Parse rows
   for (let i = headerIdx + 1; i < lines.length; i++) {
@@ -839,44 +873,65 @@ function parseEtradeTransactionsFromCsv_(csvContent) {
     if (!line) continue;
 
     const cols = parseCsvLine_(line);
-    if (cols.length < 8) continue;
+    if (cols.length < 6) continue;
 
-    const [dateStr, txnType, secType, symbol, qtyStr, amountStr, priceStr, commStr] = cols;
+    const dateStr = cols[dateIdx] || "";
+    const txnType = cols[txnTypeIdx] || "";
+    const secType = secTypeIdx >= 0 ? cols[secTypeIdx] || "" : "";
+    const symbol = cols[symbolIdx] || "";
+    const qtyStr = cols[qtyIdx] || "";
+    const amountStr = cols[amountIdx] || "";
+    const priceStr = cols[priceIdx] || "";
     const desc = descIdx >= 0 && cols.length > descIdx ? cols[descIdx] : "";
 
     // Stock transactions (for exercise/assignment matching and portfolio aggregation)
-    if (secType === "EQ" && (txnType === "Bought" || txnType === "Sold")) {
+    const isStockTxn = isNewCsvFormat
+      ? (txnType === "Bought" || txnType === "Sold") && !desc.match(/^(CALL|PUT)\s/)
+      : secType === "EQ" && (txnType === "Bought" || txnType === "Sold");
+
+    if (isStockTxn) {
       stockTxns.push({
         date: dateStr,
         txnType: txnType,
-        ticker: symbol.trim().toUpperCase(),
+        ticker: symbol.trim().toUpperCase().replace(/^--$/, ""),
         qty: parseFloat(qtyStr) || 0,
         price: parseFloat(priceStr) || 0,
       });
       continue;
     }
 
-    // Option transactions
-    if (secType !== "OPTN") continue;
+    // Option transactions - check if this is an option trade
+    const isOptionTxn = isNewCsvFormat
+      ? optionTxnTypes.includes(txnType) || ((txnType === "Bought" || txnType === "Sold") && desc.match(/^(CALL|PUT)\s/))
+      : secType === "OPTN";
 
-    // Determine if old format or new format
-    const isOldFormat = optionTypes.includes(txnType);
-    const isNewFormat = newFormatTypes.includes(txnType);
-    if (!isOldFormat && !isNewFormat) continue;
+    if (!isOptionTxn) continue;
 
-    // Parse option symbol: try human-readable first, then OCC format
-    const parsed = parseEtradeOptionSymbol_(symbol) || parseOccOptionSymbol_(symbol);
+    // Determine transaction type category
+    const isStandardOptionType = optionTxnTypes.includes(txnType);
+    const isSimpleType = oldFormatSimpleTypes.includes(txnType);
+    if (!isStandardOptionType && !isSimpleType) continue;
+
+    // Parse option details - in new format, option info is in Description; in old format, it's in Symbol
+    let parsed;
+    if (isNewCsvFormat) {
+      // New format: parse from Description like "PUT  TSLA   02/27/26   400.000"
+      parsed = parseEtradeOptionDescription_(desc);
+    } else {
+      // Old format: parse from Symbol (OCC format or human-readable)
+      parsed = parseEtradeOptionSymbol_(symbol) || parseOccOptionSymbol_(symbol);
+    }
     if (!parsed) continue;
 
     // Determine open/close/exercise/assigned
     let isOpen, isClosed, isExercised, isAssigned;
-    if (isOldFormat) {
+    if (isStandardOptionType) {
       isOpen = txnType === "Bought To Open" || txnType === "Sold Short";
       isClosed = txnType === "Sold To Close" || txnType === "Bought To Cover";
       isExercised = txnType === "Option Exercised";
       isAssigned = txnType === "Option Assigned";
     } else {
-      // New format: check Description for OPENING/CLOSING
+      // Simple "Bought"/"Sold" types: check Description for OPENING/CLOSING
       const descUpper = desc.toUpperCase();
       isOpen = descUpper.includes("OPENING");
       isClosed = descUpper.includes("CLOSING");
@@ -902,6 +957,35 @@ function parseEtradeTransactionsFromCsv_(csvContent) {
   }
 
   return { transactions, stockTxns };
+}
+
+/**
+ * Parses option details from new E*Trade CSV Description format.
+ * Example: "PUT  TSLA   02/27/26   400.000" or "CALL TSLA   12/15/28   600.000"
+ * @returns {{ ticker, expiration, strike, type }} or null
+ */
+function parseEtradeOptionDescription_(desc) {
+  if (!desc) return null;
+
+  // Match: TYPE TICKER DATE STRIKE
+  // Examples: "PUT  TSLA   02/27/26   400.000"
+  //           "CALL TSLA   12/15/28   600.000"
+  const match = desc.match(/^(CALL|PUT)\s+([A-Z]+)\s+(\d{2}\/\d{2}\/\d{2})\s+([\d.]+)/i);
+  if (!match) return null;
+
+  const [, type, ticker, dateStr, strikeStr] = match;
+
+  // Parse date MM/DD/YY to YYYY-MM-DD
+  const [mm, dd, yy] = dateStr.split("/");
+  const year = parseInt(yy) < 50 ? 2000 + parseInt(yy) : 1900 + parseInt(yy);
+  const expiration = `${year}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+
+  return {
+    ticker: ticker.toUpperCase(),
+    expiration,
+    strike: parseFloat(strikeStr),
+    type: type.toUpperCase() === "CALL" ? "Call" : "Put",
+  };
 }
 
 /**
