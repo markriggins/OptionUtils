@@ -1,1 +1,22 @@
+  Architecture
+  1. Skip Drive for option prices - As discussed, upload directly to sheet instead of round-tripping through Drive. Eliminates scary permissions for that workflow.
+  2. Split ImportEtrade.js - At 2000+ lines, it's doing too much. Could split into:
+    - EtradeCsvParser.js - parsing logic
+    - PositionBuilder.js - spread pairing/aggregation
+    - PortfolioWriter.js - sheet output
+  3. Consolidate date handling - Multiple date parsing functions scattered around (parseDateAtMidnight_, formatExpirationForKey_, etc.). A single DateUtils.js would
+  help.
+
+  Robustness
+  4. Add unit tests - The test_* functions exist but coverage is sparse. Critical paths like CSV parsing and spread pairing need tests with sample data.
+
+  5. Validate CSV headers - Currently fails silently if columns are missing. Could warn user: "Expected column 'Symbol' not found".
+
+  UX
+  6. Progress indicator for long operations - refreshOptionPrices and portfolio import can take time. Show progress via toast messages.
+
+  7. Undo/history - Before overwriting Portfolio sheet, save a backup (hidden sheet or Drive file).
+
+  Performance
+  8. Batch sheet writes - Some code writes row-by-row. Using setValues() with a 2D array is much faster.
 

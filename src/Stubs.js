@@ -1,5 +1,6 @@
 /**
  * Stubs.js - Library wrapper stubs for SpreadFinder
+ * Updated: 2026-02-18
  *
  * This file contains thin wrapper functions that delegate to the SpreadFinder library.
  * Copy this into the Apps Script editor of any spreadsheet that uses the SpreadFinder library.
@@ -18,6 +19,48 @@
  *   - Dialog callbacks (google.script.run) must be defined locally
  *   - Menu action functions must be callable by name from the menu
  */
+
+// ============================================================
+// RUNNER (ensures logs are flushed after every action)
+// ============================================================
+
+/**
+ * Executes a library function with standardized error handling and log flushing.
+ * Ensures buffered logs are written to the Logs sheet even on errors.
+ * @param {Function} fn - The library function to execute.
+ * @param {Array} [args] - Arguments to pass to the function.
+ * @returns {*} The return value of the function.
+ */
+function runner_(fn, args) {
+  try {
+    return fn.apply(null, args || []);
+  } catch (e) {
+    SpreadFinder.log.error("Runner", "Error in " + (fn.name || "anonymous") + ": " + e.message);
+    SpreadsheetApp.getUi().alert("An error occurred: " + e.message + "\n\nCheck the 'Logs' sheet for details.");
+    throw e;
+  } finally {
+    if (typeof SpreadFinder.flush === "function") {
+      SpreadFinder.flush();
+    }
+  }
+}
+
+/**
+ * Lightweight wrapper for custom functions (called from cells).
+ * Flushes logs but no UI alerts (would be disruptive for cell formulas).
+ * @param {Function} fn - The library function to execute.
+ * @param {Array} [args] - Arguments to pass to the function.
+ * @returns {*} The return value of the function.
+ */
+function customFn_(fn, args) {
+  try {
+    return fn.apply(null, args || []);
+  } finally {
+    if (typeof SpreadFinder.flush === "function") {
+      SpreadFinder.flush();
+    }
+  }
+}
 
 // ============================================================
 // TRIGGERS (must be local)
@@ -40,7 +83,7 @@ function onOpen(e) {
  * Initializes the project, creating required sheets and Drive folders.
  */
 function initializeProject() {
-  SpreadFinder.initializeProject();
+  runner_(SpreadFinder.initializeProject);
 }
 
 /**
@@ -60,70 +103,70 @@ function setupLogging() {
  * Warms the XLookupByKeys cache for faster lookups.
  */
 function warmXLookupCache() {
-  SpreadFinder.warmXLookupCache();
+  runner_(SpreadFinder.warmXLookupCache);
 }
 
 /**
  * Generates portfolio value vs price charts for all symbols.
  */
 function PlotPortfolioValueByPrice() {
-  SpreadFinder.PlotPortfolioValueByPrice();
+  runner_(SpreadFinder.PlotPortfolioValueByPrice);
 }
 
 /**
  * Imports the latest transactions from Drive.
  */
 function importLatestTransactions() {
-  SpreadFinder.importLatestTransactions();
+  runner_(SpreadFinder.importLatestTransactions);
 }
 
 /**
  * Rebuilds the portfolio from E*Trade CSV files in Drive.
  */
 function rebuildPortfolio() {
-  SpreadFinder.rebuildPortfolio();
+  runner_(SpreadFinder.rebuildPortfolio);
 }
 
 /**
  * Loads sample portfolio data for demonstration.
  */
 function loadSamplePortfolio() {
-  SpreadFinder.loadSamplePortfolio();
+  runner_(SpreadFinder.loadSamplePortfolio);
 }
 
 /**
  * Refreshes option prices from CSV files in Drive.
  */
 function refreshOptionPrices() {
-  SpreadFinder.refreshOptionPrices();
+  runner_(SpreadFinder.refreshOptionPrices);
 }
 
 /**
  * Runs SpreadFinder analysis to find attractive spreads.
  */
 function runSpreadFinder() {
-  SpreadFinder.runSpreadFinder();
+  runner_(SpreadFinder.runSpreadFinder);
 }
 
 /**
  * Shows the SpreadFinder results in interactive charts.
  */
 function showSpreadFinderGraphs() {
-  SpreadFinder.showSpreadFinderGraphs();
+  runner_(SpreadFinder.showSpreadFinderGraphs);
 }
 
 /**
  * Shows the file upload dialog for option prices.
  */
 function showUploadOptionPricesDialog() {
-  SpreadFinder.showUploadOptionPricesDialog();
+  runner_(SpreadFinder.showUploadOptionPricesDialog);
 }
 
 /**
  * Shows the file upload dialog for portfolio rebuild.
  */
 function showUploadRebuildDialog() {
-  SpreadFinder.showUploadRebuildDialog();
+  runner_(SpreadFinder.showUploadRebuildDialog);
 }
 
 // ============================================================
@@ -135,7 +178,7 @@ function showUploadRebuildDialog() {
  * @returns {string[]} Array of ticker symbols.
  */
 function getAvailableSymbols() {
-  return SpreadFinder.getAvailableSymbols();
+  return runner_(SpreadFinder.getAvailableSymbols);
 }
 
 /**
@@ -143,7 +186,7 @@ function getAvailableSymbols() {
  * @param {string[]} symbols - Array of ticker symbols to plot.
  */
 function plotSelectedSymbols(symbols) {
-  return SpreadFinder.plotSelectedSymbols(symbols);
+  return runner_(SpreadFinder.plotSelectedSymbols, [symbols]);
 }
 
 /**
@@ -151,7 +194,7 @@ function plotSelectedSymbols(symbols) {
  * @returns {Object} Graph data for rendering charts.
  */
 function getSpreadFinderGraphData() {
-  return SpreadFinder.getSpreadFinderGraphData();
+  return runner_(SpreadFinder.getSpreadFinderGraphData);
 }
 
 /**
@@ -159,7 +202,7 @@ function getSpreadFinderGraphData() {
  * @returns {Object} Available symbols and expirations.
  */
 function getSpreadFinderOptions() {
-  return SpreadFinder.getSpreadFinderOptions();
+  return runner_(SpreadFinder.getSpreadFinderOptions);
 }
 
 /**
@@ -169,7 +212,7 @@ function getSpreadFinderOptions() {
  * @returns {Object} Analysis results.
  */
 function runSpreadFinderWithSelection(symbols, expirations) {
-  return SpreadFinder.runSpreadFinderWithSelection(symbols, expirations);
+  return runner_(SpreadFinder.runSpreadFinderWithSelection, [symbols, expirations]);
 }
 
 /**
@@ -177,7 +220,7 @@ function runSpreadFinderWithSelection(symbols, expirations) {
  * @returns {Object} Graph data for rendering portfolio charts.
  */
 function getPortfolioGraphData() {
-  return SpreadFinder.getPortfolioGraphData();
+  return runner_(SpreadFinder.getPortfolioGraphData);
 }
 
 /**
@@ -186,7 +229,7 @@ function getPortfolioGraphData() {
  * @returns {string} Status message.
  */
 function uploadOptionPrices(files) {
-  return SpreadFinder.uploadOptionPrices(files);
+  return runner_(SpreadFinder.uploadOptionPrices, [files]);
 }
 
 /**
@@ -196,7 +239,7 @@ function uploadOptionPrices(files) {
  * @returns {string} Status message.
  */
 function uploadAndRebuildPortfolio(portfolio, transactions) {
-  return SpreadFinder.uploadAndRebuildPortfolio(portfolio, transactions);
+  return runner_(SpreadFinder.uploadAndRebuildPortfolio, [portfolio, transactions]);
 }
 
 /**
@@ -206,7 +249,7 @@ function uploadAndRebuildPortfolio(portfolio, transactions) {
  * @returns {string} Status message.
  */
 function completeInitialization(loadOptionPrices, loadPortfolio) {
-  return SpreadFinder.completeInitialization(loadOptionPrices, loadPortfolio);
+  return runner_(SpreadFinder.completeInitialization, [loadOptionPrices, loadPortfolio]);
 }
 
 /**
@@ -214,7 +257,7 @@ function completeInitialization(loadOptionPrices, loadPortfolio) {
  * @returns {string} Status message.
  */
 function refreshPortfolioPrices() {
-  return SpreadFinder.refreshPortfolioPrices();
+  return runner_(SpreadFinder.refreshPortfolioPrices);
 }
 
 // ============================================================
@@ -231,7 +274,7 @@ function refreshPortfolioPrices() {
  * @customfunction
  */
 function XLookupByKeys(keyValues, keyHeaders, returnHeaders, sheetName) {
-  return SpreadFinder.XLookupByKeys(keyValues, keyHeaders, returnHeaders, sheetName);
+  return customFn_(SpreadFinder.XLookupByKeys, [keyValues, keyHeaders, returnHeaders, sheetName]);
 }
 
 /**
@@ -245,7 +288,7 @@ function XLookupByKeys(keyValues, keyHeaders, returnHeaders, sheetName) {
  * @customfunction
  */
 function X2LOOKUP(key1, key2, col1, col2, returnCol) {
-  return SpreadFinder.X2LOOKUP(key1, key2, col1, col2, returnCol);
+  return customFn_(SpreadFinder.X2LOOKUP, [key1, key2, col1, col2, returnCol]);
 }
 
 /**
@@ -261,7 +304,7 @@ function X2LOOKUP(key1, key2, col1, col2, returnCol) {
  * @customfunction
  */
 function X3LOOKUP(key1, key2, key3, key1Col, key2Col, key3Col, returnCol) {
-  return SpreadFinder.X3LOOKUP(key1, key2, key3, key1Col, key2Col, key3Col, returnCol);
+  return customFn_(SpreadFinder.X3LOOKUP, [key1, key2, key3, key1Col, key2Col, key3Col, returnCol]);
 }
 
 /**
@@ -274,7 +317,7 @@ function X3LOOKUP(key1, key2, key3, key1Col, key2Col, key3Col, returnCol) {
  * @customfunction
  */
 function detectStrategy(strikeRange, typeRange, qtyRange, _labels) {
-  return SpreadFinder.detectStrategy(strikeRange, typeRange, qtyRange, _labels);
+  return customFn_(SpreadFinder.detectStrategy, [strikeRange, typeRange, qtyRange, _labels]);
 }
 
 /**
@@ -289,7 +332,7 @@ function detectStrategy(strikeRange, typeRange, qtyRange, _labels) {
  * @customfunction
  */
 function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange, priceRange) {
-  return SpreadFinder.buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange, priceRange);
+  return customFn_(SpreadFinder.buildOptionStratUrlFromLegs, [symbolRange, strikeRange, typeRange, expirationRange, qtyRange, priceRange]);
 }
 
 /**
@@ -302,7 +345,7 @@ function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expira
  * @customfunction
  */
 function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
-  return SpreadFinder.buildOptionStratUrl(strikes, ticker, strategy, expiration);
+  return customFn_(SpreadFinder.buildOptionStratUrl, [strikes, ticker, strategy, expiration]);
 }
 
 /**
@@ -313,7 +356,7 @@ function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
  * @customfunction
  */
 function buildCustomOptionStratUrl(symbol, legs) {
-  return SpreadFinder.buildCustomOptionStratUrl(symbol, legs);
+  return customFn_(SpreadFinder.buildCustomOptionStratUrl, [symbol, legs]);
 }
 
 /**
@@ -328,7 +371,7 @@ function buildCustomOptionStratUrl(symbol, legs) {
  * @customfunction
  */
 function recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute, _labels) {
-  return SpreadFinder.recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute, _labels);
+  return customFn_(SpreadFinder.recommendBullCallSpreadOpenDebit, [symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute, _labels]);
 }
 
 /**
@@ -343,7 +386,7 @@ function recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upper
  * @customfunction
  */
 function recommendBullCallSpreadCloseCredit(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute, _labels) {
-  return SpreadFinder.recommendBullCallSpreadCloseCredit(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute, _labels);
+  return customFn_(SpreadFinder.recommendBullCallSpreadCloseCredit, [symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute, _labels]);
 }
 
 /**
@@ -360,7 +403,7 @@ function recommendBullCallSpreadCloseCredit(symbol, expiration, lowerStrike, upp
  * @customfunction
  */
 function recommendIronCondorOpenCredit(symbol, expiration, putLower, putUpper, callLower, callUpper, avgMinutesToExecute, _labels) {
-  return SpreadFinder.recommendIronCondorOpenCredit(symbol, expiration, putLower, putUpper, callLower, callUpper, avgMinutesToExecute, _labels);
+  return customFn_(SpreadFinder.recommendIronCondorOpenCredit, [symbol, expiration, putLower, putUpper, callLower, callUpper, avgMinutesToExecute, _labels]);
 }
 
 /**
@@ -377,7 +420,7 @@ function recommendIronCondorOpenCredit(symbol, expiration, putLower, putUpper, c
  * @customfunction
  */
 function recommendIronCondorCloseDebit(symbol, expiration, putLower, putUpper, callLower, callUpper, avgMinutesToExecute, _labels) {
-  return SpreadFinder.recommendIronCondorCloseDebit(symbol, expiration, putLower, putUpper, callLower, callUpper, avgMinutesToExecute, _labels);
+  return customFn_(SpreadFinder.recommendIronCondorCloseDebit, [symbol, expiration, putLower, putUpper, callLower, callUpper, avgMinutesToExecute, _labels]);
 }
 
 /**
@@ -392,7 +435,7 @@ function recommendIronCondorCloseDebit(symbol, expiration, putLower, putUpper, c
  * @customfunction
  */
 function recommendOpen(symbol, expiration, strike, type, qty, avgMinutesToExecute) {
-  return SpreadFinder.recommendOpen(symbol, expiration, strike, type, qty, avgMinutesToExecute);
+  return customFn_(SpreadFinder.recommendOpen, [symbol, expiration, strike, type, qty, avgMinutesToExecute]);
 }
 
 /**
@@ -407,7 +450,7 @@ function recommendOpen(symbol, expiration, strike, type, qty, avgMinutesToExecut
  * @customfunction
  */
 function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecute) {
-  return SpreadFinder.recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecute);
+  return customFn_(SpreadFinder.recommendClose, [symbol, expiration, strike, type, qty, avgMinutesToExecute]);
 }
 
 /**
@@ -417,7 +460,7 @@ function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecu
  * @customfunction
  */
 function coalesce(range) {
-  return SpreadFinder.coalesce(range);
+  return customFn_(SpreadFinder.coalesce, [range]);
 }
 
 /**
@@ -429,7 +472,7 @@ function coalesce(range) {
  * @customfunction
  */
 function formatLegsDescription(strikeRange, qtyRange, suffix) {
-  return SpreadFinder.formatLegsDescription(strikeRange, qtyRange, suffix);
+  return customFn_(SpreadFinder.formatLegsDescription, [strikeRange, qtyRange, suffix]);
 }
 
 /**
@@ -443,5 +486,5 @@ function formatLegsDescription(strikeRange, qtyRange, suffix) {
  * @customfunction
  */
 function formatAllDescriptions(groups, strikes, qtys, strategies) {
-  return SpreadFinder.formatAllDescriptions(groups, strikes, qtys, strategies);
+  return customFn_(SpreadFinder.formatAllDescriptions, [groups, strikes, qtys, strategies]);
 }

@@ -30,6 +30,12 @@ const LogLevel = {
 };
 
 /**
+ * Log buffer for batch writes. Flushed by runner_() / customFn_() in Stubs.js.
+ * @private
+ */
+const logBuffer_ = [];
+
+/**
  * Get current log configuration from Script Properties.
  * Caches config for performance (refreshed each execution).
  */
@@ -102,19 +108,41 @@ function getLogsSheet_() {
 }
 
 /**
- * Append a log message to the Logs sheet.
+ * Buffer a log message for batch writing.
+ * @private
  */
 function logMessage_(level, levelName, tag, message) {
   if (!shouldLog_(level, tag)) return;
+  try {
+    const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19);
+    logBuffer_.push([timestamp, levelName, tag || "", message]);
+  } catch (e) {
+    // Silently fail if we can't log (avoid infinite loops)
+  }
+}
+
+/**
+ * Flush buffered log messages to the Logs sheet.
+ * Called by runner_() / customFn_() in Stubs.js at end of each execution.
+ * Uses batch write (setValues) for 50-100x better performance than appendRow.
+ */
+function flushLogs() {
+  if (logBuffer_.length === 0) return;
 
   try {
     const sheet = getLogsSheet_();
-    if (!sheet) return;
+    if (!sheet) {
+      logBuffer_.length = 0;
+      return;
+    }
 
-    const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19);
-    sheet.appendRow([timestamp, levelName, tag || "", message]);
+    const messages = logBuffer_.slice();
+    logBuffer_.length = 0;  // Clear buffer
+
+    const lastRow = sheet.getLastRow();
+    sheet.getRange(lastRow + 1, 1, messages.length, 4).setValues(messages);
   } catch (e) {
-    // Silently fail if we can't log (avoid infinite loops)
+    // Silently fail
   }
 }
 
@@ -260,6 +288,13 @@ function clearLogs() {
     sheet.deleteRows(2, lastRow - 1);
   }
   console.log("Logs cleared");
+}
+
+/**
+ * Alias for flushLogs - exposed as SpreadFinder.flush() for client stubs.
+ */
+function flush() {
+  flushLogs();
 }
 
 /**
