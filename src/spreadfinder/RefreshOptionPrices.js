@@ -372,7 +372,7 @@ function showUploadOptionPricesDialog() {
   const output = HtmlService.createHtmlOutput(content)
     .setWidth(500)
     .setHeight(400);
-  SpreadsheetApp.getUi().showModalDialog(output, "Upload & Refresh Option Prices");
+  SpreadsheetApp.getUi().showModalDialog(output, "Upload Option Prices & Refresh");
 }
 
 /**

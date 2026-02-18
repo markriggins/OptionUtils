@@ -9,7 +9,7 @@ function setupSpreadFinderMenu() {
   const ui = SpreadsheetApp.getUi();
 
   const spreadFinderMenu = ui.createMenu('SpreadFinder')
-    .addItem('Upload & Refresh...', 'showUploadOptionPricesDialog')
+    .addItem('Upload Option Prices & Refresh...', 'showUploadOptionPricesDialog')
     .addItem('Refresh from Drive', 'refreshOptionPrices')
     .addSeparator()
     .addItem('Run SpreadFinder', 'runSpreadFinder')
@@ -132,7 +132,7 @@ function completeInitialization(loadOptionPrices, loadPortfolio) {
     [""],
     ["--- Quick Start ---"],
     ["  1. Download option prices from barchart.com: Options page > Select expiration > Stacked view > Download CSV"],
-    ["  2. Run OptionTools > SpreadFinder > Upload & Refresh and select your CSV file(s)"],
+    ["  2. Run OptionTools > SpreadFinder > Upload Option Prices & Refresh and select your CSV file(s)"],
     ["  3. Run OptionTools > SpreadFinder > Run SpreadFinder to analyze spreads"],
     ["  4. Run OptionTools > SpreadFinder > View Graphs for visual analysis"],
     [""],
@@ -233,7 +233,7 @@ function completeInitialization(loadOptionPrices, loadPortfolio) {
   if (loaded.length > 0) {
     return "Project initialized. Loaded: " + loaded.join(", ");
   } else {
-    return "Project initialized.\n\nTo get started, run:\n  OptionTools > SpreadFinder > Upload & Refresh";
+    return "Project initialized.\n\nTo get started, run:\n  OptionTools > SpreadFinder > Upload Option Prices & Refresh";
   }
 }
 

@@ -63,7 +63,7 @@ function getSpreadFinderOptions() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(OPTION_PRICES_SHEET);
   if (!sheet) {
-    throw new Error("No option prices loaded. Run 'Upload & Refresh' first.");
+    throw new Error("No option prices loaded. Run 'Upload Option Prices & Refresh' first.");
   }
 
   const lastRow = sheet.getLastRow();
