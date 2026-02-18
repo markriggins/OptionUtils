@@ -23,6 +23,11 @@
 // TRIGGERS (must be local)
 // ============================================================
 
+/**
+ * Trigger that runs when the spreadsheet is opened.
+ * Sets up the OptionTools menu.
+ * @param {Object} e - The onOpen event object.
+ */
 function onOpen(e) {
   SpreadFinder.setupSpreadFinderMenu(e);
 }
@@ -31,11 +36,17 @@ function onOpen(e) {
 // MENU ACTIONS (called by name from OptionTools menu)
 // ============================================================
 
+/**
+ * Initializes the project, creating required sheets and Drive folders.
+ */
 function initializeProject() {
   SpreadFinder.initializeProject();
 }
 
-// Setup logging
+/**
+ * Configures logging settings for this document.
+ * Edit this function to customize log level and filtered functions.
+ */
 function setupLogging() {
   configureLogging({
     level: "INFO",
@@ -45,42 +56,72 @@ function setupLogging() {
   showLogConfig();
 }
 
+/**
+ * Warms the XLookupByKeys cache for faster lookups.
+ */
 function warmXLookupCache() {
   SpreadFinder.warmXLookupCache();
 }
 
+/**
+ * Generates portfolio value vs price charts for all symbols.
+ */
 function PlotPortfolioValueByPrice() {
   SpreadFinder.PlotPortfolioValueByPrice();
 }
 
+/**
+ * Imports the latest transactions from Drive.
+ */
 function importLatestTransactions() {
   SpreadFinder.importLatestTransactions();
 }
 
+/**
+ * Rebuilds the portfolio from E*Trade CSV files in Drive.
+ */
 function rebuildPortfolio() {
   SpreadFinder.rebuildPortfolio();
 }
 
+/**
+ * Loads sample portfolio data for demonstration.
+ */
 function loadSamplePortfolio() {
   SpreadFinder.loadSamplePortfolio();
 }
 
+/**
+ * Refreshes option prices from CSV files in Drive.
+ */
 function refreshOptionPrices() {
   SpreadFinder.refreshOptionPrices();
 }
 
+/**
+ * Runs SpreadFinder analysis to find attractive spreads.
+ */
 function runSpreadFinder() {
   SpreadFinder.runSpreadFinder();
 }
 
+/**
+ * Shows the SpreadFinder results in interactive charts.
+ */
 function showSpreadFinderGraphs() {
   SpreadFinder.showSpreadFinderGraphs();
 }
 
+/**
+ * Shows the file upload dialog for option prices.
+ */
 function showUploadOptionPricesDialog() {
   SpreadFinder.showUploadOptionPricesDialog();
 }
 
+/**
+ * Shows the file upload dialog for portfolio rebuild.
+ */
 function showUploadRebuildDialog() {
   SpreadFinder.showUploadRebuildDialog();
 }
@@ -89,42 +130,89 @@ function showUploadRebuildDialog() {
 // DIALOG CALLBACKS (called via google.script.run from HTML)
 // ============================================================
 
+/**
+ * Gets list of symbols available in the portfolio.
+ * @returns {string[]} Array of ticker symbols.
+ */
 function getAvailableSymbols() {
   return SpreadFinder.getAvailableSymbols();
 }
 
+/**
+ * Plots performance charts for selected symbols.
+ * @param {string[]} symbols - Array of ticker symbols to plot.
+ */
 function plotSelectedSymbols(symbols) {
   return SpreadFinder.plotSelectedSymbols(symbols);
 }
 
+/**
+ * Gets data for SpreadFinder graphs.
+ * @returns {Object} Graph data for rendering charts.
+ */
 function getSpreadFinderGraphData() {
   return SpreadFinder.getSpreadFinderGraphData();
 }
 
+/**
+ * Gets available options for SpreadFinder selection dialog.
+ * @returns {Object} Available symbols and expirations.
+ */
 function getSpreadFinderOptions() {
   return SpreadFinder.getSpreadFinderOptions();
 }
 
+/**
+ * Runs SpreadFinder with user-selected symbols and expirations.
+ * @param {string[]} symbols - Selected ticker symbols.
+ * @param {string[]} expirations - Selected expiration dates.
+ * @returns {Object} Analysis results.
+ */
 function runSpreadFinderWithSelection(symbols, expirations) {
   return SpreadFinder.runSpreadFinderWithSelection(symbols, expirations);
 }
 
+/**
+ * Gets data for portfolio performance graphs.
+ * @returns {Object} Graph data for rendering portfolio charts.
+ */
 function getPortfolioGraphData() {
   return SpreadFinder.getPortfolioGraphData();
 }
 
+/**
+ * Uploads option price CSV files and refreshes prices.
+ * @param {Array<{name: string, content: string}>} files - Array of file objects.
+ * @returns {string} Status message.
+ */
 function uploadOptionPrices(files) {
   return SpreadFinder.uploadOptionPrices(files);
 }
 
+/**
+ * Uploads portfolio and transaction files, then rebuilds the portfolio.
+ * @param {{name: string, content: string}} portfolio - Portfolio CSV file.
+ * @param {{name: string, content: string}} transactions - Transaction history CSV file.
+ * @returns {string} Status message.
+ */
 function uploadAndRebuildPortfolio(portfolio, transactions) {
   return SpreadFinder.uploadAndRebuildPortfolio(portfolio, transactions);
 }
 
+/**
+ * Completes project initialization with optional data loading.
+ * @param {boolean} loadOptionPrices - Whether to load option prices from Drive.
+ * @param {boolean} loadPortfolio - Whether to load portfolio from Drive.
+ * @returns {string} Status message.
+ */
 function completeInitialization(loadOptionPrices, loadPortfolio) {
   return SpreadFinder.completeInitialization(loadOptionPrices, loadPortfolio);
 }
 
+/**
+ * Refreshes portfolio formulas after option prices are updated.
+ * @returns {string} Status message.
+ */
 function refreshPortfolioPrices() {
   return SpreadFinder.refreshPortfolioPrices();
 }
@@ -134,7 +222,12 @@ function refreshPortfolioPrices() {
 // ============================================================
 
 /**
- * Multi-key lookup with caching.
+ * Multi-key lookup with caching. Looks up values in a sheet using multiple key columns.
+ * @param {Array} keyValues - Values to match against key columns.
+ * @param {Array} keyHeaders - Column headers for the key columns.
+ * @param {Array} returnHeaders - Column headers for the values to return.
+ * @param {string} sheetName - Name of the sheet to search.
+ * @returns {Array} The matching values from the return columns.
  * @customfunction
  */
 function XLookupByKeys(keyValues, keyHeaders, returnHeaders, sheetName) {
@@ -142,7 +235,13 @@ function XLookupByKeys(keyValues, keyHeaders, returnHeaders, sheetName) {
 }
 
 /**
- * Two-key lookup.
+ * Two-key lookup. Finds a row matching two key values and returns a value from another column.
+ * @param {*} key1 - First key value to match.
+ * @param {*} key2 - Second key value to match.
+ * @param {Range} col1 - Range containing first key column.
+ * @param {Range} col2 - Range containing second key column.
+ * @param {Range} returnCol - Range containing values to return.
+ * @returns {*} The matching value from returnCol.
  * @customfunction
  */
 function X2LOOKUP(key1, key2, col1, col2, returnCol) {
@@ -150,7 +249,15 @@ function X2LOOKUP(key1, key2, col1, col2, returnCol) {
 }
 
 /**
- * Three-key lookup.
+ * Three-key lookup. Finds a row matching three key values and returns a value from another column.
+ * @param {*} key1 - First key value to match.
+ * @param {*} key2 - Second key value to match.
+ * @param {*} key3 - Third key value to match.
+ * @param {Range} key1Col - Range containing first key column.
+ * @param {Range} key2Col - Range containing second key column.
+ * @param {Range} key3Col - Range containing third key column.
+ * @param {Range} returnCol - Range containing values to return.
+ * @returns {*} The matching value from returnCol.
  * @customfunction
  */
 function X3LOOKUP(key1, key2, key3, key1Col, key2Col, key3Col, returnCol) {
@@ -158,7 +265,12 @@ function X3LOOKUP(key1, key2, key3, key1Col, key2Col, key3Col, returnCol) {
 }
 
 /**
- * Detects option strategy from legs.
+ * Detects option strategy from legs (e.g., bull-call-spread, iron-condor).
+ * @param {Range} strikeRange - Range of strike prices.
+ * @param {Range} typeRange - Range of option types (Call/Put).
+ * @param {Range} qtyRange - Range of quantities (positive=long, negative=short).
+ * @param {Range} [_labels] - Optional labels for cache busting.
+ * @returns {string} The detected strategy name.
  * @customfunction
  */
 function detectStrategy(strikeRange, typeRange, qtyRange, _labels) {
@@ -166,7 +278,14 @@ function detectStrategy(strikeRange, typeRange, qtyRange, _labels) {
 }
 
 /**
- * Builds OptionStrat URL from leg ranges.
+ * Builds OptionStrat URL from leg ranges for visualization.
+ * @param {Range} symbolRange - Range containing ticker symbol.
+ * @param {Range} strikeRange - Range of strike prices.
+ * @param {Range} typeRange - Range of option types.
+ * @param {Range} expirationRange - Range of expiration dates.
+ * @param {Range} qtyRange - Range of quantities.
+ * @param {Range} priceRange - Range of prices.
+ * @returns {string} URL to optionstrat.com.
  * @customfunction
  */
 function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expirationRange, qtyRange, priceRange) {
@@ -175,6 +294,11 @@ function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expira
 
 /**
  * Builds OptionStrat URL from parameters.
+ * @param {Array} strikes - Array of strike prices.
+ * @param {string} ticker - Ticker symbol.
+ * @param {string} strategy - Strategy name.
+ * @param {Date|string} expiration - Expiration date.
+ * @returns {string} URL to optionstrat.com.
  * @customfunction
  */
 function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
@@ -183,13 +307,24 @@ function buildOptionStratUrl(strikes, ticker, strategy, expiration) {
 
 /**
  * Builds OptionStrat URL for custom multi-leg positions.
+ * @param {string} symbol - Ticker symbol.
+ * @param {Array} legs - Array of leg objects with strike, type, qty, expiration.
+ * @returns {string} URL to optionstrat.com.
+ * @customfunction
  */
 function buildCustomOptionStratUrl(symbol, legs) {
   return SpreadFinder.buildCustomOptionStratUrl(symbol, legs);
 }
 
 /**
- * Recommends debit to open a bull call spread.
+ * Recommends debit to open a bull call spread based on bid/ask prices.
+ * @param {string} symbol - Ticker symbol.
+ * @param {Date|string} expiration - Expiration date.
+ * @param {number} lowerStrike - Lower strike price (long call).
+ * @param {number} upperStrike - Upper strike price (short call).
+ * @param {number} [avgMinutesToExecute] - Expected minutes to fill order.
+ * @param {Range} [_labels] - Optional labels for cache busting.
+ * @returns {number} Recommended debit per contract.
  * @customfunction
  */
 function recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute, _labels) {
@@ -197,7 +332,14 @@ function recommendBullCallSpreadOpenDebit(symbol, expiration, lowerStrike, upper
 }
 
 /**
- * Recommends credit to close a bull call spread.
+ * Recommends credit to close a bull call spread based on bid/ask prices.
+ * @param {string} symbol - Ticker symbol.
+ * @param {Date|string} expiration - Expiration date.
+ * @param {number} lowerStrike - Lower strike price (long call).
+ * @param {number} upperStrike - Upper strike price (short call).
+ * @param {number} [avgMinutesToExecute] - Expected minutes to fill order.
+ * @param {Range} [_labels] - Optional labels for cache busting.
+ * @returns {number} Recommended credit per contract.
  * @customfunction
  */
 function recommendBullCallSpreadCloseCredit(symbol, expiration, lowerStrike, upperStrike, avgMinutesToExecute, _labels) {
@@ -205,7 +347,16 @@ function recommendBullCallSpreadCloseCredit(symbol, expiration, lowerStrike, upp
 }
 
 /**
- * Recommends credit to open an iron condor.
+ * Recommends credit to open an iron condor based on bid/ask prices.
+ * @param {string} symbol - Ticker symbol.
+ * @param {Date|string} expiration - Expiration date.
+ * @param {number} putLower - Lower put strike (long put).
+ * @param {number} putUpper - Upper put strike (short put).
+ * @param {number} callLower - Lower call strike (short call).
+ * @param {number} callUpper - Upper call strike (long call).
+ * @param {number} [avgMinutesToExecute] - Expected minutes to fill order.
+ * @param {Range} [_labels] - Optional labels for cache busting.
+ * @returns {number} Recommended credit per contract.
  * @customfunction
  */
 function recommendIronCondorOpenCredit(symbol, expiration, putLower, putUpper, callLower, callUpper, avgMinutesToExecute, _labels) {
@@ -213,7 +364,16 @@ function recommendIronCondorOpenCredit(symbol, expiration, putLower, putUpper, c
 }
 
 /**
- * Recommends debit to close an iron condor.
+ * Recommends debit to close an iron condor based on bid/ask prices.
+ * @param {string} symbol - Ticker symbol.
+ * @param {Date|string} expiration - Expiration date.
+ * @param {number} putLower - Lower put strike (long put).
+ * @param {number} putUpper - Upper put strike (short put).
+ * @param {number} callLower - Lower call strike (short call).
+ * @param {number} callUpper - Upper call strike (long call).
+ * @param {number} [avgMinutesToExecute] - Expected minutes to fill order.
+ * @param {Range} [_labels] - Optional labels for cache busting.
+ * @returns {number} Recommended debit per contract.
  * @customfunction
  */
 function recommendIronCondorCloseDebit(symbol, expiration, putLower, putUpper, callLower, callUpper, avgMinutesToExecute, _labels) {
@@ -222,6 +382,13 @@ function recommendIronCondorCloseDebit(symbol, expiration, putLower, putUpper, c
 
 /**
  * Recommends opening price for a single option leg.
+ * @param {string} symbol - Ticker symbol.
+ * @param {Date|string} expiration - Expiration date.
+ * @param {number} strike - Strike price.
+ * @param {string} type - Option type ("Call" or "Put").
+ * @param {number} qty - Quantity (positive=buy, negative=sell).
+ * @param {number} [avgMinutesToExecute] - Expected minutes to fill order.
+ * @returns {number} Recommended price per contract.
  * @customfunction
  */
 function recommendOpen(symbol, expiration, strike, type, qty, avgMinutesToExecute) {
@@ -230,6 +397,13 @@ function recommendOpen(symbol, expiration, strike, type, qty, avgMinutesToExecut
 
 /**
  * Recommends closing price for a single option leg.
+ * @param {string} symbol - Ticker symbol.
+ * @param {Date|string} expiration - Expiration date.
+ * @param {number} strike - Strike price.
+ * @param {string} type - Option type ("Call" or "Put").
+ * @param {number} qty - Quantity (positive=buy, negative=sell).
+ * @param {number} [avgMinutesToExecute] - Expected minutes to fill order.
+ * @returns {number} Recommended price per contract.
  * @customfunction
  */
 function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecute) {
@@ -238,6 +412,8 @@ function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecu
 
 /**
  * Returns first non-empty value from a range.
+ * @param {Range} range - Range to search for non-empty value.
+ * @returns {*} The first non-empty value, or empty string if none found.
  * @customfunction
  */
 function coalesce(range) {
@@ -246,6 +422,10 @@ function coalesce(range) {
 
 /**
  * Formats option legs as description with negative prefixes for shorts.
+ * @param {Range} strikeRange - Range of strike prices.
+ * @param {Range} qtyRange - Range of quantities.
+ * @param {string} [suffix] - Optional suffix (e.g., "BCS", "BPS").
+ * @returns {string} Formatted description like "300/-400 BCS".
  * @customfunction
  */
 function formatLegsDescription(strikeRange, qtyRange, suffix) {
@@ -255,6 +435,11 @@ function formatLegsDescription(strikeRange, qtyRange, suffix) {
 /**
  * Formats descriptions for all position groups in one call.
  * Place formula in first data row of Description column - it fills down automatically.
+ * @param {Range} groups - Range of group identifiers.
+ * @param {Range} strikes - Range of strike prices.
+ * @param {Range} qtys - Range of quantities.
+ * @param {Range} strategies - Range of strategy names.
+ * @returns {Array} 2D array of descriptions (one per row, first row of each group has value).
  * @customfunction
  */
 function formatAllDescriptions(groups, strikes, qtys, strategies) {
