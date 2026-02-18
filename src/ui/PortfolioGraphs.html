@@ -309,11 +309,7 @@
 
     // Draw vertical line at current price on a chart
     function drawCurrentPriceLine(chartDivId, chart, currentPrice, symbol) {
-        console.log('drawCurrentPriceLine called:', chartDivId, 'price:', currentPrice, 'symbol:', symbol);
-        if (!currentPrice || !chart) {
-            console.log('  -> Early return: currentPrice=' + currentPrice + ', chart=' + (chart ? 'exists' : 'null'));
-            return;
-        }
+        if (!currentPrice || !chart) return;
 
         // Remove existing line
         var container = document.getElementById(chartDivId);
@@ -323,27 +319,70 @@
         try {
             var cli = chart.getChartLayoutInterface();
             var chartArea = cli.getChartAreaBoundingBox();
-            var xPos = cli.getXLocation(currentPrice);
 
-            // Only draw if within chart area
-            if (xPos >= chartArea.left && xPos <= chartArea.left + chartArea.width) {
-                var line = document.createElement('div');
-                line.className = 'current-price-line';
-                line.style.left = xPos + 'px';
-                line.style.top = chartArea.top + 'px';
-                line.style.height = chartArea.height + 'px';
-                container.appendChild(line);
+            // Get visible X-axis range by sampling the chart area edges
+            var xMin = cli.getHAxisValue(chartArea.left);
+            var xMax = cli.getHAxisValue(chartArea.left + chartArea.width);
 
-                var label = document.createElement('div');
-                label.className = 'current-price-label';
-                label.style.left = xPos + 'px';
-                label.style.top = (chartArea.top - 2) + 'px';
-                label.innerText = '$' + currentPrice.toFixed(0);
-                container.appendChild(label);
-            }
+            // Check if current price is within visible range
+            if (currentPrice < xMin || currentPrice > xMax) return;
+
+            // Calculate pixel position based on visible range
+            var xRatio = (currentPrice - xMin) / (xMax - xMin);
+            var xPos = chartArea.left + (xRatio * chartArea.width);
+
+            var line = document.createElement('div');
+            line.className = 'current-price-line';
+            line.style.left = xPos + 'px';
+            line.style.top = chartArea.top + 'px';
+            line.style.height = chartArea.height + 'px';
+            container.appendChild(line);
+
+            var label = document.createElement('div');
+            label.className = 'current-price-label';
+            label.style.left = xPos + 'px';
+            label.style.top = (chartArea.top - 2) + 'px';
+            label.innerText = '$' + currentPrice.toFixed(0);
+            container.appendChild(label);
         } catch (e) {
             console.log('Could not draw price line:', e);
         }
+    }
+
+    // Set up chart listeners for price line (only once per chart)
+    // Handles both initial draw and zoom/pan redraws
+    function setupChartPriceLineListeners(chartDivId, chartKey) {
+        var chart = charts[chartKey];
+        if (!chart || chart._priceLineListenersAdded) return;
+
+        var redrawPriceLine = function() {
+            if (rawData && rawData.currentPrice) {
+                setTimeout(function() {
+                    drawCurrentPriceLine(chartDivId, charts[chartKey], rawData.currentPrice, rawData.symbol);
+                }, 50);
+            }
+        };
+
+        // Standard chart events
+        google.visualization.events.addListener(chart, 'ready', redrawPriceLine);
+
+        // MutationObserver to detect zoom/pan (SVG changes)
+        var container = document.getElementById(chartDivId);
+        var observer = new MutationObserver(function(mutations) {
+            // Debounce rapid mutations during animation
+            clearTimeout(container._priceLineTimeout);
+            container._priceLineTimeout = setTimeout(redrawPriceLine, 100);
+        });
+
+        // Observe the chart container for SVG changes
+        observer.observe(container, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['transform', 'd', 'width', 'height']
+        });
+
+        chart._priceLineListenersAdded = true;
     }
 
     function drawCharts() {
@@ -369,9 +408,7 @@
         }
 
         charts.value = charts.value || new google.visualization.LineChart(document.getElementById('chart_value'));
-        google.visualization.events.addListener(charts.value, 'ready', function() {
-            drawCurrentPriceLine('chart_value', charts.value, d.currentPrice, d.symbol);
-        });
+        setupChartPriceLineListeners('chart_value', 'value');
         charts.value.draw(dtValue, {
             title: '',
             legend: { position: 'right' },
@@ -398,9 +435,7 @@
         }
 
         charts.roi = charts.roi || new google.visualization.LineChart(document.getElementById('chart_roi'));
-        google.visualization.events.addListener(charts.roi, 'ready', function() {
-            drawCurrentPriceLine('chart_roi', charts.roi, d.currentPrice, d.symbol);
-        });
+        setupChartPriceLineListeners('chart_roi', 'roi');
         charts.roi.draw(dtRoi, {
             title: '',
             legend: { position: 'right' },
@@ -427,9 +462,7 @@
             }
 
             charts.spreads = charts.spreads || new google.visualization.LineChart(document.getElementById('chart_spreads'));
-            google.visualization.events.addListener(charts.spreads, 'ready', function() {
-                drawCurrentPriceLine('chart_spreads', charts.spreads, d.currentPrice, d.symbol);
-            });
+            setupChartPriceLineListeners('chart_spreads', 'spreads');
             charts.spreads.draw(dtSpreads, {
                 title: '',
                 legend: { position: 'right' },
@@ -455,9 +488,7 @@
             }
 
             charts.spreadsRoi = charts.spreadsRoi || new google.visualization.LineChart(document.getElementById('chart_spreads_roi'));
-            google.visualization.events.addListener(charts.spreadsRoi, 'ready', function() {
-                drawCurrentPriceLine('chart_spreads_roi', charts.spreadsRoi, d.currentPrice, d.symbol);
-            });
+            setupChartPriceLineListeners('chart_spreads_roi', 'spreadsRoi');
             charts.spreadsRoi.draw(dtSpreadRoi, {
                 title: '',
                 legend: { position: 'right' },
