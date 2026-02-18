@@ -431,7 +431,7 @@ function findFilesByName_(folder, name) {
  * Shows file upload dialog for full portfolio rebuild.
  */
 function showUploadRebuildDialog() {
-  const html = HtmlService.createHtmlOutputFromFile("FileUpload")
+  const html = HtmlService.createHtmlOutputFromFile("ui/FileUpload")
     .setWidth(500)
     .setHeight(450);
   const content = html.getContent().replace(

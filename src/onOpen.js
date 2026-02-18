@@ -74,7 +74,7 @@ function initializeProject() {
   }
 
   // Show dialog with options
-  const html = HtmlService.createHtmlOutputFromFile("InitializeDialog")
+  const html = HtmlService.createHtmlOutputFromFile("ui/InitializeDialog")
     .setWidth(450)
     .setHeight(400);
 

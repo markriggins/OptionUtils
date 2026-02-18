@@ -152,7 +152,7 @@ function refreshOptionPrices() {
   const hasPortfolio = !!ss.getSheetByName("Portfolio");
 
   // Show completion dialog with option to refresh Portfolio
-  const html = HtmlService.createHtmlOutputFromFile("RefreshCompleteDialog")
+  const html = HtmlService.createHtmlOutputFromFile("ui/RefreshCompleteDialog")
     .setWidth(450)
     .setHeight(350);
 
@@ -361,7 +361,7 @@ function getFolder_(parent, name) {
  * Shows the file upload dialog for option prices.
  */
 function showUploadOptionPricesDialog() {
-  const html = HtmlService.createHtmlOutputFromFile("FileUpload")
+  const html = HtmlService.createHtmlOutputFromFile("ui/FileUpload")
     .setWidth(500)
     .setHeight(400);
   // Inject the mode
@@ -378,6 +378,7 @@ function showUploadOptionPricesDialog() {
 /**
  * Handles uploaded option price files from the file chooser.
  * Saves files to Drive and then refreshes option prices.
+ * Overwrites existing files for the same symbol/expiration.
  * @param {Array<{name: string, content: string}>} files - Array of file objects
  * @returns {string} Status message
  */
@@ -395,12 +396,11 @@ function uploadOptionPrices(files) {
     folder = getOrCreateFolder_(folder, part);
   }
 
-  // Save each file with unique names (preserves history)
-  // Strip browser disambiguators like "(1)" from filenames
+  // Save each file, overwriting any existing files for the same symbol/expiration
   const savedFiles = [];
   for (const file of files) {
     const cleanName = stripBrowserDisambiguator_(file.name);
-    const savedName = saveFileWithUniqueName_(folder, cleanName, file.content);
+    const savedName = saveOptionPriceFile_(folder, cleanName, file.content);
     savedFiles.push(savedName);
   }
 
@@ -408,6 +408,41 @@ function uploadOptionPrices(files) {
   refreshOptionPrices();
 
   return `Uploaded ${savedFiles.length} file(s) and refreshed option prices.`;
+}
+
+/**
+ * Saves an option price file, deleting any existing files for the same symbol/expiration.
+ * @param {Folder} folder - The target folder
+ * @param {string} fileName - The file name
+ * @param {string} content - The file content
+ * @returns {string} The saved file name
+ */
+function saveOptionPriceFile_(folder, fileName, content) {
+  // Extract symbol and expiration from filename
+  // Pattern: <symbol>-options-exp-<YYYY-MM-DD>-...csv
+  const match = fileName.toLowerCase().match(/^([a-z]+)-.*exp-(\d{4}-\d{2}-\d{2})/i);
+
+  if (match) {
+    const symbol = match[1].toLowerCase();
+    const expDate = match[2];
+
+    // Find and delete existing files for this symbol/expiration
+    const existingFiles = folder.getFilesByType(MimeType.CSV);
+    while (existingFiles.hasNext()) {
+      const existing = existingFiles.next();
+      const existingName = existing.getName().toLowerCase();
+      const existingMatch = existingName.match(/^([a-z]+)-.*exp-(\d{4}-\d{2}-\d{2})/i);
+
+      if (existingMatch && existingMatch[1] === symbol && existingMatch[2] === expDate) {
+        log.debug("upload", `Deleting old file: ${existing.getName()}`);
+        existing.setTrashed(true);
+      }
+    }
+  }
+
+  // Create the new file
+  folder.createFile(fileName, content, MimeType.CSV);
+  return fileName;
 }
 
 

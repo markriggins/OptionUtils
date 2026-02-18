@@ -136,7 +136,7 @@ function getSpreadFinderOptions() {
  * Shows the SpreadFinder selection dialog.
  */
 function runSpreadFinder() {
-  const html = HtmlService.createHtmlOutputFromFile("SpreadFinderSelect")
+  const html = HtmlService.createHtmlOutputFromFile("ui/SpreadFinderSelect")
     .setWidth(400)
     .setHeight(450);
   SpreadsheetApp.getUi().showModalDialog(html, "Run SpreadFinder");
@@ -923,7 +923,7 @@ function showSpreadFinderGraphs() {
   SpreadsheetApp.flush();
 
   // Creates the SpreadFinderGraphs modal dialog
-  const html = HtmlService.createHtmlOutputFromFile('SpreadFinderGraphs')
+  const html = HtmlService.createHtmlOutputFromFile('ui/SpreadFinderGraphs')
       .setWidth(1050) // Wide enough for side-by-side or large stacked charts
       .setHeight(850);
 

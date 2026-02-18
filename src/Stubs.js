@@ -35,11 +35,14 @@ function runner_(fn, args) {
   try {
     return fn.apply(null, args || []);
   } catch (e) {
-    SpreadFinder.log.error("Runner", "Error in " + (fn.name || "anonymous") + ": " + e.message);
+    // Log error if log is available
+    if (SpreadFinder && SpreadFinder.log && typeof SpreadFinder.log.error === "function") {
+      SpreadFinder.log.error("Runner", "Error in " + (fn.name || "anonymous") + ": " + e.message);
+    }
     SpreadsheetApp.getUi().alert("An error occurred: " + e.message + "\n\nCheck the 'Logs' sheet for details.");
     throw e;
   } finally {
-    if (typeof SpreadFinder.flush === "function") {
+    if (SpreadFinder && typeof SpreadFinder.flush === "function") {
       SpreadFinder.flush();
     }
   }
@@ -56,7 +59,7 @@ function customFn_(fn, args) {
   try {
     return fn.apply(null, args || []);
   } finally {
-    if (typeof SpreadFinder.flush === "function") {
+    if (SpreadFinder && typeof SpreadFinder.flush === "function") {
       SpreadFinder.flush();
     }
   }

@@ -57,7 +57,7 @@ function PlotPortfolioValueByPrice() {
   }
 
   // Multiple symbols - show symbol selection dialog first
-  const html = HtmlService.createHtmlOutputFromFile("SelectSymbols")
+  const html = HtmlService.createHtmlOutputFromFile("ui/SelectSymbols")
     .setWidth(350)
     .setHeight(400);
   SpreadsheetApp.getUi().showModalDialog(html, "Select Symbol for Portfolio Graphs");
@@ -82,7 +82,7 @@ function plotSelectedSymbols(symbols) {
   props.setProperty("portfolioGraphSymbol", symbols[0]);
 
   // Show the portfolio graphs modal (25% larger)
-  const html = HtmlService.createHtmlOutputFromFile("PortfolioGraphs")
+  const html = HtmlService.createHtmlOutputFromFile("ui/PortfolioGraphs")
     .setWidth(1500)
     .setHeight(1125);
   SpreadsheetApp.getUi().showModalDialog(html, symbols[0] + " Portfolio Performance");
