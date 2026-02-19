@@ -289,16 +289,36 @@ function loadCsvData_(csvData, symbol, expDate) {
   const rows = [];
 
   const headers = csvData[0].map(h => String(h).trim().toLowerCase());
-  const { strikeIdx, bidIdx, midIdx, askIdx, typeIdx, ivIdx, deltaIdx, volumeIdx, openIntIdx, moneynessIdx } = findColumnIndexes_(headers);
 
-  if (strikeIdx === -1 || bidIdx === -1 || askIdx === -1 || typeIdx === -1) {
-    log.warn("csv", `Skipping ${symbol} for exp ${expDate}: missing required columns`);
-    return rows;
-  }
+  // Validate required columns
+  const required = validateRequiredColumns_(headers, [
+    { name: "Strike", aliases: ["strike"] },
+    { name: "Bid", aliases: ["bid"] },
+    { name: "Ask", aliases: ["ask"] },
+    { name: "Type", aliases: ["type", "option type", "call/put", "cp", "put/call"] },
+  ], `Option Prices CSV (${symbol} exp ${expDate})`);
 
-  if (midIdx === -1) {
-    log.debug("csv", `Note ${symbol} for exp ${expDate}: no mid column found (mid will be null)`);
-  }
+  const strikeIdx = required.Strike;
+  const bidIdx = required.Bid;
+  const askIdx = required.Ask;
+  const typeIdx = required.Type;
+
+  // Find optional columns
+  const optional = findOptionalColumns_(headers, [
+    { name: "Mid", aliases: ["mid"] },
+    { name: "IV", aliases: ["iv", "implied volatility"] },
+    { name: "Delta", aliases: ["delta"] },
+    { name: "Volume", aliases: ["volume", "vol"] },
+    { name: "OpenInt", aliases: ["open int", "open interest", "oi"] },
+    { name: "Moneyness", aliases: ["moneyness", "money", "itm/otm"] },
+  ]);
+
+  const midIdx = optional.Mid;
+  const ivIdx = optional.IV;
+  const deltaIdx = optional.Delta;
+  const volumeIdx = optional.Volume;
+  const openIntIdx = optional.OpenInt;
+  const moneynessIdx = optional.Moneyness;
 
   for (let i = 1; i < csvData.length; i++) {
     const r = csvData[i];

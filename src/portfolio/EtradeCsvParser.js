@@ -33,7 +33,13 @@ function parseEtradeTransactionsFromCsv_(csvContent) {
       break;
     }
   }
-  if (headerIdx < 0) return { transactions, stockTxns };
+  if (headerIdx < 0) {
+    throw new Error(
+      "E*Trade Transaction CSV: Could not find header row.\n" +
+      "Expected row starting with 'TransactionDate,' or 'Activity/Trade Date,'\n" +
+      "Tip: Make sure you're uploading the Transaction History CSV from E*Trade."
+    );
+  }
 
   const optionTxnTypes = [
     "Bought To Open", "Sold Short",
@@ -291,15 +297,32 @@ function parsePortfolioStocksAndCashFromFile_(file, stockTxns) {
       break;
     }
   }
-  if (headerIdx < 0) return { stocks: [], cash: 0 };
+  if (headerIdx < 0) {
+    throw new Error(
+      "E*Trade Portfolio CSV: Could not find header row.\n" +
+      "Expected row starting with 'Symbol,Last Price'\n" +
+      "Tip: Make sure you're uploading the Portfolio Download CSV from E*Trade."
+    );
+  }
 
   const headers = parseCsvLine_(lines[headerIdx]);
-  const idxSym = headers.findIndex(h => h === "Symbol");
-  const idxQty = headers.findIndex(h => h === "Quantity" || h === "Qty #");
-  const idxPricePaid = headers.findIndex(h => h.startsWith("Price Paid"));
-  const idxMarketValue = headers.findIndex(h => h.startsWith("Market Value") || h.startsWith("Value"));
 
-  if (idxSym < 0 || idxQty < 0 || idxPricePaid < 0) return { stocks: [], cash: 0 };
+  // Validate required columns
+  const required = validateRequiredColumns_(headers, [
+    { name: "Symbol", aliases: ["symbol"] },
+    { name: "Quantity", aliases: ["quantity", "qty #", "qty"] },
+    { name: "PricePaid", aliases: ["price paid", "price paid $", "cost basis", "avg price"] },
+  ], "E*Trade Portfolio CSV");
+
+  const idxSym = required.Symbol;
+  const idxQty = required.Quantity;
+  const idxPricePaid = required.PricePaid;
+
+  // Optional columns
+  const optional = findOptionalColumns_(headers, [
+    { name: "MarketValue", aliases: ["market value", "market value $", "value", "value $"] },
+  ]);
+  const idxMarketValue = optional.MarketValue;
 
   // Build map of latest transaction date per ticker
   const latestDateByTicker = buildLatestStockDates_(stockTxns);
@@ -372,14 +395,30 @@ function parsePortfolioOptionsWithPricesFromFile_(file) {
       break;
     }
   }
-  if (headerIdx < 0) return { quantities, prices };
+  if (headerIdx < 0) {
+    throw new Error(
+      "E*Trade Portfolio CSV: Could not find header row.\n" +
+      "Expected row starting with 'Symbol,Last Price'\n" +
+      "Tip: Make sure you're uploading the Portfolio Download CSV from E*Trade."
+    );
+  }
 
   const headers = parseCsvLine_(lines[headerIdx]);
-  const idxSym = headers.findIndex(h => h === "Symbol");
-  const idxQty = headers.findIndex(h => h === "Quantity" || h === "Qty #");
-  const idxPricePaid = headers.findIndex(h => h.startsWith("Price Paid"));
 
-  if (idxSym < 0 || idxQty < 0) return { quantities, prices };
+  // Validate required columns
+  const required = validateRequiredColumns_(headers, [
+    { name: "Symbol", aliases: ["symbol"] },
+    { name: "Quantity", aliases: ["quantity", "qty #", "qty"] },
+  ], "E*Trade Portfolio Options CSV");
+
+  const idxSym = required.Symbol;
+  const idxQty = required.Quantity;
+
+  // Optional columns
+  const optional = findOptionalColumns_(headers, [
+    { name: "PricePaid", aliases: ["price paid", "price paid $", "cost basis", "avg price"] },
+  ]);
+  const idxPricePaid = optional.PricePaid;
 
   // Month name to number mapping
   const monthMap = {

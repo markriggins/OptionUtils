@@ -197,6 +197,64 @@ function normKey_(v) {
 }
 
 /**
+ * Validates that all required columns exist in headers.
+ * Throws a clear error listing any missing columns.
+ *
+ * @param {Array<string>} headers - Raw headers from CSV
+ * @param {Array<{name: string, aliases: string[]}>} required - Required columns with aliases
+ * @param {string} context - Description for error message (e.g., "E*Trade Portfolio CSV")
+ * @throws {Error} If any required columns are missing
+ * @returns {Object} Map of column name → index
+ *
+ * @example
+ * const cols = validateRequiredColumns_(headers, [
+ *   { name: "Symbol", aliases: ["symbol", "ticker"] },
+ *   { name: "Quantity", aliases: ["quantity", "qty", "qty #"] },
+ * ], "E*Trade Portfolio CSV");
+ * // Returns: { Symbol: 0, Quantity: 3 }
+ * // Throws: "E*Trade Portfolio CSV is missing required columns: Symbol, Quantity"
+ */
+function validateRequiredColumns_(headers, required, context) {
+  const result = {};
+  const missing = [];
+
+  for (const col of required) {
+    const idx = findColumn_(headers, col.aliases);
+    if (idx < 0) {
+      missing.push(col.name);
+    } else {
+      result[col.name] = idx;
+    }
+  }
+
+  if (missing.length > 0) {
+    const headerList = headers.slice(0, 10).join(", ") + (headers.length > 10 ? "..." : "");
+    throw new Error(
+      `${context} is missing required columns: ${missing.join(", ")}.\n` +
+      `Found headers: [${headerList}]\n` +
+      `Tip: Check that the file format matches expected headers.`
+    );
+  }
+
+  return result;
+}
+
+/**
+ * Finds optional column indexes. Returns -1 for missing columns (no error).
+ *
+ * @param {Array<string>} headers - Raw headers from CSV
+ * @param {Array<{name: string, aliases: string[]}>} optional - Optional columns with aliases
+ * @returns {Object} Map of column name → index (-1 if not found)
+ */
+function findOptionalColumns_(headers, optional) {
+  const result = {};
+  for (const col of optional) {
+    result[col.name] = findColumn_(headers, col.aliases);
+  }
+  return result;
+}
+
+/**
  * Finds the index of the first matching alias in headers. Returns -1 if none found.
  * Both headers and aliases are normalized via normKey_ before comparison.
  */
@@ -207,34 +265,6 @@ function findColumn_(headers, aliases) {
     if (normAliases.includes(normHeaders[i])) return i;
   }
   return -1;
-}
-
-/**
- * Finds indexes of option price columns in headers using alias lists.
- * Headers are normalized via normKey_, so whitespace/punctuation/case don't matter.
- * @param {Array<string>} headers - Raw headers from the sheet.
- */
-function findColumnIndexes_(headers) {
-  const norm = headers.map(normKey_);
-  const find = (aliases) => {
-    const na = aliases.map(normKey_);
-    for (let i = 0; i < norm.length; i++) {
-      if (na.includes(norm[i])) return i;
-    }
-    return -1;
-  };
-  return {
-    strikeIdx:    find(["strike"]),
-    bidIdx:       find(["bid"]),
-    midIdx:       find(["mid"]),
-    askIdx:       find(["ask"]),
-    typeIdx:      find(["type", "option type", "call/put", "cp", "put/call"]),
-    ivIdx:        find(["iv", "implied volatility"]),
-    deltaIdx:     find(["delta"]),
-    volumeIdx:    find(["volume", "vol"]),
-    openIntIdx:   find(["open int", "open interest", "oi"]),
-    moneynessIdx: find(["moneyness", "money", "itm/otm"]),
-  };
 }
 
 // ---- Strike Parsing ----
