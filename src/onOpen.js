@@ -189,7 +189,10 @@ function completeInitialization(loadOptionPrices, loadPortfolio) {
   }
   const configHeaders = ["Setting", "Value"];
   configSheet.getRange(1, 1, 1, 2).setValues([configHeaders]).setFontWeight("bold");
-  configSheet.getRange(2, 1, 1, 2).setValues([["DataFolder", "SpreadFinder/DATA"]]);
+  configSheet.getRange(2, 1, 2, 2).setValues([
+    ["DataFolder", "SpreadFinder/DATA"],
+    ["TimeZone", "America/New_York"]
+  ]);
   configSheet.autoResizeColumns(1, 2);
 
   // ---- Create Google Drive folder structure ----

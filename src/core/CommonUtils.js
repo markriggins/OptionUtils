@@ -1,3 +1,4 @@
+
 /**
  * CommonUtils.js
  * Shared small helpers used across OptionUtils.
@@ -15,6 +16,63 @@ function clamp_(x, lo, hi) {
 function roundTo_(n, digits) {
   const f = Math.pow(10, digits);
   return Math.round(Number(n) * f) / f;
+}
+
+// ---- TimeZone and Date Utilities ----
+// Standard: Store dates as Date objects at midnight.
+// Display: Format as M/D/YYYY using formatDateMDYYYY_().
+
+/**
+ * Gets the configured timezone from the Config sheet.
+ * Defaults to NYSE timezone (America/New_York) if not set.
+ * @returns {string} IANA timezone identifier
+ */
+function getTimeZone_() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return "America/New_York";
+    return getConfigValue_(ss, "TimeZone", "America/New_York");
+  } catch (e) {
+    return "America/New_York";
+  }
+}
+
+/**
+ * Creates a Date at midnight local time.
+ * Use this instead of new Date() constructor to avoid timezone issues.
+ *
+ * @param {number} year - Full year (e.g., 2026)
+ * @param {number} month - Month 1-12 (NOT 0-indexed like JS Date)
+ * @param {number} day - Day of month 1-31
+ * @returns {Date} Date at midnight local time
+ */
+function createDate_(year, month, day) {
+  return new Date(year, month - 1, day, 0, 0, 0, 0);
+}
+
+/**
+ * Formats a Date as M/D/YYYY (standard display format).
+ * Returns empty string for null/invalid dates.
+ *
+ * @param {Date|null} date - Date to format
+ * @returns {string} Formatted date string or ""
+ */
+function formatDateMDYYYY_(date) {
+  if (!date || !(date instanceof Date) || isNaN(date.getTime())) return "";
+  return (date.getMonth() + 1) + "/" + date.getDate() + "/" + date.getFullYear();
+}
+
+/**
+ * Formats a Date using Utilities.formatDate with configured timezone.
+ * For custom format patterns.
+ *
+ * @param {Date} date - Date to format
+ * @param {string} pattern - Format pattern (e.g., "MMM d, yyyy")
+ * @returns {string} Formatted date string or ""
+ */
+function formatDateWithTZ_(date, pattern) {
+  if (!date || !(date instanceof Date) || isNaN(date.getTime())) return "";
+  return Utilities.formatDate(date, getTimeZone_(), pattern);
 }
 
 /**

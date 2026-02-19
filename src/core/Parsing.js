@@ -110,11 +110,8 @@ function numOr_(v, fallback) {
 function formatExpirationLabel_(exp) {
   if (!exp) return null;
 
-  let d = exp;
-  if (!(d instanceof Date)) {
-    d = new Date(exp);
-  }
-  if (isNaN(d.getTime())) return null;
+  const d = parseDateAtMidnight_(exp);
+  if (!d) return null;
 
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -124,22 +121,36 @@ function formatExpirationLabel_(exp) {
 }
 
 // ---- Date Parsing ----
+// Date utilities (getTimeZone_, createDate_, formatDateMDYYYY_, formatDateWithTZ_) are in CommonUtils.js
+// Parsing functions are here.
 
 /**
  * Parses various date formats into a Date at midnight local time.
- * Handles: Date objects, YYYY-MM-DD, M/D/YY, M/D/YYYY, and native Date parsing.
+ * Handles: Date objects, YYYY-MM-DD, M/D/YY, M/D/YYYY, Excel serial dates, and native Date parsing.
  * Always returns a midnight-normalized date or null on failure.
  *
  * @param {Date|string|number} dateVal - Date value to parse
  * @returns {Date|null} Date at midnight local time, or null if invalid
  */
 function parseDateAtMidnight_(dateVal) {
-  if (!dateVal) return null;
+  if (dateVal == null || dateVal === "") return null;
 
   // Already a Date object - normalize to midnight
   if (dateVal instanceof Date) {
     if (isNaN(dateVal.getTime())) return null;
     return new Date(dateVal.getFullYear(), dateVal.getMonth(), dateVal.getDate());
+  }
+
+  // Excel serial date (number from Google Sheets)
+  // Excel serial date 1 = Jan 1, 1900; Google Sheets uses same epoch but with 1900 leap year bug
+  // For dates after Feb 28, 1900: subtract 25569 to get Unix epoch days
+  if (typeof dateVal === "number" && dateVal > 25000 && dateVal < 100000) {
+    // Add 12 hours to avoid timezone boundary issues when converting
+    const ms = (dateVal - 25569) * 86400 * 1000 + 12 * 60 * 60 * 1000;
+    const d = new Date(ms);
+    if (!isNaN(d.getTime())) {
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    }
   }
 
   const s = String(dateVal).trim();

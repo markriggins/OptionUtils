@@ -326,8 +326,8 @@ function buildClosingPricesMap_(transactions, stockTxns) {
 
     const parts = legKey.split("|");
     const expStr = parts[1];
-    const expDate = new Date(expStr);
-    if (!isNaN(expDate) && expDate < today) {
+    const expDate = parseDateAtMidnight_(expStr);
+    if (expDate && expDate < today) {
       result.set(legKey, 0); // Expired worthless
     }
   }

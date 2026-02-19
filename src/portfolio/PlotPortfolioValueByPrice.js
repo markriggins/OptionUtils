@@ -158,12 +158,8 @@ function computePortfolioGraphData_(ss, symbol) {
   today.setHours(0, 0, 0, 0);
   for (const sp of allSpreads) {
     if (sp.expiration) {
-      let expDate = sp.expiration;
-      if (!(expDate instanceof Date)) {
-        expDate = new Date(sp.expiration);
-      }
-      if (!isNaN(expDate.getTime())) {
-        expDate.setHours(0, 0, 0, 0);
+      const expDate = parseDateAtMidnight_(sp.expiration);
+      if (expDate) {
         sp.dte = Math.max(1, Math.round((expDate - today) / (1000 * 60 * 60 * 24)));
       }
     }
@@ -172,12 +168,8 @@ function computePortfolioGraphData_(ss, symbol) {
   }
   for (const leg of allSingleLegs) {
     if (leg.expiration) {
-      let expDate = leg.expiration;
-      if (!(expDate instanceof Date)) {
-        expDate = new Date(leg.expiration);
-      }
-      if (!isNaN(expDate.getTime())) {
-        expDate.setHours(0, 0, 0, 0);
+      const expDate = parseDateAtMidnight_(leg.expiration);
+      if (expDate) {
         leg.dte = Math.max(1, Math.round((expDate - today) / (1000 * 60 * 60 * 24)));
       }
     }
@@ -187,12 +179,8 @@ function computePortfolioGraphData_(ss, symbol) {
   // Calculate DTE for custom position legs
   for (const leg of allCustomLegs) {
     if (leg.expiration) {
-      let expDate = leg.expiration;
-      if (!(expDate instanceof Date)) {
-        expDate = new Date(leg.expiration);
-      }
-      if (!isNaN(expDate.getTime())) {
-        expDate.setHours(0, 0, 0, 0);
+      const expDate = parseDateAtMidnight_(leg.expiration);
+      if (expDate) {
         leg.dte = Math.max(1, Math.round((expDate - today) / (1000 * 60 * 60 * 24)));
       }
     }

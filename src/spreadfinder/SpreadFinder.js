@@ -94,21 +94,9 @@ function getSpreadFinderOptions() {
 
     let exp = expCol[i][0];
     if (exp) {
-      let expDate;
-      if (exp instanceof Date) {
-        expDate = exp;
-      } else {
-        // Parse string date
-        const s = String(exp).trim();
-        const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-        if (isoMatch) {
-          expDate = new Date(+isoMatch[1], +isoMatch[2] - 1, +isoMatch[3]);
-        } else {
-          expDate = new Date(s);
-        }
-      }
-      if (!isNaN(expDate.getTime())) {
-        // Normalize to YYYY-MM-DD
+      const expDate = parseDateAtMidnight_(exp);
+      if (expDate) {
+        // Normalize to YYYY-MM-DD key
         const key = expDate.getFullYear() + "-" +
           String(expDate.getMonth() + 1).padStart(2, "0") + "-" +
           String(expDate.getDate()).padStart(2, "0");
@@ -214,7 +202,7 @@ function runSpreadFinderWithSelection(symbols, expirations) {
   const maxExpDate = config.maxExpirationDate;
   const skipExpDateFilter = !!config.selectedExpirations;
   const filtered = spreads.filter(s => {
-    const expDate = new Date(s.expiration);
+    const expDate = parseDateAtMidnight_(s.expiration);
     // Mark conflicts as held (but keep them in results)
     s.held = conflicts.has(`${s.symbol}|${s.lowerStrike}|${s.expiration}`);
     if (config.symbols && !config.symbols.includes(s.symbol)) return false;
@@ -364,7 +352,7 @@ function loadSpreadFinderConfig_(sheet) {
     const value = row[1];
     if (setting && value !== "" && value != null && outlookKeys.includes(setting)) {
       if (setting === "outlookDate") {
-        config[setting] = value instanceof Date ? value : new Date(value);
+        config[setting] = parseDateAtMidnight_(value);
       } else {
         config[setting] = +value;
       }
@@ -429,29 +417,16 @@ function loadOptionData_(ss, filterSymbols, filterExpirations) {
     // Filter by symbol if specified
     if (symbolSet && !symbolSet.has(symbol)) continue;
 
-    let exp = row[idx.expiration];
-    let expNormalized = null;
-    if (exp instanceof Date) {
-      expNormalized = exp.getFullYear() + "-" +
-        String(exp.getMonth() + 1).padStart(2, "0") + "-" +
-        String(exp.getDate()).padStart(2, "0");
-      exp = `${exp.getMonth() + 1}/${exp.getDate()}/${exp.getFullYear()}`;
-    } else {
-      exp = (exp || "").toString().trim();
-      // Parse for filtering
-      const isoMatch = exp.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (isoMatch) {
-        expNormalized = exp;
-      } else {
-        const d = new Date(exp);
-        if (!isNaN(d.getTime())) {
-          expNormalized = d.getFullYear() + "-" +
-            String(d.getMonth() + 1).padStart(2, "0") + "-" +
-            String(d.getDate()).padStart(2, "0");
-        }
-      }
-    }
-    if (!exp) continue;
+    const rawExp = row[idx.expiration];
+    const expDate = parseDateAtMidnight_(rawExp);
+    if (!expDate) continue;
+
+    // Normalized key for filtering (YYYY-MM-DD)
+    const expNormalized = expDate.getFullYear() + "-" +
+      String(expDate.getMonth() + 1).padStart(2, "0") + "-" +
+      String(expDate.getDate()).padStart(2, "0");
+    // Display format (M/D/YYYY)
+    const exp = formatDateMDYYYY_(expDate);
 
     // Filter by expiration if specified
     if (filterExpirations && expNormalized && !filterExpirations.has(expNormalized)) continue;
@@ -592,9 +567,10 @@ function generateSpreads_(chain, config) {
         // Expirations before target date are penalized (may expire before move happens)
         let dateBoost = 1;
         if (config.outlookDate) {
-          const expDate = new Date(lower.expiration);
-          const targetDate = new Date(config.outlookDate);
+          const expDate = parseDateAtMidnight_(lower.expiration);
+          const targetDate = parseDateAtMidnight_(config.outlookDate);
           const now = new Date();
+          if (!expDate || !targetDate) continue;
           const totalDays = Math.max(1, (targetDate - now) / (1000 * 60 * 60 * 24));
           const diffDays = (expDate - targetDate) / (1000 * 60 * 60 * 24);
 
@@ -671,14 +647,9 @@ function loadHeldPositions_(ss) {
           if (rawSym) lastSym = rawSym;
 
           if (idxExp >= 0) {
-            let rawExp = rows[r][idxExp];
-            if (rawExp instanceof Date) {
-              lastExp = `${rawExp.getMonth() + 1}/${rawExp.getDate()}/${rawExp.getFullYear()}`;
-            } else if (rawExp) {
-              const parsed = new Date(rawExp);
-              if (!isNaN(parsed.getTime())) {
-                lastExp = `${parsed.getMonth() + 1}/${parsed.getDate()}/${parsed.getFullYear()}`;
-              }
+            const parsed = parseDateAtMidnight_(rows[r][idxExp]);
+            if (parsed) {
+              lastExp = formatDateMDYYYY_(parsed);
             }
           }
 
@@ -742,13 +713,10 @@ function loadHeldPositions_(ss) {
     // Carry forward symbol and expiration from group header rows
     if (rowSymbol) lastSymbol = rowSymbol;
 
-    let rawExp = expirationCol >= 0 ? data[r][expirationCol] : "";
-    if (rawExp instanceof Date) {
-      lastExp = `${rawExp.getMonth() + 1}/${rawExp.getDate()}/${rawExp.getFullYear()}`;
-    } else if (rawExp) {
-      const parsed = new Date(rawExp);
-      if (!isNaN(parsed.getTime())) {
-        lastExp = `${parsed.getMonth() + 1}/${parsed.getDate()}/${parsed.getFullYear()}`;
+    if (expirationCol >= 0) {
+      const parsed = parseDateAtMidnight_(data[r][expirationCol]);
+      if (parsed) {
+        lastExp = formatDateMDYYYY_(parsed);
       }
     }
 
@@ -959,19 +927,8 @@ function showSpreadFinderGraphs() {
 
    return data.map(row => {
      const sym = row[c.Symbol];
-     // Parse expiration carefully to avoid timezone shifts
-     let expDate = row[c.Expiration];
-     if (expDate instanceof Date) {
-       // Already a Date from spreadsheet - use it directly
-     } else {
-       // String like "2028-06-16" - parse as local date, not UTC
-       const match = String(expDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
-       if (match) {
-         expDate = new Date(+match[1], +match[2] - 1, +match[3], 12, 0, 0);
-       } else {
-         expDate = new Date(expDate);
-       }
-     }
+     // Parse expiration to local midnight to avoid timezone shifts
+     const expDate = parseDateAtMidnight_(row[c.Expiration]);
      const lowStrike = row[c.Lower];
      const highStrike = row[c.Upper];
 
@@ -1007,45 +964,15 @@ function showSpreadFinderGraphs() {
  }
 
 /**
- * Parses an ISO date string (YYYY-MM-DD) or M/D/YYYY to a Date object at noon local time.
- * Avoids timezone issues that occur with new Date("YYYY-MM-DD") which parses as UTC.
+ * Parses a date string or Date object to midnight local time.
+ * Wraps parseDateAtMidnight_ with error handling.
  * @param {string|Date} exp - Expiration date string or Date object
- * @returns {Date} Date object at noon local time
+ * @returns {Date} Date object at midnight local time
  */
 function parseIsoDate_(exp) {
-  if (exp instanceof Date) {
-    return new Date(exp.getFullYear(), exp.getMonth(), exp.getDate(), 12, 0, 0);
+  const d = parseDateAtMidnight_(exp);
+  if (!d) {
+    throw new Error("Invalid date format: " + exp);
   }
-
-  const s = String(exp || "").trim();
-
-  // ISO format: YYYY-MM-DD
-  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (isoMatch) {
-    return new Date(
-      parseInt(isoMatch[1], 10),
-      parseInt(isoMatch[2], 10) - 1,
-      parseInt(isoMatch[3], 10),
-      12, 0, 0
-    );
-  }
-
-  // M/D/YYYY format
-  const mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (mdyMatch) {
-    return new Date(
-      parseInt(mdyMatch[3], 10),
-      parseInt(mdyMatch[1], 10) - 1,
-      parseInt(mdyMatch[2], 10),
-      12, 0, 0
-    );
-  }
-
-  // Fallback: create Date and extract components to avoid timezone shift
-  const d = new Date(s);
-  if (!isNaN(d.getTime())) {
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0);
-  }
-
-  throw new Error("Invalid date format: " + exp);
+  return d;
 }

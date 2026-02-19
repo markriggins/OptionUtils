@@ -41,15 +41,9 @@ function buildSingleLegOptionStratUrl_(symbol, strike, optionType, expiration, i
   // Format date code (YYMMDD)
   let d = expiration;
   if (!(d instanceof Date)) {
-    // Try to parse ISO format directly
-    const isoMatch = String(d).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (isoMatch) {
-      d = new Date(parseInt(isoMatch[1], 10), parseInt(isoMatch[2], 10) - 1, parseInt(isoMatch[3], 10), 12, 0, 0);
-    } else {
-      d = new Date(d);
-    }
+    d = parseDateAtMidnight_(expiration);
   }
-  if (isNaN(d.getTime())) return null;
+  if (!d || isNaN(d.getTime())) return null;
 
   const dateCode = String(d.getFullYear() % 100).padStart(2, "0") +
                    String(d.getMonth() + 1).padStart(2, "0") +
@@ -94,15 +88,9 @@ function buildCustomOptionStratUrl(symbol, legs) {
   function formatDateCode(exp) {
     let d = exp;
     if (!(d instanceof Date)) {
-      // Try ISO format
-      const isoMatch = String(d).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (isoMatch) {
-        d = new Date(parseInt(isoMatch[1], 10), parseInt(isoMatch[2], 10) - 1, parseInt(isoMatch[3], 10), 12, 0, 0);
-      } else {
-        d = new Date(d);
-      }
+      d = parseDateAtMidnight_(exp);
     }
-    if (isNaN(d.getTime())) return "000000";
+    if (!d || isNaN(d.getTime())) return "000000";
     return (
       String(d.getFullYear() % 100).padStart(2, "0") +
       String(d.getMonth() + 1).padStart(2, "0") +
@@ -197,12 +185,9 @@ function buildOptionStratUrlFromLegs(symbolRange, strikeRange, typeRange, expira
   function formatDateCode(exp) {
     let d = exp;
     if (!(d instanceof Date)) {
-      d = new Date(exp);
+      d = parseDateAtMidnight_(exp);
     }
-    if (isNaN(d.getTime())) return "000000";
-    // Normalize to noon to avoid timezone/DST edge cases
-    d = new Date(d);
-    d.setHours(12, 0, 0, 0);
+    if (!d || isNaN(d.getTime())) return "000000";
     return (
       String(d.getFullYear() % 100).padStart(2, "0") +
       String(d.getMonth() + 1).padStart(2, "0") +
