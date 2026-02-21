@@ -8,7 +8,7 @@
  * Library setup:
  *   1. Open Extensions > Apps Script
  *   2. Click "+" next to Libraries in the left sidebar
- *   3. Enter Script ID: 1qvAlZ99zluKSr3ws4NsxH8xXo1FncbWzu6Yq6raBumHdCLpLDaKveM0T
+ *   3. Enter Script ID: 1De_ysSiDEe8GPVepsv7TgK8XvnFE1gIjPiUdIMHWsELkbrInmkW70ALd
  *   4. Click "Look up" and select the latest version
  *   5. Set identifier to "SpreadFinder"
  *   6. Click "Add"
