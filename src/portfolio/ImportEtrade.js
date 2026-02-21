@@ -78,6 +78,7 @@ function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
     const existingSheet = ss.getSheetByName("Portfolio");
     if (existingSheet) {
       ss.deleteSheet(existingSheet);
+      SpreadsheetApp.flush();
       const nr = ss.getNamedRanges().find(r => r.getName() === "PortfolioTable");
       if (nr) nr.remove();
     }
@@ -91,14 +92,6 @@ function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
     const rows = portfolioRange.getValues();
     headers = rows[0];
     existingPositions = parsePortfolioTable_(rows);
-    log.info("import", `Existing positions: ${existingPositions.size} groups`);
-    for (const [key, pos] of existingPositions) {
-      if (key.includes("STOCK")) {
-        log.info("import", `  Existing stock: ${key} qty=${pos.legs?.[0]?.qty}`);
-      }
-    }
-  } else {
-    log.info("import", `No existing Portfolio table found`);
   }
 
   // Parse transaction CSVs directly

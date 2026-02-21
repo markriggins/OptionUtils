@@ -346,6 +346,7 @@ function parsePortfolioStocksAndCash_(csvContent, stockTxns) {
   const idxQty = required.Quantity;
   const idxPricePaid = required.PricePaid;
 
+
   // Optional columns
   const optional = findOptionalColumns_(headers, [
     { name: "MarketValue", aliases: ["market value", "market value $", "value", "value $"] },

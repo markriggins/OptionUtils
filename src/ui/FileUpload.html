@@ -126,8 +126,10 @@
                   updateUploadButton();
                 });
               });
+            } else {
+              // No existing portfolio - default to rebuild mode
+              document.querySelector('input[name="updateMode"][value="rebuild"]').checked = true;
             }
-            // If no existing portfolio, leave portfolio section visible (default)
           })
           .withFailureHandler(function() {
             // On error, leave defaults (portfolio section visible)
