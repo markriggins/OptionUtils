@@ -1,9 +1,6 @@
   Architecture
   1. Rename GitHub OptionUtils to SpreadFinder
-  2. Cleanup GS permissions, no more access to the drive
-  See, edit, create, and delete all your Google Sheets spreadsheets. Learn more
   3. Learn why you're not seeing links to SpreadFinder's Privacy Policy or Terms of Service
   4. Find out why, on a fresh copy it thinks TSLA is 826 shares and	$480.00
-  5. Stop expecting TransactionDate to be in option csv files , when its Last Trade or  Time
-  6. Make option prices TransactionDate into TxnDateTime
   10. Be sure that the DATA/OptionPrices support the sample portfolio.  Put "sample" in their name, so they will be ignored later
+  11. Look at fitness, make it its own function, map it to 0-1

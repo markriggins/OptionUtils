@@ -118,7 +118,7 @@
             <ul>
                 <li><strong>ROI</strong> — Maximum return if stock closes above upper strike at expiration</li>
                 <li><strong>Expected ROI</strong> — Probability-weighted ROI based on the chance the stock reaches the upper strike. Accounts for both: (1) expiring fully in-the-money at max profit, or (2) price touching the upper strike earlier, allowing you to exit early yet still capture ~80% of gains</li>
-                <li><strong>Fitness</strong> — ExpROI × Liquidity^0.2 × OutlookBoost. Higher = better trade</li>
+                <li><strong>Fitness</strong> — Rewards higher expected ROI, liquidity, and outlook alignment</li>
             </ul>
         </div>
     </div>
@@ -127,19 +127,19 @@
 <div class="dashboard">
     <div class="chart-card">
         <div class="chart-header">
-            <span class="chart-title" data-help="Controls&#10;• Zoom: click-drag area&#10;• Pan: arrow keys&#10;• Reset: right-click">Delta vs ROI</span>
-            <button class="toggle-btn" onclick="toggleChart('chart_delta')">Hide/Show</button>
-        </div>
-        <div id="chart_delta" class="chart-div"><div class="chart-spinner"><div class="dot-pulse"><span></span><span></span><span></span></div><div>Loading charts...</div></div></div>
-    </div>
-
-    <div class="chart-card">
-        <div class="chart-header">
             <span class="chart-title" data-help="Controls&#10;• Zoom: click-drag area&#10;• Pan: arrow keys&#10;• Reset: right-click">Strike vs <span id="strike-y-label">ExpROI</span></span>
             <button class="toggle-btn" onclick="toggleStrikeY()">ROI / ExpROI</button>
             <button class="toggle-btn" onclick="toggleChart('chart_strike')">Hide/Show</button>
         </div>
         <div id="chart_strike" class="chart-div"><div class="chart-spinner"><div class="dot-pulse"><span></span><span></span><span></span></div><div>Loading charts...</div></div></div>
+    </div>
+
+    <div class="chart-card">
+        <div class="chart-header">
+            <span class="chart-title" data-help="Controls&#10;• Zoom: click-drag area&#10;• Pan: arrow keys&#10;• Reset: right-click">Delta vs ROI</span>
+            <button class="toggle-btn" onclick="toggleChart('chart_delta')">Hide/Show</button>
+        </div>
+        <div id="chart_delta" class="chart-div"><div class="chart-spinner"><div class="dot-pulse"><span></span><span></span><span></span></div><div>Loading charts...</div></div></div>
     </div>
 </div>
 
@@ -164,7 +164,7 @@
             <div class="metric-box" data-help="Lower Open Interest."><span class="label">L-OI</span><span id="det-loi" class="value"></span></div>
             <div class="metric-box" data-help="Upper Open Interest."><span class="label">U-OI</span><span id="det-uoi" class="value"></span></div>
             <div class="metric-box" data-help="0-1 composite: 60% bid-ask spread, 25% volume, 15% open interest"><span class="label">Liquidity</span><span id="det-liq" class="value"></span></div>
-            <div class="metric-box" data-help="ExpROI × Liquidity^0.2 × OutlookBoost. Higher = better trade."><span class="label">Fitness</span><span id="det-fit" class="value"></span></div>
+            <div class="metric-box" data-help="Rewards higher expected ROI, liquidity, and outlook alignment."><span class="label">Fitness</span><span id="det-fit" class="value"></span></div>
         </div>
     </div>
 </div>

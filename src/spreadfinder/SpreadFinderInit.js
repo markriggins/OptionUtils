@@ -605,7 +605,7 @@ function outputSpreadResults_(sheet, spreads, config) {
     "Open Interest on lower strike. Higher = better liquidity",
     "Open Interest on upper strike. Want both legs liquid",
     "0-1 composite: 60% bid-ask spread, 25% volume, 15% OI",
-    "Fitness = ExpROI × Liquidity^0.2 × OutlookBoost",
+    "Rewards higher expected ROI, liquidity, and outlook alignment",
     "Link to OptionStrat visualization",
     "Label for chart identification",
     "HELD = you already have a conflicting short position",
