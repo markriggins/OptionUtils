@@ -4,6 +4,36 @@
  */
 
 /**
+ * Calculates a liquidity score from 0 (illiquid) to 1 (highly liquid).
+ * Weighted composite: 60% bid-ask spread, 25% volume, 15% open interest.
+ * @param {number} bid The current bid price.
+ * @param {number} ask The current ask price.
+ * @param {number} volume Daily trading volume.
+ * @param {number} openInterest Total open interest.
+ * @return {number} Liquidity score between 0 and 1.
+ */
+function calcLiquidityScore(bid, ask, volume, openInterest) {
+  if (bid <= 0 || ask <= 0) return 0;
+
+  const mid = (bid + ask) / 2;
+  const relSpread = (ask - bid) / mid;
+
+  // 1. Spread Score: Penalty starts at 0.5% spread, hits zero at 5% spread
+  const spreadScore = Math.max(0, 1 - (relSpread / 0.05));
+
+  // 2. Volume Score: Logarithmic scale, 1000 is "good" liquidity
+  const volScore = Math.min(1, Math.log10((volume || 0) + 1) / 3);
+
+  // 3. OI Score: Ensures the market has depth
+  const oiScore = Math.min(1, Math.log10((openInterest || 0) + 1) / 4);
+
+  // Weighted Average: Spread is most important for immediate entry/exit
+  const totalScore = (spreadScore * 0.6) + (volScore * 0.25) + (oiScore * 0.15);
+
+  return Math.round(totalScore * 100) / 100;
+}
+
+/**
  * Calculates the Expected Gain for a Bull Call Spread based on an 80%-of-max-profit early exit.
  * Uses the "Rule of Touch" (probTouch ≈ 1.6x delta) to estimate probability of reaching target.
  * @param {number} longMid The mid price of the lower (long) leg.
@@ -79,22 +109,16 @@ function generateSpreads_(chain, config) {
       const maxLoss = debit;
       const roi = debit > 0 ? maxProfit / debit : 0;
 
-      // Liquidity score: geometric mean of OI, scaled
-      const minOI = Math.min(lower.openint, upper.openint);
-      const liquidityScore = Math.sqrt(lower.openint * upper.openint) / 100;
-
-      // Bid-ask tightness (lower is better, so invert)
-      const lowerSpread = lower.ask - lower.bid;
-      const upperSpread = upper.ask - upper.bid;
-      const avgBidAskSpread = (lowerSpread + upperSpread) / 2;
-      const tightness = avgBidAskSpread > 0 ? 1 / avgBidAskSpread : 10;
+      // Liquidity score: minimum of both legs (weakest link)
+      const lowerLiquidity = calcLiquidityScore(lower.bid, lower.ask, lower.volume, lower.openint);
+      const upperLiquidity = calcLiquidityScore(upper.bid, upper.ask, upper.volume, upper.openint);
+      const liquidityScore = Math.min(lowerLiquidity, upperLiquidity);
 
       // Expected gain using probability-of-touch model (80% of max profit target)
       const expectedGain = calculateExpectedGain(lowerMid, upperMid, lower.strike, upper.strike, Math.abs(upper.delta));
       const expectedROI = debit > 0 ? expectedGain / debit : 0;
 
-      // Fitness = ExpROI * liquidity^0.1 * tightness^0.1
-      // Liquidity/tightness as mild tiebreakers (patient fills assumed)
+      // Fitness = ExpROI * liquidity^0.2 (bid-ask spread is already in liquidity)
       // timeFactor dropped — already baked into delta and probTouch
       // Outlook boost: adjust fitness based on price target, date, and confidence
       let outlookBoost = 1;
@@ -143,7 +167,7 @@ function generateSpreads_(chain, config) {
         outlookBoost = priceBoost * dateBoost;
       }
 
-      const fitness = roundTo_(expectedROI * Math.pow(liquidityScore, 0.2) * Math.pow(tightness, 0.1) * outlookBoost, 2);
+      const fitness = roundTo_(expectedROI * Math.pow(liquidityScore, 0.2) * outlookBoost, 2);
 
       spreads.push({
         symbol: lower.symbol,
@@ -165,7 +189,6 @@ function generateSpreads_(chain, config) {
         expectedGain: roundTo_(expectedGain, 2),
         expectedROI: roundTo_(expectedROI, 2),
         liquidityScore: roundTo_(liquidityScore, 2),
-        tightness: roundTo_(tightness, 2),
         fitness: roundTo_(fitness, 2)
       });
     }

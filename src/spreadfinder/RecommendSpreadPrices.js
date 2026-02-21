@@ -208,18 +208,11 @@ function getOptionQuote_(symbol, expiration, strike, type) {
 }
 
 /**
- * Calculate liquidity score from volume and open interest.
- * Returns 0 (illiquid) to 1 (very liquid).
- *
- * @param {Object} quote - Quote with volume and openint
- * @returns {number} Liquidity score 0-1
+ * Calculate liquidity score from quote.
+ * Uses shared calcLiquidityScore() from SpreadFinderCalc.js
  */
 function getLiquidityScore_(quote) {
-  const volume = quote.volume || 0;
-  const openint = quote.openint || 0;
-  // Log scale: need ~1000 combined activity for full liquidity
-  // volume counts more than OI (OI/10)
-  return Math.min(1, Math.log10(1 + volume + openint / 10) / 3);
+  return calcLiquidityScore(quote.bid, quote.ask, quote.volume, quote.openint);
 }
 
 /**

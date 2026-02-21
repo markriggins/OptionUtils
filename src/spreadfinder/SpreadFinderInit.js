@@ -82,55 +82,155 @@ function getSpreadFinderOptions() {
 /**
  * Ensures SpreadFinderConfig sheet exists with config table.
  * Creates sheet and config if needed, returns sheet.
+ * If sheet already exists, leaves it unchanged to preserve user settings.
  */
 function ensureSpreadFinderConfigSheet_(ss) {
   let sheet = ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
-  if (!sheet) {
-    sheet = ss.insertSheet(SPREAD_FINDER_CONFIG_SHEET);
+  if (sheet) {
+    return sheet; // Already exists, don't modify
   }
 
-  // Always recreate config to ensure latest settings
+  // Get available symbols, strike bounds, step size, and current price from option prices
+  let defaultSymbols = "";
+  let minStrike = 300;
+  let maxStrike = 700;
+  let minSpreadWidth = 20;
+  let outlookFuturePrice = 500;
+  // One year from now
+  const oneYearFromNow = new Date();
+  oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
+  const outlookDate = (oneYearFromNow.getMonth() + 1) + "/" + oneYearFromNow.getDate() + "/" + oneYearFromNow.getFullYear();
+  try {
+    const optionSheet = ss.getSheetByName(OPTION_PRICES_SHEET);
+    if (optionSheet && optionSheet.getLastRow() > 1) {
+      const headers = optionSheet.getRange(1, 1, 1, optionSheet.getLastColumn()).getValues()[0]
+        .map(h => h.toString().trim().toLowerCase());
+      const symIdx = headers.indexOf("symbol");
+      const strikeIdx = headers.indexOf("strike");
+      const deltaIdx = headers.indexOf("delta");
+      const typeIdx = headers.indexOf("type");
+      const expIdx = headers.indexOf("expiration");
+
+      const data = optionSheet.getRange(2, 1, optionSheet.getLastRow() - 1, headers.length).getValues();
+      const symbols = new Set();
+      const strikes = [];
+      let minS = Infinity, maxS = -Infinity;
+      let bestAtmStrike = null;
+
+      // For ATM detection, only consider near-term options (< 60 days)
+      const today = new Date();
+      const nearTermCutoff = new Date(today.getTime() + 60 * 24 * 60 * 60 * 1000);
+      let bestDeltaDiff = Infinity;
+
+      for (const row of data) {
+        if (symIdx >= 0 && row[symIdx]) symbols.add(row[symIdx].toString().toUpperCase());
+        if (strikeIdx >= 0) {
+          const strike = parseFloat(row[strikeIdx]);
+          if (Number.isFinite(strike)) {
+            strikes.push(strike);
+            if (strike < minS) minS = strike;
+            if (strike > maxS) maxS = strike;
+
+            // Find ATM strike (call with delta closest to 0.5, near-term only)
+            if (deltaIdx >= 0 && typeIdx >= 0 && expIdx >= 0) {
+              const expDate = parseDateAtMidnight_(row[expIdx]);
+              const isNearTerm = expDate && expDate <= nearTermCutoff;
+              if (isNearTerm) {
+                const delta = parseFloat(row[deltaIdx]);
+                const type = String(row[typeIdx]).toLowerCase();
+                if (type === "call" && Number.isFinite(delta)) {
+                  const diff = Math.abs(delta - 0.5);
+                  if (diff < bestDeltaDiff) {
+                    bestDeltaDiff = diff;
+                    bestAtmStrike = strike;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      defaultSymbols = Array.from(symbols).sort().join(",");
+      if (Number.isFinite(minS) && Number.isFinite(maxS)) {
+        // Get current price from GOOGLEFINANCE for first symbol
+        const firstSymbol = Array.from(symbols).sort()[0];
+        let currentPrice = (minS + maxS) / 2; // fallback
+        if (firstSymbol) {
+          try {
+            // Need a temporary sheet since config sheet doesn't exist yet
+            const tempSheet = ss.getSheets()[0];
+            const tempCell = tempSheet.getRange("ZZ1");
+            tempCell.setFormula(`=GOOGLEFINANCE("${firstSymbol}")`);
+            SpreadsheetApp.flush();
+            const price = tempCell.getValue();
+            tempCell.clearContent();
+            if (typeof price === "number" && price > 0) {
+              currentPrice = price;
+            }
+          } catch (e) {
+            // GOOGLEFINANCE failed, use fallback
+          }
+        }
+
+        // Set strike range based on current price
+        minStrike = Math.round(currentPrice * 0.5);   // 50% below current
+        maxStrike = Math.round(currentPrice * 2.0);   // 100% above current
+        outlookFuturePrice = Math.round(currentPrice * 1.25);  // +25%
+
+        // Calculate typical strike step
+        const uniqueStrikes = [...new Set(strikes)].sort((a, b) => a - b);
+        if (uniqueStrikes.length >= 2) {
+          const steps = [];
+          for (let i = 1; i < uniqueStrikes.length; i++) {
+            steps.push(uniqueStrikes[i] - uniqueStrikes[i - 1]);
+          }
+          const medianStep = steps.sort((a, b) => a - b)[Math.floor(steps.length / 2)];
+          const range = maxS - minS;
+
+          // If narrow range with small steps, use smaller minSpreadWidth
+          if (range < 200 && medianStep <= 5) {
+            minSpreadWidth = Math.max(5, medianStep * 2);
+          } else if (medianStep <= 10) {
+            minSpreadWidth = Math.max(10, medianStep * 2);
+          }
+          // Otherwise keep default of 20
+        }
+      }
+    }
+  } catch (e) {
+    // Use defaults if option prices not available
+  }
+
+  // Create new sheet with default config
+  sheet = ss.insertSheet(SPREAD_FINDER_CONFIG_SHEET);
+
   const configData = [
     ["Setting", "Value", "Description"],
-    ["symbol", "TSLA", "Comma-separated symbols to analyze (blank=all)"],
-    ["minSpreadWidth", 20, "Minimum spread width in dollars"],
+    ["symbol", defaultSymbols, "Comma-separated symbols to analyze (blank=all)"],
+    ["minSpreadWidth", minSpreadWidth, "Minimum spread width in dollars"],
     ["maxSpreadWidth", 150, "Maximum spread width in dollars"],
-    ["minOpenInterest", 10, "Minimum open interest for both legs"],
-    ["minVolume", 5, "Minimum volume for both legs"],
+    ["minLiquidityScore", 0.25, "0-1 scale (60% spread, 25% volume, 15% OI)"],
     ["patience", 60, "Minutes for price calculation (0=aggressive, 60=patient)"],
-    ["maxDebit", 50, "Maximum debit per share"],
     ["minROI", 2.0, "Minimum ROI (0.5 = 50% return)"],
-    ["minStrike", 300, "Minimum lower strike price"],
-    ["maxStrike", 700, "Maximum upper strike price"],
+    ["minStrike", minStrike, "Minimum lower strike price"],
+    ["maxStrike", maxStrike, "Maximum upper strike price"],
     ["minExpirationMonths", 6, "Minimum months until expiration"],
     ["maxExpirationMonths", 36, "Maximum months until expiration"],
     ["", "", ""],
     ["Outlook", "", "Price outlook for boosting fitness"],
-    ["outlookFuturePrice", "500", "Target future price (e.g. 700)"],
-    ["outlookDate", "3/1/2027", "Target date (e.g. 3/1/2027)"],
-    ["outlookConfidence", "0.6", "Confidence 0-1 (e.g. 0.7 = 70%)"]
+    ["outlookFuturePrice", outlookFuturePrice, "Target future price (e.g. 700)"],
+    ["outlookDate", outlookDate, "Target date (1 year from now)"],
+    ["outlookConfidence", 0.5, "Confidence 0-1 (0.5 = 50%)"]
   ];
-  // Read existing values to preserve user edits
-  const existingValues = {};
-  try {
-    const existing = sheet.getRange(CONFIG_START_ROW + 1, CONFIG_COL, configData.length - 1, 2).getValues();
-    for (const row of existing) {
-      if (row[0] && row[1] !== "") existingValues[row[0]] = row[1];
-    }
-  } catch (e) { /* ignore */ }
-  // Merge existing values
-  for (let i = 1; i < configData.length; i++) {
-    const key = configData[i][0];
-    if (key in existingValues) configData[i][1] = existingValues[key];
-  }
-  const configRange = sheet.getRange(CONFIG_START_ROW, CONFIG_COL, configData.length, 3);
-  // Remove existing banding before applying new
-  const existingBanding = configRange.getBandings();
-  existingBanding.forEach(b => b.remove());
 
+  const configRange = sheet.getRange(CONFIG_START_ROW, CONFIG_COL, configData.length, 3);
   configRange.setValues(configData);
+
   // Style config as table
   sheet.getRange(CONFIG_START_ROW, CONFIG_COL, 1, 3).setBackground("#34a853").setFontColor("white").setFontWeight("bold");
+  // Style Outlook header row (row 12 in configData, 0-indexed)
+  sheet.getRange(CONFIG_START_ROW + 12, CONFIG_COL, 1, 3).setBackground("#1e7e34").setFontColor("white").setFontWeight("bold");
   const configDataRange = sheet.getRange(CONFIG_START_ROW + 1, CONFIG_COL, configData.length - 1, 3);
   configDataRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREEN, false, false);
   configRange.setBorder(true, true, true, true, true, true, "#cccccc", SpreadsheetApp.BorderStyle.SOLID);
@@ -161,10 +261,8 @@ function loadSpreadFinderConfig_(sheet) {
   const defaults = {
     minSpreadWidth: 20,
     maxSpreadWidth: 150,
-    minOpenInterest: 10,
-    minVolume: 0,
+    minLiquidityScore: 0.25,
     patience: 60,
-    maxDebit: 50,
     minROI: 0.5,
     minStrike: 300,
     maxStrike: 700,
@@ -426,6 +524,38 @@ function loadHeldPositions_(ss) {
 }
 
 /**
+ * Computes a simple hash of config values for change detection.
+ * @param {Object} config - The SpreadFinder config object
+ * @returns {string} A hash string representing the config state
+ */
+function computeConfigHash_(config) {
+  const keys = [
+    "symbols", "minSpreadWidth", "maxSpreadWidth", "minLiquidityScore",
+    "patience", "minROI", "minStrike", "maxStrike",
+    "minExpirationMonths", "maxExpirationMonths",
+    "outlookFuturePrice", "outlookDate", "outlookConfidence"
+  ];
+  const values = keys.map(k => {
+    const v = config[k];
+    if (Array.isArray(v)) return v.join(",");
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    return String(v || "");
+  });
+  return values.join("|");
+}
+
+/**
+ * Gets the stored config hash from the spreads sheet.
+ * @param {Sheet} sheet - The spreads sheet
+ * @returns {string} The stored hash, or empty string if not found
+ */
+function getStoredConfigHash_(sheet) {
+  if (!sheet || sheet.getLastRow() < 1) return "";
+  const val = sheet.getRange(1, 2).getValue();
+  return String(val || "");
+}
+
+/**
  * Outputs spread results to SpreadFinder sheet below config.
  * Uses formulas for MaxProfit, ROI, Fitness so user can edit Debit.
  */
@@ -447,15 +577,17 @@ function outputSpreadResults_(sheet, spreads, config) {
   const existingFilter = sheet.getFilter();
   if (existingFilter) existingFilter.remove();
 
-  // Timestamp
+  // Timestamp and config hash (for change detection)
+  const configHash = computeConfigHash_(config);
   sheet.getRange(1, 1).setValue("Results - " + new Date().toLocaleString());
+  sheet.getRange(1, 2).setValue(configHash);
 
-  // Headers (A-T)
+  // Headers
   const headers = [
     "Symbol", "Expiration", "Lower", "Upper", "Width",
     "Debit", "MaxProfit", "ROI", "ExpGain", "ExpROI",
     "LowerDelta", "UpperDelta",
-    "LowerOI", "UpperOI", "Liquidity", "Tightness", "Fitness", "OptionStrat", "Label", "Held", "IV"
+    "LowerOI", "UpperOI", "Liquidity", "Fitness", "OptionStrat", "Label", "Held", "IV"
   ];
   const headerNotes = [
     "Stock ticker symbol",
@@ -472,9 +604,8 @@ function outputSpreadResults_(sheet, spreads, config) {
     "Delta of upper call. Lower than LowerDelta since further OTM",
     "Open Interest on lower strike. Higher = better liquidity",
     "Open Interest on upper strike. Want both legs liquid",
-    "Liquidity score = sqrt(LowerOI × UpperOI) / 100",
-    "Bid-ask tightness. Higher = tighter spreads, better fills",
-    "Fitness = ExpROI × Liquidity^0.1 × Tightness^0.1",
+    "0-1 composite: 60% bid-ask spread, 25% volume, 15% OI",
+    "Fitness = ExpROI × Liquidity^0.2 × OutlookBoost",
     "Link to OptionStrat visualization",
     "Label for chart identification",
     "HELD = you already have a conflicting short position",
@@ -498,14 +629,14 @@ function outputSpreadResults_(sheet, spreads, config) {
     Debit: "$#,##0.00", MaxProfit: "$#,##0.00", ROI: "0.00",
     ExpGain: "$#,##0.00", ExpROI: "0.00",
     LowerDelta: "0.00", UpperDelta: "0.00", LowerOI: "#,##0", UpperOI: "#,##0",
-    Liquidity: "0.00", Tightness: "0.00", Fitness: "0.00",
+    Liquidity: "0.00", Fitness: "0.00",
     OptionStrat: "@", Label: "@", Held: "@", IV: "0.00%"
   };
   const widthMap = {
     Symbol: 60, Expiration: 90, Lower: 60, Upper: 60, Width: 50,
     Debit: 70, MaxProfit: 70, ROI: 50, ExpGain: 70, ExpROI: 55,
     LowerDelta: 55, UpperDelta: 55, LowerOI: 55, UpperOI: 55,
-    Liquidity: 55, Tightness: 55, Fitness: 55, OptionStrat: 100, Label: 150, Held: 50, IV: 55
+    Liquidity: 55, Fitness: 55, OptionStrat: 100, Label: 150, Held: 50, IV: 55
   };
 
   const dataStartRow = RESULTS_START_ROW + 1;
@@ -537,7 +668,6 @@ function outputSpreadResults_(sheet, spreads, config) {
     rowData[colIdx.LowerOI] = s.lowerOI;
     rowData[colIdx.UpperOI] = s.upperOI;
     rowData[colIdx.Liquidity] = s.liquidityScore;
-    rowData[colIdx.Tightness] = s.tightness;
     rowData[colIdx.Fitness] = s.fitness;
     // Compute OptionStrat URL directly (avoids popup warning from custom function in HYPERLINK)
     const osUrl = buildOptionStratUrl(
@@ -575,6 +705,4 @@ function outputSpreadResults_(sheet, spreads, config) {
   // Clip OptionStrat column
   sheet.getRange(RESULTS_START_ROW, col("OptionStrat"), spreads.length + 1, 1)
     .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
-
-  showSpreadFinderGraphs();
 }

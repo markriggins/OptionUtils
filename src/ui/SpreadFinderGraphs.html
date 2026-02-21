@@ -118,8 +118,7 @@
             <ul>
                 <li><strong>ROI</strong> — Maximum return if stock closes above upper strike at expiration</li>
                 <li><strong>Expected ROI</strong> — Probability-weighted ROI based on the chance the stock reaches the upper strike. Accounts for both: (1) expiring fully in-the-money at max profit, or (2) price touching the upper strike earlier, allowing you to exit early yet still capture ~80% of gains</li>
-                <li><strong>Fitness</strong> — Combined score considering ROI, liquidity, and bid/ask tightness</li>
-                <li><strong>Tightness</strong> — Bid/ask spread as % of mid price (lower = easier fills)</li>
+                <li><strong>Fitness</strong> — ExpROI × Liquidity^0.2 × OutlookBoost. Higher = better trade</li>
             </ul>
         </div>
     </div>
@@ -164,9 +163,8 @@
             <div class="metric-box" data-help="Sell-side Delta."><span class="label">U-Delta</span><span id="det-ud" class="value"></span></div>
             <div class="metric-box" data-help="Lower Open Interest."><span class="label">L-OI</span><span id="det-loi" class="value"></span></div>
             <div class="metric-box" data-help="Upper Open Interest."><span class="label">U-OI</span><span id="det-uoi" class="value"></span></div>
-            <div class="metric-box" data-help="Volume/OI mix."><span class="label">Liquidity</span><span id="det-liq" class="value"></span></div>
-            <div class="metric-box" data-help="Bid-ask spread as % of mid price. Lower = easier to fill."><span class="label">Tightness</span><span id="det-tight" class="value"></span></div>
-            <div class="metric-box" data-help="ROI × √liquidity × √tightness × √time. Higher = better trade."><span class="label">Fitness</span><span id="det-fit" class="value"></span></div>
+            <div class="metric-box" data-help="0-1 composite: 60% bid-ask spread, 25% volume, 15% open interest"><span class="label">Liquidity</span><span id="det-liq" class="value"></span></div>
+            <div class="metric-box" data-help="ExpROI × Liquidity^0.2 × OutlookBoost. Higher = better trade."><span class="label">Fitness</span><span id="det-fit" class="value"></span></div>
         </div>
     </div>
 </div>
@@ -344,10 +342,6 @@
         var eroiEl = document.getElementById('det-eroi');
         eroiEl.innerText = eroiVal.toFixed(1) + "%";
         eroiEl.style.color = eroiVal >= 100 ? '#8bc34a' : (eroiVal >= 50 ? '#ffeb3b' : '#f44336');
-
-        var tightEl = document.getElementById('det-tight');
-        tightEl.innerText = t.tightness;
-        tightEl.style.color = t.tightness <= 0.5 ? '#8bc34a' : (t.tightness <= 1.5 ? '#ffeb3b' : '#f44336');
 
         var fitEl = document.getElementById('det-fit');
         fitEl.innerText = t.fitness;

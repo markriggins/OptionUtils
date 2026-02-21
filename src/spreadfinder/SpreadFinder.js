@@ -17,13 +17,45 @@
    ========================================================= */
 
 /**
- * Shows the SpreadFinder selection dialog.
+ * Runs SpreadFinder using config symbols or all available symbols/expirations.
  */
 function runSpreadFinder() {
-  const html = HtmlService.createHtmlOutputFromFile("ui/SpreadFinderSelect")
-    .setWidth(400)
-    .setHeight(450);
-  SpreadsheetApp.getUi().showModalDialog(html, "Run SpreadFinder");
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Check if config sheet already exists (to show first-run message)
+  const isFirstRun = !ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
+
+  // Get available symbols and expirations from option prices
+  const options = getSpreadFinderOptions();
+
+  // Use config symbols if set, otherwise use all available
+  const configSheet = ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
+  const config = configSheet ? loadSpreadFinderConfig_(configSheet) : {};
+
+  const symbols = (config.symbols && config.symbols.length > 0)
+    ? config.symbols
+    : options.symbols;
+
+  // Use all expirations
+  const expirations = options.expirations.map(e => e.value);
+
+  // Run with these selections
+  runSpreadFinderWithSelection(symbols, expirations);
+
+  // Show first-run message
+  if (isFirstRun) {
+    SpreadsheetApp.getUi().alert(
+      "SpreadFinder Initialized",
+      "SpreadFinderConfig sheet created with default settings.\n\n" +
+      "You can modify it to customize:\n" +
+      "• Target ROI and max debit\n" +
+      "• Strike range and spread width\n" +
+      "• Months to expiration\n" +
+      "• Minimum volume/open interest\n\n" +
+      "Run SpreadFinder again after making changes.",
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+  }
 }
 
 /**
@@ -103,12 +135,8 @@ function runSpreadFinderWithSelection(symbols, expirations) {
     s.held = conflicts.has(`${s.symbol}|${s.lowerStrike}|${s.expiration}`);
     if (config.symbols && !config.symbols.includes(s.symbol)) return false;
     return s.debit > 0 &&
-      s.debit <= config.maxDebit &&
       s.roi >= config.minROI &&
-      s.lowerOI >= config.minOpenInterest &&
-      s.upperOI >= config.minOpenInterest &&
-      s.lowerVol >= config.minVolume &&
-      s.upperVol >= config.minVolume &&
+      s.liquidityScore >= config.minLiquidityScore &&
       s.lowerStrike >= config.minStrike &&
       s.upperStrike <= config.maxStrike &&
       (skipExpDateFilter || (expDate >= minExpDate && expDate <= maxExpDate));
@@ -136,9 +164,37 @@ function runSpreadFinderWithSelection(symbols, expirations) {
 
 /**
  * Opens a large dashboard window with Delta vs ROI and Strike vs ROI.
+ * If no spreads data exists or config has changed, runs SpreadFinder first.
  */
 function showSpreadFinderGraphs() {
   SpreadsheetApp.flush();
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const configSheet = ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
+  const config = configSheet ? loadSpreadFinderConfig_(configSheet) : {};
+  const spreadsSheetName = config.symbols && config.symbols.length > 0
+    ? config.symbols.join(",") + "Spreads"
+    : SPREADS_SHEET;
+  let sheet = ss.getSheetByName(spreadsSheetName);
+
+  // Check if we need to run SpreadFinder
+  let needsRun = false;
+  if (!sheet || sheet.getLastRow() < 3) {
+    // No spreads data
+    needsRun = true;
+  } else {
+    // Check if config has changed since last run
+    const currentHash = computeConfigHash_(config);
+    const storedHash = getStoredConfigHash_(sheet);
+    if (currentHash !== storedHash) {
+      needsRun = true;
+    }
+  }
+
+  if (needsRun) {
+    runSpreadFinder();
+    SpreadsheetApp.flush();
+  }
 
   // Creates the SpreadFinderGraphs modal dialog
   const html = HtmlService.createHtmlOutputFromFile('ui/SpreadFinderGraphs')
@@ -205,7 +261,6 @@ function getSpreadFinderGraphData() {
       lowerOI: row[c.LowerOI],
       upperOI: row[c.UpperOI],
       liquidity: row[c.Liquidity],
-      tightness: row[c.Tightness],
       dte: dte > 0 ? dte : 0,
       held: (row[c.Held] || "").toString().trim() === "HELD",
       iv: parseFloat(row[c.IV]) || 0
