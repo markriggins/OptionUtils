@@ -37,6 +37,29 @@
     <p>Download from barchart.com: Options > Select expiration > Stacked view > Download CSV</p>
     <input type="file" id="optionPricesFile" accept=".csv" multiple>
     <div class="file-name" id="optionPricesName"></div>
+    <div id="uploadModeRadios" class="upload-mode" style="margin-top: 12px; display: none;">
+      <label style="display: block; margin-bottom: 6px; font-size: 13px; color: #202124;">
+        <input type="radio" name="uploadMode" value="merge" checked>
+        <strong>Merge new</strong> — Only update if uploaded data is newer
+      </label>
+      <label style="display: block; font-size: 13px; color: #202124;">
+        <input type="radio" name="uploadMode" value="replace">
+        <strong>Replace all</strong> — Clear existing prices first
+      </label>
+    </div>
+  </div>
+
+  <div id="updateModeSection" class="file-section" style="display:none;">
+    <div class="upload-mode" style="margin-bottom: 12px;">
+      <label style="display: block; margin-bottom: 6px; font-size: 13px; color: #202124;">
+        <input type="radio" name="updateMode" value="addTransactions" checked>
+        <strong>Add transactions</strong> — Append new transactions to existing portfolio
+      </label>
+      <label style="display: block; font-size: 13px; color: #202124;">
+        <input type="radio" name="updateMode" value="rebuild">
+        <strong>Clear and rebuild</strong> — Delete portfolio, rebuild from scratch
+      </label>
+    </div>
   </div>
 
   <div id="portfolioSection" class="file-section" style="display:none;">
@@ -68,14 +91,48 @@
       uploadMode = mode;
 
       if (mode === 'optionPrices') {
-        document.getElementById('dialogTitle').innerText = 'Upload Option Prices & Refresh';
-        document.getElementById('dialogDescription').innerText = 'Select option price CSV files from barchart.com. Files are saved to your Google Drive and merged with any previously uploaded prices. For each expiration date, only the most recent file is used.';
+        document.getElementById('dialogTitle').innerText = 'Upload Option Prices';
+        document.getElementById('dialogDescription').innerText = 'Select option price CSV files from barchart.com. For each expiration date, the uploaded data replaces any previous prices for that expiration.';
         document.getElementById('optionPricesSection').style.display = 'block';
+
+        // Check if existing prices exist to show merge/replace options
+        google.script.run
+          .withSuccessHandler(function(hasExisting) {
+            if (hasExisting) {
+              document.getElementById('uploadModeRadios').style.display = 'block';
+            }
+          })
+          .hasExistingOptionPrices();
       } else if (mode === 'rebuildPortfolio') {
-        document.getElementById('dialogTitle').innerText = 'Upload & Rebuild Portfolio';
-        document.getElementById('dialogDescription').innerText = 'Upload Portfolio and/or Transaction History from E*Trade. Select one or both files, then rebuild your portfolio.';
-        document.getElementById('portfolioSection').style.display = 'block';
+        document.getElementById('dialogTitle').innerText = 'Upload Portfolio / Transactions';
+        document.getElementById('dialogDescription').innerText = 'Upload E*Trade files to build your portfolio.';
         document.getElementById('transactionsSection').style.display = 'block';
+        document.getElementById('portfolioSection').style.display = 'block';
+
+        // Check if existing portfolio exists to show add/rebuild options
+        google.script.run
+          .withSuccessHandler(function(hasExisting) {
+            if (hasExisting) {
+              document.getElementById('dialogDescription').innerText = 'Upload E*Trade files to update your portfolio. Choose whether to add transactions or fully rebuild.';
+              document.getElementById('updateModeSection').style.display = 'block';
+              // Hide portfolio section when add transactions is selected
+              document.getElementById('portfolioSection').style.display = 'none';
+
+              // Toggle portfolio section based on mode selection
+              document.querySelectorAll('input[name="updateMode"]').forEach(function(radio) {
+                radio.addEventListener('change', function() {
+                  var isRebuild = document.querySelector('input[name="updateMode"]:checked').value === 'rebuild';
+                  document.getElementById('portfolioSection').style.display = isRebuild ? 'block' : 'none';
+                  updateUploadButton();
+                });
+              });
+            }
+            // If no existing portfolio, leave portfolio section visible (default)
+          })
+          .withFailureHandler(function() {
+            // On error, leave defaults (portfolio section visible)
+          })
+          .hasExistingPortfolio();
       }
     }
 
@@ -106,7 +163,17 @@
     document.getElementById('portfolioFile').addEventListener('change', function(e) {
       var file = e.target.files[0];
       if (file) {
-        document.getElementById('portfolioName').innerText = file.name;
+        var name = file.name.toLowerCase();
+        var msg = file.name;
+        // Warn if filename doesn't look like a portfolio file
+        if (!name.includes('portfolio') && !name.includes('position')) {
+          if (name.includes('txn') || name.includes('transaction')) {
+            msg += '<br><em style="color:#c5221f;">This looks like a Transaction file. Use the Transaction chooser below.</em>';
+          } else if (name.includes('option')) {
+            msg += '<br><em style="color:#c5221f;">This looks like an Option Prices file. Use OptionTools > SpreadFinder > Upload Option Prices.</em>';
+          }
+        }
+        document.getElementById('portfolioName').innerHTML = msg;
         filesToUpload.portfolio = file;
       }
       updateUploadButton();
@@ -115,9 +182,24 @@
     document.getElementById('transactionsFile').addEventListener('change', function(e) {
       var files = e.target.files;
       if (files.length > 0) {
-        var names = Array.from(files).map(f => '• ' + f.name).join('<br>');
+        var warnings = [];
+        var validFiles = [];
+        Array.from(files).forEach(function(f) {
+          var name = f.name.toLowerCase();
+          if (name.includes('portfolio') || name.includes('position')) {
+            warnings.push('• ' + f.name + ' <em style="color:#c5221f;">(looks like Portfolio file)</em>');
+          } else if (name.includes('option') && name.includes('exp-')) {
+            warnings.push('• ' + f.name + ' <em style="color:#c5221f;">(looks like Option Prices file)</em>');
+          } else {
+            validFiles.push(f);
+          }
+        });
+        var names = validFiles.map(function(f) { return '• ' + f.name; }).join('<br>');
+        if (warnings.length > 0) {
+          names += '<br>' + warnings.join('<br>');
+        }
         document.getElementById('transactionsName').innerHTML = names;
-        filesToUpload.transactions = files;
+        filesToUpload.transactions = files; // Still allow all files, just warn
       }
       updateUploadButton();
     });
@@ -127,10 +209,16 @@
       if (uploadMode === 'optionPrices') {
         hasFiles = filesToUpload.optionPrices && filesToUpload.optionPrices.length > 0;
       } else if (uploadMode === 'rebuildPortfolio') {
-        // Allow either portfolio OR transactions (or both)
-        var hasPortfolio = !!filesToUpload.portfolio;
+        var updateMode = document.querySelector('input[name="updateMode"]:checked').value;
         var hasTransactions = filesToUpload.transactions && filesToUpload.transactions.length > 0;
-        hasFiles = hasPortfolio || hasTransactions;
+        if (updateMode === 'addTransactions') {
+          // Add transactions mode: only transactions required
+          hasFiles = hasTransactions;
+        } else {
+          // Rebuild mode: need at least one file
+          var hasPortfolio = !!filesToUpload.portfolio;
+          hasFiles = hasPortfolio || hasTransactions;
+        }
       }
       document.getElementById('uploadBtn').disabled = !hasFiles;
     }
@@ -150,24 +238,26 @@
       });
     }
 
-    async function uploadFiles() {
+    async function uploadFiles(confirmed) {
       document.getElementById('uploadBtn').disabled = true;
       showStatus('<span class="spinner"></span>Uploading and processing files...', 'info');
 
       try {
         if (uploadMode === 'optionPrices') {
           var files = await Promise.all(Array.from(filesToUpload.optionPrices).map(readFileAsText));
+          var replaceAll = document.querySelector('input[name="uploadMode"]:checked').value === 'replace';
           google.script.run
             .withSuccessHandler(onSuccess)
             .withFailureHandler(onError)
-            .uploadOptionPrices(files);
+            .uploadOptionPrices(files, replaceAll, !!confirmed);
         } else if (uploadMode === 'rebuildPortfolio') {
+          var updateMode = document.querySelector('input[name="updateMode"]:checked').value;
           var portfolio = filesToUpload.portfolio ? await readFileAsText(filesToUpload.portfolio) : null;
           var transactions = filesToUpload.transactions ? await Promise.all(Array.from(filesToUpload.transactions).map(readFileAsText)) : [];
           google.script.run
             .withSuccessHandler(onSuccess)
             .withFailureHandler(onError)
-            .uploadAndRebuildPortfolio(portfolio, transactions);
+            .uploadAndRebuildPortfolio(portfolio, transactions, updateMode);
         }
       } catch (e) {
         onError(e);
@@ -175,6 +265,18 @@
     }
 
     function onSuccess(result) {
+      // Handle confirmation request for replace-all with orphaned expirations
+      if (result && result.needsConfirmation) {
+        var msg = result.message + '\n\nContinue anyway?';
+        if (confirm(msg)) {
+          uploadFiles(true);  // Re-call with confirmed=true
+        } else {
+          showStatus('Upload cancelled.', 'info');
+          document.getElementById('uploadBtn').disabled = false;
+        }
+        return;
+      }
+
       showStatus(result || 'Files uploaded and processed successfully!', 'success');
       document.getElementById('uploadBtn').innerText = 'Done';
       document.getElementById('uploadBtn').disabled = false;

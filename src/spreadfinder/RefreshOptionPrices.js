@@ -1,11 +1,8 @@
 /**
- * refreshOptionPrices
- * Menu action: Refresh OptionPricesUploaded CSV files that have been uploaded into
- *      your Google drive under /Investing/Data/OptionPrices/<symbol>
+ * RefreshOptionPrices.js
+ * Handles option price uploads from CSV files (direct upload, no Drive storage).
  *
- * Currently supports the barchart.com format of option prices
- * For EACH expiration (exp-YYYY-MM-DD found in filename), load the MOST RECENT file
- * (by Drive "last updated") and ingest its rows.
+ * Currently supports the barchart.com format of option prices.
  * Example File:
  *    amzn-options-exp-2028-12-15-monthly-show-all-stacked-01-15-2026.csv
  *       Strike,Moneyness,Bid,Mid,Ask,Latest,Change,%Change,Volume,"Open Int","OI Chg",IV,Delta,Type,Time
@@ -13,165 +10,13 @@
  *       120.00,+49.62%,136.50,138.75,141.00,144.00,unch,unch,0,156,unch,44.10%,0.9228,Call,01/13/26
  *
  * Output sheet columns (lowercase headers):
- *   symbol | expiration | strike | type | bid | mid | ask | iv | delta | volume | openint | moneyness
+ *   symbol | expiration | strike | type | bid | mid | ask | iv | delta | volume | openint | moneyness | dataDate
  *
  * Notes:
  * - expiration is stored as a REAL Date (midnight) for proper sorting/date math
+ * - dataDate is extracted from filename (MM-DD-YYYY.csv pattern) or defaults to upload date
  * - getOptionQuote_/XLookupByKeys normalizes Dates to day-strings for cache keys
  */
-function refreshOptionPrices() {
-  const ui = SpreadsheetApp.getUi();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-
-  const SHEET_NAME = "OptionPricesUploaded";
-  let targetSheet = ss.getSheetByName(SHEET_NAME);
-  if (!targetSheet) targetSheet = ss.insertSheet(SHEET_NAME);
-  targetSheet.clearContents();
-
-  const allRows = [];
-  let symbolCount = 0;
-  let expGroupsLoaded = 0;
-  let filesScanned = 0;
-  let filesSkippedNoExp = 0;
-  const filesLoaded = []; // Track loaded files for summary
-
-  // ---- Iterate symbol folders and find input files ----
-  const fileMap = findInputFiles_();
-  filesScanned = fileMap.filesScanned;
-  filesSkippedNoExp = fileMap.filesSkippedNoExp;
-  const folderPath = fileMap.folderPath;
-
-  // ---- Process selected files ----
-  for (const symbol in fileMap.bestBySymbol) {
-    const bestByExp = fileMap.bestBySymbol[symbol];
-    const expStrs = Object.keys(bestByExp);
-    if (expStrs.length === 0) continue;
-
-    for (const expStr of expStrs) {
-      const entry = bestByExp[expStr];
-      const file = entry.file;
-      const fileModified = new Date(entry.updated);
-
-      // Parse expStr into a Date (midnight) for sheet storage
-      const expDate = parseDateAtMidnight_(expStr);
-      if (!expDate || isNaN(expDate.getTime())) {
-        throw new Error(`Cannot parse expiration '${expStr}' from filename for ${symbol}. Expected format: exp-YYYY-MM-DD`);
-      }
-
-      const csvContent = file.getBlob().getDataAsString();
-      const csvData = Utilities.parseCsv(csvContent);
-      if (csvData.length < 2) continue;
-
-      const parsedRows = loadCsvData_(csvData, symbol, expDate);
-      if (parsedRows.length > 0) {
-        allRows.push(...parsedRows);
-        expGroupsLoaded++;
-        filesLoaded.push({
-          symbol: symbol,
-          expiration: expStr,
-          filename: file.getName(),
-          uploaded: fileModified
-        });
-      }
-    }
-
-    symbolCount++;
-  }
-
-  if (allRows.length === 0) {
-    let msg = "No valid data found.";
-    msg += `\n\nLooked in: ${folderPath}`;
-    msg += `\nScanned CSV files: ${filesScanned}`;
-    msg += `\nSkipped (no exp-YYYY-MM-DD in filename): ${filesSkippedNoExp}`;
-    ui.alert("Option Prices", msg, ui.ButtonSet.OK);
-    return;
-  }
-
-  // ---- Validate and write output ----
-  const headersOut = ["symbol", "expiration", "strike", "type", "bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness"];
-
-  // Verify no rows have missing expirations
-  const badRows = allRows.filter(r => !r[1] || (r[1] instanceof Date && isNaN(r[1].getTime())));
-  if (badRows.length > 0) {
-    throw new Error(`${badRows.length} rows have missing or invalid expiration dates. First bad row: ${JSON.stringify(badRows[0])}`);
-  }
-
-  targetSheet.getRange(1, 1, 1, headersOut.length).setValues([headersOut]);
-  targetSheet.getRange(2, 1, allRows.length, headersOut.length).setValues(allRows);
-  SpreadsheetApp.flush(); // Force commit to avoid timing issues
-
-  targetSheet.setFrozenRows(1);
-
-  // Sort: symbol, expiration, type, strike
-  targetSheet.getRange(2, 1, allRows.length, headersOut.length).sort(
-    ["symbol", "expiration", "type", "strike"].map(name => ({
-      column: headersOut.indexOf(name) + 1, ascending: true
-    }))
-  );
-
-  // Format IV and moneyness columns as percent
-  const ivCol = headersOut.indexOf("iv") + 1;
-  const moneynessCol = headersOut.indexOf("moneyness") + 1;
-  if (allRows.length > 0) {
-    targetSheet.getRange(2, ivCol, allRows.length, 1).setNumberFormat("0.00%");
-    targetSheet.getRange(2, moneynessCol, allRows.length, 1).setNumberFormat("0.00%");
-  }
-
-  // Filter + banding
-  const fullRange = targetSheet.getRange(1, 1, allRows.length + 1, headersOut.length);
-  if (targetSheet.getFilter()) targetSheet.getFilter().remove();
-  fullRange.createFilter();
-  try { fullRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY); } catch (e) {}
-
-  // Clear memo cache so lookups get fresh data
-  try {
-    XLookupByKeys_clearMemo();
-  } catch (e) {}
-
-  // Warm caches (optional but recommended)
-  try {
-    XLookupByKeys_WarmCache(SHEET_NAME, ["symbol", "expiration", "strike", "type"], ["bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness"]);
-  } catch (e) {}
-
-  // Build summary of loaded files
-  let summary = `Loaded ${allRows.length} option prices from ${folderPath}\n\n`;
-  summary += `Files loaded (${filesLoaded.length}):\n`;
-
-  // Sort by symbol, then expiration
-  filesLoaded.sort((a, b) => {
-    if (a.symbol !== b.symbol) return a.symbol.localeCompare(b.symbol);
-    return a.expiration.localeCompare(b.expiration);
-  });
-
-  for (const f of filesLoaded) {
-    const uploadDate = Utilities.formatDate(f.uploaded, Session.getScriptTimeZone(), "MMM d, yyyy h:mm a");
-    summary += `  • ${f.symbol} ${f.expiration} (uploaded ${uploadDate})\n`;
-  }
-
-  // Check if Portfolio sheet exists
-  const hasPortfolio = !!ss.getSheetByName("Portfolio");
-
-  // Show completion dialog with option to refresh Portfolio
-  const html = HtmlService.createHtmlOutputFromFile("ui/RefreshCompleteDialog")
-    .setWidth(450)
-    .setHeight(350);
-
-  const initData = JSON.stringify({
-    summary: summary,
-    hasPortfolio: hasPortfolio
-  });
-
-  const content = html.getContent().replace(
-    '</body>',
-    `<script>init(${initData});</script></body>`
-  );
-
-  const output = HtmlService.createHtmlOutput(content)
-    .setWidth(450)
-    .setHeight(350);
-
-  ui.showModalDialog(output, "Option Prices");
-}
 
 /**
  * Forces Portfolio sheet to recalculate custom functions.
@@ -193,82 +38,6 @@ function refreshPortfolioPrices() {
   SpreadsheetApp.flush();
 
   return "Portfolio formulas refreshed with new option prices.";
-}
-
-/**
- * Finds and organizes input CSV files from the OptionPrices folder.
- *
- * Scans CSV files directly in the folder (no subfolders needed).
- * Extracts symbol and expiration from filename pattern: <symbol>-options-exp-<YYYY-MM-DD>-...csv
- * Selects the most recent file per symbol/expiration based on last updated time.
- *
- * @param {string} [path="Investing/Data/OptionPrices"] - The path to the OptionPrices folder (from root).
- * @returns {Object} {
- *   bestBySymbol: { [symbol]: { [expStr]: { file: File, updated: number } } },
- *   filesScanned: number,
- *   filesSkippedNoExp: number
- * }
- */
-function findInputFiles_(path) {
-  if (!path) {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    path = getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA") + "/OptionPrices";
-  }
-  // ---- Locate folder ----
-  const root = DriveApp.getRootFolder();
-  let opFolder = root;
-  const parts = path.split('/').filter(p => p.trim());
-  for (const part of parts) {
-    opFolder = getFolder_(opFolder, part);
-  }
-
-  const bestBySymbol = Object.create(null);
-  let filesScanned = 0;
-  let filesSkippedNoExp = 0;
-
-  // Scan all CSV files directly in the folder
-  // Force fresh query by accessing folder properties first (workaround for Drive API caching)
-  opFolder.getName();
-  Utilities.sleep(100);
-
-  const files = opFolder.getFilesByType(MimeType.CSV);
-  while (files.hasNext()) {
-    const file = files.next();
-    filesScanned++;
-
-    const fname = String(file.getName()).toLowerCase();
-
-    // Extract symbol and expiration from filename
-    // Pattern: <symbol>-options-exp-<YYYY-MM-DD>-...csv
-    // Examples: amzn-options-exp-2028-12-15-monthly-show-all-stacked-01-15-2026.csv
-    //           tsla-options-exp-2028-06-16-monthly-show-all-stacked-01-15-2026.csv
-    const m = fname.match(/^([a-z]+)-.*exp-(\d{4}-\d{2}-\d{2})(?:\D|$)/i);
-    if (!m || !m[1] || !m[2]) {
-      filesSkippedNoExp++;
-      continue;
-    }
-
-    const symbol = m[1].toUpperCase();
-    const expStr = m[2];
-    const updated = file.getLastUpdated().getTime();
-
-    // Initialize symbol entry if needed
-    if (!bestBySymbol[symbol]) {
-      bestBySymbol[symbol] = Object.create(null);
-    }
-
-    const prev = bestBySymbol[symbol][expStr];
-    if (!prev || updated > prev.updated) {
-      bestBySymbol[symbol][expStr] = { file, updated };
-    }
-  }
-
-  log.info("files", `findInputFiles_: scanned ${filesScanned} files, skipped ${filesSkippedNoExp}, found ${Object.keys(bestBySymbol).length} symbols`);
-  for (const sym in bestBySymbol) {
-    log.debug("files", `  ${sym}: ${Object.keys(bestBySymbol[sym]).length} expirations`);
-  }
-
-  return { bestBySymbol, filesScanned, filesSkippedNoExp, folderPath: path };
 }
 
 /**
@@ -368,14 +137,20 @@ function loadCsvData_(csvData, symbol, expDate) {
   return rows;
 }
 
-/** ---------- helpers ---------- */
+/* =========================================================
+   File Upload Dialog
+   ========================================================= */
 
-function getFolder_(parent, name) {
-  const it = parent.getFoldersByName(name);
-  if (!it.hasNext()) throw new Error(`Required folder not found: ${name}`);
-  return it.next();
+/**
+ * Checks if the OptionPricesUploaded sheet has any data.
+ * @returns {boolean} True if there are existing option prices.
+ */
+function hasExistingOptionPrices() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("OptionPricesUploaded");
+  if (!sheet) return false;
+  return sheet.getLastRow() > 1; // More than just header row
 }
-
 
 /**
  * Shows the file upload dialog for option prices.
@@ -397,73 +172,420 @@ function showUploadOptionPricesDialog() {
 
 /**
  * Handles uploaded option price files from the file chooser.
- * Saves files to Drive and then refreshes option prices.
- * Overwrites existing files for the same symbol/expiration.
+ * Parses CSV directly to sheet (no Drive storage).
  * @param {Array<{name: string, content: string}>} files - Array of file objects
- * @returns {string} Status message
+ * @param {boolean} replaceAll - If true, clear all existing prices first
+ * @param {boolean} confirmed - If true, skip orphan warning check
+ * @returns {string|Object} Status message or confirmation request object
  */
-function uploadOptionPrices(files) {
+function uploadOptionPrices(files, replaceAll, confirmed) {
   if (!files || files.length === 0) {
     throw new Error("No files provided");
   }
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const dataFolderPath = getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA") + "/OptionPrices";
+  const SHEET_NAME = "OptionPricesUploaded";
 
-  // Navigate to or create the folder
-  let folder = DriveApp.getRootFolder();
-  for (const part of dataFolderPath.split("/").filter(p => p.trim())) {
-    folder = getOrCreateFolder_(folder, part);
-  }
+  // Parse all files to extract symbol/expiration and rows
+  const parsedFiles = [];
+  const uploadedCombos = new Set(); // "SYMBOL|YYYY-MM-DD" keys
 
-  // Save each file, overwriting any existing files for the same symbol/expiration
-  const savedFiles = [];
   for (const file of files) {
     const cleanName = stripBrowserDisambiguator_(file.name);
-    const savedName = saveOptionPriceFile_(folder, cleanName, file.content);
-    savedFiles.push(savedName);
-  }
-
-  // Refresh option prices
-  refreshOptionPrices();
-
-  return `Uploaded ${savedFiles.length} file(s) and refreshed option prices.`;
-}
-
-/**
- * Saves an option price file, deleting any existing files for the same symbol/expiration.
- * @param {Folder} folder - The target folder
- * @param {string} fileName - The file name
- * @param {string} content - The file content
- * @returns {string} The saved file name
- */
-function saveOptionPriceFile_(folder, fileName, content) {
-  // Extract symbol and expiration from filename
-  // Pattern: <symbol>-options-exp-<YYYY-MM-DD>-...csv
-  const match = fileName.toLowerCase().match(/^([a-z]+)-.*exp-(\d{4}-\d{2}-\d{2})/i);
-
-  if (match) {
-    const symbol = match[1].toLowerCase();
-    const expDate = match[2];
-
-    // Find and delete existing files for this symbol/expiration
-    const existingFiles = folder.getFilesByType(MimeType.CSV);
-    while (existingFiles.hasNext()) {
-      const existing = existingFiles.next();
-      const existingName = existing.getName().toLowerCase();
-      const existingMatch = existingName.match(/^([a-z]+)-.*exp-(\d{4}-\d{2}-\d{2})/i);
-
-      if (existingMatch && existingMatch[1] === symbol && existingMatch[2] === expDate) {
-        log.debug("upload", `Deleting old file: ${existing.getName()}`);
-        existing.setTrashed(true);
-      }
+    const parsed = parseOptionPriceFile_(cleanName, file.content);
+    if (parsed) {
+      parsedFiles.push(parsed);
+      uploadedCombos.add(`${parsed.symbol}|${parsed.expStr}`);
     }
   }
 
-  // Create the new file
-  folder.createFile(fileName, content, MimeType.CSV);
-  return fileName;
+  if (parsedFiles.length === 0) {
+    throw new Error("No valid option price files found. Expected filename pattern: <symbol>-options-exp-YYYY-MM-DD-....csv");
+  }
+
+  // If replaceAll and not confirmed, check for orphaned portfolio expirations
+  if (replaceAll && !confirmed) {
+    const orphaned = findOrphanedPortfolioExpirations_(ss, uploadedCombos);
+    if (orphaned.length > 0) {
+      return {
+        needsConfirmation: true,
+        orphaned: orphaned,
+        message: "These portfolio positions will lose prices:\n• " + orphaned.join("\n• ")
+      };
+    }
+  }
+
+  // Get or create sheet
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAME);
+  }
+
+  // Headers now include dataDate
+  const headersOut = ["symbol", "expiration", "strike", "type", "bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness", "dataDate"];
+
+  // Track skipped files (older than existing data)
+  const skippedFiles = [];
+
+  if (replaceAll) {
+    // Clear entire sheet
+    sheet.clearContents();
+    sheet.getRange(1, 1, 1, headersOut.length).setValues([headersOut]);
+  } else {
+    // Merge mode: ensure headers exist
+    const lastRow = sheet.getLastRow();
+    if (lastRow === 0) {
+      sheet.getRange(1, 1, 1, headersOut.length).setValues([headersOut]);
+    }
+
+    // Get existing dataDates to compare
+    const existingDates = getExistingDataDates_(sheet);
+
+    // Filter out files that are older than existing data
+    const filesToUpload = [];
+    const combosToDelete = new Set();
+
+    for (const pf of parsedFiles) {
+      const key = `${pf.symbol}|${pf.expStr}`;
+      const existingDate = existingDates.get(key);
+
+      if (existingDate && pf.dataDate <= existingDate) {
+        // Uploaded file is same age or older - skip it
+        skippedFiles.push({
+          symbol: pf.symbol,
+          expStr: pf.expStr,
+          uploadedDate: pf.dataDateStr,
+          existingDate: formatDateMDYYYY_(existingDate)
+        });
+      } else {
+        // Uploaded file is newer - include it
+        filesToUpload.push(pf);
+        combosToDelete.add(key);
+      }
+    }
+
+    // Update parsedFiles to only include newer files
+    parsedFiles.length = 0;
+    parsedFiles.push(...filesToUpload);
+
+    // Delete existing rows only for combos we're updating
+    if (combosToDelete.size > 0) {
+      deleteRowsForCombos_(sheet, combosToDelete);
+    }
+  }
+
+  // Collect all rows from parsed files (only newer ones in merge mode)
+  const allRows = [];
+  for (const pf of parsedFiles) {
+    allRows.push(...pf.rows);
+  }
+
+  // Append new rows
+  if (allRows.length > 0) {
+    const startRow = sheet.getLastRow() + 1;
+    sheet.getRange(startRow, 1, allRows.length, headersOut.length).setValues(allRows);
+
+    // Sort and format
+    const totalRows = sheet.getLastRow() - 1;
+    if (totalRows > 0) {
+      sheet.getRange(2, 1, totalRows, headersOut.length).sort([
+        { column: 1, ascending: true },  // symbol
+        { column: 2, ascending: true },  // expiration
+        { column: 4, ascending: true },  // type
+        { column: 3, ascending: true }   // strike
+      ]);
+    }
+
+    // Format columns
+    const ivCol = headersOut.indexOf("iv") + 1;
+    const moneynessCol = headersOut.indexOf("moneyness") + 1;
+    const dataDateCol = headersOut.indexOf("dataDate") + 1;
+    if (totalRows > 0) {
+      sheet.getRange(2, ivCol, totalRows, 1).setNumberFormat("0.00%");
+      sheet.getRange(2, moneynessCol, totalRows, 1).setNumberFormat("0.00%");
+      sheet.getRange(2, dataDateCol, totalRows, 1).setNumberFormat("m/d/yyyy");
+    }
+
+    // Filter + banding
+    const fullRange = sheet.getRange(1, 1, totalRows + 1, headersOut.length);
+    if (sheet.getFilter()) sheet.getFilter().remove();
+    fullRange.createFilter();
+    try { fullRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY); } catch (e) {}
+  }
+
+  sheet.setFrozenRows(1);
+  SpreadsheetApp.flush();
+
+  // Clear lookup caches
+  try { XLookupByKeys_clearMemo(); } catch (e) {}
+  try {
+    XLookupByKeys_WarmCache(SHEET_NAME, ["symbol", "expiration", "strike", "type"], ["bid", "mid", "ask", "iv", "delta", "volume", "openint", "moneyness"]);
+  } catch (e) {}
+
+  // Build summary
+  let summary = "";
+
+  if (parsedFiles.length > 0) {
+    const mode = replaceAll ? "Replaced all" : "Merged";
+    summary += `${mode}: ${allRows.length} option prices from ${parsedFiles.length} file(s).\n\n`;
+    summary += "Files processed:\n";
+    for (const pf of parsedFiles) {
+      summary += `  • ${pf.symbol} exp ${pf.expStr} (data from ${pf.dataDateStr})\n`;
+    }
+  }
+
+  if (skippedFiles.length > 0) {
+    if (summary) summary += "\n";
+    summary += `Skipped ${skippedFiles.length} file(s) with older data:\n`;
+    for (const sf of skippedFiles) {
+      summary += `  • ${sf.symbol} exp ${sf.expStr} (uploaded ${sf.uploadedDate}, existing ${sf.existingDate})\n`;
+    }
+  }
+
+  if (!summary) {
+    summary = "No files were uploaded (all skipped as older than existing data).";
+  }
+
+  return summary;
 }
 
+/**
+ * Parses an option price CSV file.
+ * @param {string} filename - The filename
+ * @param {string} content - The CSV content
+ * @returns {Object|null} { symbol, expStr, dataDate, dataDateStr, rows } or null if invalid
+ */
+function parseOptionPriceFile_(filename, content) {
+  // Extract symbol and expiration from filename
+  // Pattern: <symbol>-options-exp-<YYYY-MM-DD>-...csv
+  const match = filename.toLowerCase().match(/^([a-z]+)-.*exp-(\d{4}-\d{2}-\d{2})/i);
+  if (!match) {
+    log.warn("upload", `Skipping file (no exp-YYYY-MM-DD): ${filename}`);
+    return null;
+  }
 
+  const symbol = match[1].toUpperCase();
+  const expStr = match[2];
+  const expDate = parseDateAtMidnight_(expStr);
+  if (!expDate) {
+    log.warn("upload", `Skipping file (invalid expiration): ${filename}`);
+    return null;
+  }
 
+  // Try to extract data date from filename (the date the prices were captured)
+  // Pattern: ...-MM-DD-YYYY.csv at the end
+  const dataDateMatch = filename.match(/(\d{2})-(\d{2})-(\d{4})\.csv$/i);
+  let dataDate;
+  let dataDateStr;
+  if (dataDateMatch) {
+    dataDate = parseDateAtMidnight_(`${dataDateMatch[3]}-${dataDateMatch[1]}-${dataDateMatch[2]}`);
+    dataDateStr = `${dataDateMatch[1]}/${dataDateMatch[2]}/${dataDateMatch[3]}`;
+  } else {
+    // Fallback to today
+    dataDate = new Date();
+    dataDate.setHours(0, 0, 0, 0);
+    dataDateStr = formatDateMDYYYY_(dataDate);
+  }
+
+  // Parse CSV
+  const csvData = Utilities.parseCsv(content);
+  if (csvData.length < 2) {
+    log.warn("upload", `Skipping file (no data rows): ${filename}`);
+    return null;
+  }
+
+  const rows = loadCsvDataWithDate_(csvData, symbol, expDate, dataDate);
+  if (rows.length === 0) {
+    log.warn("upload", `Skipping file (no valid rows): ${filename}`);
+    return null;
+  }
+
+  return { symbol, expStr, expDate, dataDate, dataDateStr, rows };
+}
+
+/**
+ * Parses CSV data into output rows, including dataDate column.
+ */
+function loadCsvDataWithDate_(csvData, symbol, expDate, dataDate) {
+  const rows = [];
+  const headers = csvData[0].map(h => String(h).trim().toLowerCase());
+
+  // Validate required columns
+  const required = validateRequiredColumns_(headers, [
+    { name: "Strike", aliases: ["strike"] },
+    { name: "Bid", aliases: ["bid"] },
+    { name: "Ask", aliases: ["ask"] },
+    { name: "Type", aliases: ["type", "option type", "call/put", "cp", "put/call"] },
+  ], `Option Prices CSV (${symbol} exp ${expDate})`);
+
+  const strikeIdx = required.Strike;
+  const bidIdx = required.Bid;
+  const askIdx = required.Ask;
+  const typeIdx = required.Type;
+
+  // Find optional columns
+  const optional = findOptionalColumns_(headers, [
+    { name: "Mid", aliases: ["mid"] },
+    { name: "IV", aliases: ["iv", "implied volatility"] },
+    { name: "Delta", aliases: ["delta"] },
+    { name: "Volume", aliases: ["volume", "vol"] },
+    { name: "OpenInt", aliases: ["open int", "open interest", "oi"] },
+    { name: "Moneyness", aliases: ["moneyness", "money", "itm/otm"] },
+  ]);
+
+  for (let i = 1; i < csvData.length; i++) {
+    const r = csvData[i];
+    if (!r || r.length === 0) continue;
+
+    const strike = parseNumber_(r[strikeIdx]);
+    if (!Number.isFinite(strike)) continue;
+
+    const optionType = parseOptionType_(r[typeIdx]);
+    if (!optionType) continue;
+
+    const bid = parseNumber_(r[bidIdx]);
+    const ask = parseNumber_(r[askIdx]);
+    const mid = optional.Mid === -1 ? null : parseNumber_(r[optional.Mid]);
+    const ivRaw = optional.IV === -1 ? null : parsePercent_(r[optional.IV]);
+    const delta = optional.Delta === -1 ? null : parseNumber_(r[optional.Delta]);
+    const volume = optional.Volume === -1 ? null : parseInteger_(r[optional.Volume]);
+    const openInt = optional.OpenInt === -1 ? null : parseInteger_(r[optional.OpenInt]);
+    const moneyness = optional.Moneyness === -1 ? null : parsePercent_(r[optional.Moneyness]);
+
+    rows.push([
+      symbol,
+      expDate,
+      strike,
+      optionType,
+      Number.isFinite(bid) ? bid : null,
+      Number.isFinite(mid) ? mid : null,
+      Number.isFinite(ask) ? ask : null,
+      Number.isFinite(ivRaw) ? ivRaw : null,
+      Number.isFinite(delta) ? delta : null,
+      Number.isFinite(volume) ? volume : null,
+      Number.isFinite(openInt) ? openInt : null,
+      Number.isFinite(moneyness) ? moneyness : null,
+      dataDate
+    ]);
+  }
+
+  return rows;
+}
+
+/**
+ * Finds portfolio expirations that won't have prices after replace-all.
+ * @param {Spreadsheet} ss
+ * @param {Set<string>} uploadedCombos - Set of "SYMBOL|YYYY-MM-DD" keys being uploaded
+ * @returns {string[]} List of "SYMBOL EXP_DATE" strings for orphaned positions
+ */
+function findOrphanedPortfolioExpirations_(ss, uploadedCombos) {
+  const orphaned = [];
+
+  // Check Portfolio sheet
+  const portfolioRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
+  if (!portfolioRange) return orphaned;
+
+  const rows = portfolioRange.getValues();
+  if (rows.length < 2) return orphaned;
+
+  const headers = rows[0];
+  const symIdx = findColumn_(headers, ["symbol", "ticker"]);
+  const expIdx = findColumn_(headers, ["expiration", "exp", "expiry"]);
+
+  if (symIdx < 0 || expIdx < 0) return orphaned;
+
+  const seen = new Set();
+  for (let i = 1; i < rows.length; i++) {
+    const sym = String(rows[i][symIdx] || "").trim().toUpperCase();
+    const expRaw = rows[i][expIdx];
+    if (!sym || !expRaw) continue;
+
+    const expDate = parseDateAtMidnight_(expRaw);
+    if (!expDate) continue;
+
+    const expStr = expDate.getFullYear() + "-" +
+      String(expDate.getMonth() + 1).padStart(2, "0") + "-" +
+      String(expDate.getDate()).padStart(2, "0");
+
+    const key = `${sym}|${expStr}`;
+    if (!uploadedCombos.has(key) && !seen.has(key)) {
+      seen.add(key);
+      orphaned.push(`${sym} ${expStr}`);
+    }
+  }
+
+  return orphaned;
+}
+
+/**
+ * Gets the most recent dataDate for each symbol/expiration combo in the sheet.
+ * @param {Sheet} sheet
+ * @returns {Map<string, Date>} Map of "SYMBOL|YYYY-MM-DD" to dataDate
+ */
+function getExistingDataDates_(sheet) {
+  const result = new Map();
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return result;
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const dataDateIdx = headers.findIndex(h => String(h).toLowerCase() === "datadate");
+  if (dataDateIdx < 0) return result;
+
+  // Get symbol, expiration, and dataDate columns
+  const data = sheet.getRange(2, 1, lastRow - 1, Math.max(3, dataDateIdx + 1)).getValues();
+
+  for (const row of data) {
+    const sym = String(row[0] || "").toUpperCase();
+    const expRaw = row[1];
+    const dataDateRaw = row[dataDateIdx];
+
+    const expDate = parseDateAtMidnight_(expRaw);
+    const dataDate = parseDateAtMidnight_(dataDateRaw);
+    if (!expDate || !dataDate) continue;
+
+    const expStr = expDate.getFullYear() + "-" +
+      String(expDate.getMonth() + 1).padStart(2, "0") + "-" +
+      String(expDate.getDate()).padStart(2, "0");
+
+    const key = `${sym}|${expStr}`;
+    const existing = result.get(key);
+    if (!existing || dataDate > existing) {
+      result.set(key, dataDate);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Deletes rows matching any of the given symbol/expiration combos.
+ * @param {Sheet} sheet
+ * @param {Set<string>} combos - Set of "SYMBOL|YYYY-MM-DD" keys
+ */
+function deleteRowsForCombos_(sheet, combos) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 2).getValues(); // symbol, expiration columns
+  const rowsToDelete = [];
+
+  for (let i = 0; i < data.length; i++) {
+    const sym = String(data[i][0] || "").toUpperCase();
+    const expRaw = data[i][1];
+    const expDate = parseDateAtMidnight_(expRaw);
+    if (!expDate) continue;
+
+    const expStr = expDate.getFullYear() + "-" +
+      String(expDate.getMonth() + 1).padStart(2, "0") + "-" +
+      String(expDate.getDate()).padStart(2, "0");
+
+    if (combos.has(`${sym}|${expStr}`)) {
+      rowsToDelete.push(i + 2); // 1-based row number, +1 for header
+    }
+  }
+
+  // Delete from bottom to top to preserve row numbers
+  for (let i = rowsToDelete.length - 1; i >= 0; i--) {
+    sheet.deleteRow(rowsToDelete[i]);
+  }
+}

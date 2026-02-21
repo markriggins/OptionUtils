@@ -6,13 +6,6 @@
     body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 20px; background: #f8f9fa; }
     h3 { margin: 0 0 16px 0; color: #202124; }
     .description { color: #5f6368; font-size: 13px; margin-bottom: 16px; line-height: 1.5; }
-    .section { background: white; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-    .section h4 { margin: 0 0 8px 0; color: #1a73e8; font-size: 14px; }
-    .section p { margin: 0 0 8px 0; color: #5f6368; font-size: 12px; }
-    .checkbox-item { display: flex; align-items: flex-start; margin: 8px 0; }
-    .checkbox-item input { margin-right: 10px; margin-top: 3px; }
-    .checkbox-item label { color: #202124; font-size: 13px; }
-    .checkbox-item .details { color: #5f6368; font-size: 11px; margin-top: 2px; }
     .warning { background: #fef7e0; border-left: 4px solid #f9ab00; padding: 12px; margin-bottom: 16px; font-size: 13px; }
     .buttons { margin-top: 20px; text-align: right; }
     .buttons button { padding: 10px 24px; border-radius: 4px; cursor: pointer; font-size: 14px; margin-left: 8px; }
@@ -26,40 +19,22 @@
     .status.error { background: #fce8e6; color: #c5221f; display: block; }
     .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #1a73e8; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .no-data { color: #5f6368; font-style: italic; }
   </style>
 </head>
 <body>
   <h3>Initialize / Clear Project</h3>
 
-  <div id="sheetsWarning" class="warning" style="display:none;">
-    <strong>Sheets to delete:</strong>
-    <div id="sheetsList"></div>
+  <div class="description">
+    This will clear all sheets except README and remove any named ranges.
   </div>
 
-  <div id="dataSection" class="section" style="display:none;">
-    <h4>Existing Data Found</h4>
-    <p>Select which data to load after initialization:</p>
+  <div id="sheetsWarning" class="warning" style="display:none;">
+    <strong>Sheets to delete:</strong>
+    <div id="sheetsList" style="margin-top: 8px; white-space: pre-line;"></div>
+  </div>
 
-    <div id="optionPricesCheck" class="checkbox-item" style="display:none;">
-      <input type="checkbox" id="loadOptionPrices" checked>
-      <div>
-        <label for="loadOptionPrices">Load Option Prices</label>
-        <div class="details" id="optionPricesDetails"></div>
-      </div>
-    </div>
-
-    <div id="portfolioCheck" class="checkbox-item" style="display:none;">
-      <input type="checkbox" id="loadPortfolio" checked>
-      <div>
-        <label for="loadPortfolio">Load Portfolio</label>
-        <div class="details" id="portfolioDetails"></div>
-      </div>
-    </div>
-
-    <div id="noDataMsg" class="no-data" style="display:none;">
-      No existing data found in DATA folder.
-    </div>
+  <div id="noSheetsMsg" class="description" style="display:none;">
+    No sheets to delete.
   </div>
 
   <div id="status" class="status"></div>
@@ -70,37 +45,12 @@
   </div>
 
   <script>
-    var initData = {};
-
     function init(data) {
-      initData = data;
-
-      // Show sheets to delete
       if (data.sheetsToDelete && data.sheetsToDelete.length > 0) {
         document.getElementById('sheetsWarning').style.display = 'block';
-        document.getElementById('sheetsList').innerText = data.sheetsToDelete.map(s => '  • ' + s).join('\n');
-      }
-
-      // Show data section
-      var hasData = false;
-
-      if (data.optionPricesCount > 0) {
-        hasData = true;
-        document.getElementById('optionPricesCheck').style.display = 'flex';
-        document.getElementById('optionPricesDetails').innerText = data.optionPricesCount + ' file(s) in OptionPrices folder';
-      }
-
-      if (data.portfolioCount > 0) {
-        hasData = true;
-        document.getElementById('portfolioCheck').style.display = 'flex';
-        document.getElementById('portfolioDetails').innerText = data.portfolioCount + ' file(s) in Etrade folder';
-      }
-
-      if (hasData) {
-        document.getElementById('dataSection').style.display = 'block';
+        document.getElementById('sheetsList').innerText = data.sheetsToDelete.map(function(s) { return '  \u2022 ' + s; }).join('\n');
       } else {
-        document.getElementById('dataSection').style.display = 'block';
-        document.getElementById('noDataMsg').style.display = 'block';
+        document.getElementById('noSheetsMsg').style.display = 'block';
       }
     }
 
@@ -114,13 +64,10 @@
       document.getElementById('initBtn').disabled = true;
       showStatus('<span class="spinner"></span>Initializing...', 'info');
 
-      var loadOptionPrices = document.getElementById('loadOptionPrices').checked && initData.optionPricesCount > 0;
-      var loadPortfolio = document.getElementById('loadPortfolio').checked && initData.portfolioCount > 0;
-
       google.script.run
         .withSuccessHandler(onSuccess)
         .withFailureHandler(onError)
-        .completeInitialization(loadOptionPrices, loadPortfolio);
+        .completeInitialization();
     }
 
     function onSuccess(result) {

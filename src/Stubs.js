@@ -83,7 +83,7 @@ function onOpen(e) {
 // ============================================================
 
 /**
- * Initializes the project, creating required sheets and Drive folders.
+ * Initializes the project, clearing sheets and setting up README.
  */
 function initializeProject() {
   runner_(SpreadFinder.initializeProject);
@@ -103,45 +103,10 @@ function setupLogging() {
 }
 
 /**
- * Warms the XLookupByKeys cache for faster lookups.
- */
-function warmXLookupCache() {
-  runner_(SpreadFinder.warmXLookupCache);
-}
-
-/**
  * Generates portfolio value vs price charts for all symbols.
  */
 function PlotPortfolioValueByPrice() {
   runner_(SpreadFinder.PlotPortfolioValueByPrice);
-}
-
-/**
- * Imports the latest transactions from Drive.
- */
-function importLatestTransactions() {
-  runner_(SpreadFinder.importLatestTransactions);
-}
-
-/**
- * Rebuilds the portfolio from E*Trade CSV files in Drive.
- */
-function rebuildPortfolio() {
-  runner_(SpreadFinder.rebuildPortfolio);
-}
-
-/**
- * Loads sample portfolio data for demonstration.
- */
-function loadSamplePortfolio() {
-  runner_(SpreadFinder.loadSamplePortfolio);
-}
-
-/**
- * Refreshes option prices from CSV files in Drive.
- */
-function refreshOptionPrices() {
-  runner_(SpreadFinder.refreshOptionPrices);
 }
 
 /**
@@ -227,32 +192,49 @@ function getPortfolioGraphData() {
 }
 
 /**
+ * Checks if there are existing option prices in the sheet.
+ * @returns {boolean} True if option prices exist.
+ */
+function hasExistingOptionPrices() {
+  return runner_(SpreadFinder.hasExistingOptionPrices);
+}
+
+/**
  * Uploads option price CSV files and refreshes prices.
  * @param {Array<{name: string, content: string}>} files - Array of file objects.
- * @returns {string} Status message.
+ * @param {boolean} replaceAll - If true, clear all existing prices first.
+ * @param {boolean} confirmed - If true, skip orphan warning check.
+ * @returns {string|Object} Status message or confirmation request.
  */
-function uploadOptionPrices(files) {
-  return runner_(SpreadFinder.uploadOptionPrices, [files]);
+function uploadOptionPrices(files, replaceAll, confirmed) {
+  return runner_(SpreadFinder.uploadOptionPrices, [files, replaceAll, confirmed]);
 }
 
 /**
- * Uploads portfolio and transaction files, then rebuilds the portfolio.
+ * Checks if there is an existing portfolio in the sheet.
+ * @returns {boolean} True if portfolio exists.
+ */
+function hasExistingPortfolio() {
+  return runner_(SpreadFinder.hasExistingPortfolio);
+}
+
+/**
+ * Uploads portfolio and transaction files, then processes them.
  * @param {{name: string, content: string}} portfolio - Portfolio CSV file.
- * @param {{name: string, content: string}} transactions - Transaction history CSV file.
- * @returns {string} Status message.
+ * @param {Array<{name: string, content: string}>} transactions - Transaction CSV files.
+ * @param {string} importMode - "addTransactions" or "rebuild".
+ * @returns {string} Status message including missing prices warning.
  */
-function uploadAndRebuildPortfolio(portfolio, transactions) {
-  return runner_(SpreadFinder.uploadAndRebuildPortfolio, [portfolio, transactions]);
+function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
+  return runner_(SpreadFinder.uploadAndRebuildPortfolio, [portfolio, transactions, importMode]);
 }
 
 /**
- * Completes project initialization with optional data loading.
- * @param {boolean} loadOptionPrices - Whether to load option prices from Drive.
- * @param {boolean} loadPortfolio - Whether to load portfolio from Drive.
+ * Completes project initialization (clears sheets, creates README).
  * @returns {string} Status message.
  */
-function completeInitialization(loadOptionPrices, loadPortfolio) {
-  return runner_(SpreadFinder.completeInitialization, [loadOptionPrices, loadPortfolio]);
+function completeInitialization() {
+  return runner_(SpreadFinder.completeInitialization);
 }
 
 /**

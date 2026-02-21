@@ -23,15 +23,15 @@ function roundTo_(n, digits) {
 // Display: Format as M/D/YYYY using formatDateMDYYYY_().
 
 /**
- * Gets the configured timezone from the Config sheet.
- * Defaults to NYSE timezone (America/New_York) if not set.
+ * Gets the timezone for date formatting.
+ * Uses the spreadsheet's timezone setting, defaulting to NYSE timezone.
  * @returns {string} IANA timezone identifier
  */
 function getTimeZone_() {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) return "America/New_York";
-    return getConfigValue_(ss, "TimeZone", "America/New_York");
+    return ss.getSpreadsheetTimeZone() || "America/New_York";
   } catch (e) {
     return "America/New_York";
   }

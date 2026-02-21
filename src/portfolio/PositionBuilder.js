@@ -267,7 +267,9 @@ function buildClosingPricesMap_(transactions, stockTxns) {
   for (const txn of transactions) {
     if (!txn.isClosed) continue;
 
-    const key = `${txn.ticker}|${txn.expiration}|${txn.strike}|${txn.optionType}`;
+    // Normalize expiration for consistent key matching
+    const exp = formatExpirationForKey_(txn.expiration);
+    const key = `${txn.ticker}|${exp}|${txn.strike}|${txn.optionType}`;
     const qty = Math.abs(txn.qty);
     const value = qty * txn.price;
 
@@ -294,7 +296,8 @@ function buildClosingPricesMap_(transactions, stockTxns) {
   for (const txn of transactions) {
     if (!txn.isExercised && !txn.isAssigned) continue;
 
-    const key = `${txn.ticker}|${txn.expiration}|${txn.strike}|${txn.optionType}`;
+    const exp = formatExpirationForKey_(txn.expiration);
+    const key = `${txn.ticker}|${exp}|${txn.strike}|${txn.optionType}`;
     if (result.has(key)) continue; // Already have a closing price
 
     const stkKey = `${txn.date}|${txn.ticker}`;
@@ -317,7 +320,8 @@ function buildClosingPricesMap_(transactions, stockTxns) {
   const openLegs = new Set();
   for (const txn of transactions) {
     if (!txn.isOpen) continue;
-    const key = `${txn.ticker}|${txn.expiration}|${txn.strike}|${txn.optionType}`;
+    const exp = formatExpirationForKey_(txn.expiration);
+    const key = `${txn.ticker}|${exp}|${txn.strike}|${txn.optionType}`;
     openLegs.add(key);
   }
 

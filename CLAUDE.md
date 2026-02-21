@@ -23,7 +23,7 @@ clasp pull
 
 **Deployment**: Uses clasp to sync JavaScript files with Google Apps Script. All `.js` files in the root directory are pushed to the script project.
 
-**Runtime Environment**: Google Apps Script V8 runtime with access to SpreadsheetApp, DriveApp, and CacheService APIs.
+**Runtime Environment**: Google Apps Script V8 runtime with access to SpreadsheetApp, and CacheService APIs.
 
 **Key Components**:
 

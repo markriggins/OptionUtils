@@ -1,6 +1,6 @@
-# SpreadFinder
+# OptionUtils
 
-SpreadFinder scans option prices to find attractive bull call spread opportunities. It ranks spreads by expected ROI using a probability-of-touching the upper leg price on or before expiration, filters by liquidity, and displays results in interactive charts.
+Option portfolio analysis tools for Google Sheets. SpreadFinder scans option prices to find attractive bull call spread opportunities. Portfolio tools let you track positions and visualize profit/loss scenarios.
 
 **[Try it now — make a copy of the template spreadsheet](https://docs.google.com/spreadsheets/d/1MYMzTpoGlKuAXFyN8eGePmAsZ8R6379zhDoe-JHm7D0/copy)**
 
@@ -48,18 +48,13 @@ This is beta code, so please keep your expectations low.  But I wrote it for mys
 
 ## Installation
 
-1. Open the [SpreadFinder Template Spreadsheet](https://docs.google.com/spreadsheets/d/1MYMzTpoGlKuAXFyN8eGePmAsZ8R6379zhDoe-JHm7D0/copy)
-2. Click "File | Make a copy"
-3. The Apps Scripts will be automatically installed
-4. Wait for the OptionUtils menu to appear
-5. Try to run the first Initialize/Clear Project menu item
+1. Open the [OptionUtils Template Spreadsheet](https://docs.google.com/spreadsheets/d/1MYMzTpoGlKuAXFyN8eGePmAsZ8R6379zhDoe-JHm7D0/copy)
+2. Click "File > Make a copy"
+3. The Apps Script will be automatically installed
+4. Wait for the **OptionTools** menu to appear
+5. Run **OptionTools > Initialize / Clear Project** to set up the README sheet
 
-![Authorization Dialog](images/authorization-dialog.png)
-
-6. You will be prompted for Authorization from Google. Which for now, can read any/all files in your google drive so you can upload more option prices and your own portfolios;  which is a bit scary.  But the source code is available here: https://github.com/markriggins/OptionUtils
-If enough users are interested in using it, I can add a file chooser to the app so you can pickup specific files from your local hard drive and no Google permissions will be necessary.  
-7. Once authorized re-run Initialize/Clear Project and look for more detailed instructions in the README sheet
-8. For each option, it gives a recommended price for purchasing it, and for selling it, which has proven to be useful.  Paying full Ask can be expensive, but super low bidding can be ineffective.
+You'll be prompted to authorize the app. The app only accesses your spreadsheet — no Drive access is required. Source code: https://github.com/markriggins/OptionUtils
 
 ---
 
@@ -91,19 +86,24 @@ The following functions are defined for use in Google Sheets:
 
 1. Go to barchart.com, navigate to Options for your symbol
 2. Select expiration, choose "Stacked" view
-3. Download CSV
-4. Save to Google Drive under `<DataFolder>/OptionPrices/`
-5. Run **OptionTools > Refresh Option Prices**
+3. Download CSV (filename format: `symbol-options-exp-YYYY-MM-DD-....csv`)
+4. Run **OptionTools > SpreadFinder > Upload Option Prices**
+5. Select your CSV file(s) and click Upload
 
 ### Portfolio and Transactions from E*Trade
 
-1. Download transaction and portfolio CSV files from E*Trade
-2. Save to Google Drive under `<DataFolder>/Etrade/`
-3. Run **OptionTools > Import Portfolio from E*Trade**
+1. Download transaction history CSV from E*Trade (Accounts > Transactions > Download)
+2. Optionally download portfolio CSV (Accounts > Portfolio > Download)
+3. Run **OptionTools > Portfolio > Upload Portfolio/Transactions**
+4. Select your files and choose "Add transactions" or "Clear and rebuild"
 
-## Supported positions
-- Common stock
+## Supported Positions
+- Stock positions
 - Bull call spreads
+- Bull put spreads
+- Iron condors
+- Iron butterflies
+- Single-leg options
 
 ---
 

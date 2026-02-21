@@ -463,7 +463,9 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
       const rows = [];
 
       const getClosingPrice = (ticker, expiration, strike, optionType) => {
-        const key = `${ticker}|${expiration}|${strike}|${optionType}`;
+        // Normalize expiration for consistent key matching
+        const exp = formatExpirationForKey_(expiration);
+        const key = `${ticker}|${exp}|${strike}|${optionType}`;
         const val = closingPrices.get(key);
         return val != null ? val : "";
       };

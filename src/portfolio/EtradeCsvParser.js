@@ -34,6 +34,15 @@ function parseEtradeTransactionsFromCsv_(csvContent) {
     }
   }
   if (headerIdx < 0) {
+    // Check if this looks like an option prices file from barchart.com
+    const firstLines = lines.slice(0, 5).join("\n");
+    if (firstLines.includes("Strike,Moneyness,Bid") || firstLines.includes("Strike,Bid,Ask")) {
+      throw new Error(
+        "This appears to be an Option Prices CSV from barchart.com, not a Transaction CSV.\n\n" +
+        "Use: OptionTools > SpreadFinder > Upload Option Prices"
+      );
+    }
+
     throw new Error(
       "E*Trade Transaction CSV: Could not find header row.\n" +
       "Expected row starting with 'TransactionDate,' or 'Activity/Trade Date,'\n" +
@@ -287,7 +296,17 @@ function parseCsvLine_(line) {
  */
 function parsePortfolioStocksAndCashFromFile_(file, stockTxns) {
   const csv = file.getBlob().getDataAsString();
-  const lines = csv.split(/\r?\n/);
+  return parsePortfolioStocksAndCash_(csv, stockTxns);
+}
+
+/**
+ * Parses stock positions and cash from E*Trade Portfolio CSV content.
+ * @param {string} csvContent - The CSV content as a string
+ * @param {Object[]} stockTxns - Stock transactions for date lookup
+ * @returns {{ stocks: Object[], cash: number }}
+ */
+function parsePortfolioStocksAndCash_(csvContent, stockTxns) {
+  const lines = csvContent.split(/\r?\n/);
 
   // Find the data header row
   let headerIdx = -1;
@@ -298,6 +317,15 @@ function parsePortfolioStocksAndCashFromFile_(file, stockTxns) {
     }
   }
   if (headerIdx < 0) {
+    // Check if this looks like an option prices file from barchart.com
+    const firstLines = lines.slice(0, 5).join("\n");
+    if (firstLines.includes("Strike,Moneyness,Bid") || firstLines.includes("Strike,Bid,Ask")) {
+      throw new Error(
+        "This appears to be an Option Prices CSV from barchart.com, not a Portfolio CSV.\n\n" +
+        "Use: OptionTools > SpreadFinder > Upload Option Prices"
+      );
+    }
+
     throw new Error(
       "E*Trade Portfolio CSV: Could not find header row.\n" +
       "Expected row starting with 'Symbol,Last Price'\n" +
@@ -382,10 +410,20 @@ function parsePortfolioStocksAndCashFromFile_(file, stockTxns) {
  * @returns {{ quantities: Map<string, number>, prices: Map<string, {pricePaid: number}> }}
  */
 function parsePortfolioOptionsWithPricesFromFile_(file) {
+  const csv = file.getBlob().getDataAsString();
+  return parsePortfolioOptionsWithPrices_(csv);
+}
+
+/**
+ * Parses option positions from E*Trade Portfolio CSV content.
+ * Options have format like "TSLA Jun 16 '28 $350 Call"
+ * @param {string} csvContent - The CSV content as a string
+ * @returns {{ quantities: Map<string, number>, prices: Map<string, {pricePaid: number}> }}
+ */
+function parsePortfolioOptionsWithPrices_(csvContent) {
   const quantities = new Map();
   const prices = new Map();
-  const csv = file.getBlob().getDataAsString();
-  const lines = csv.split(/\r?\n/);
+  const lines = csvContent.split(/\r?\n/);
 
   // Find the data header row
   let headerIdx = -1;
@@ -396,6 +434,15 @@ function parsePortfolioOptionsWithPricesFromFile_(file) {
     }
   }
   if (headerIdx < 0) {
+    // Check if this looks like an option prices file from barchart.com
+    const firstLines = lines.slice(0, 5).join("\n");
+    if (firstLines.includes("Strike,Moneyness,Bid") || firstLines.includes("Strike,Bid,Ask")) {
+      throw new Error(
+        "This appears to be an Option Prices CSV from barchart.com, not a Portfolio CSV.\n\n" +
+        "Use: OptionTools > SpreadFinder > Upload Option Prices"
+      );
+    }
+
     throw new Error(
       "E*Trade Portfolio CSV: Could not find header row.\n" +
       "Expected row starting with 'Symbol,Last Price'\n" +

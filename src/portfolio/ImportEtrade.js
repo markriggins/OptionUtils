@@ -1,434 +1,30 @@
 /**
  * ImportEtrade.js
- * Orchestrates E*Trade portfolio import.
+ * Orchestrates E*Trade portfolio import via file upload (no Drive storage).
  *
- * Entry points and coordination logic. Parsing, spread building, and
- * sheet output are delegated to:
+ * Parsing, spread building, and sheet output are delegated to:
  *   - EtradeCsvParser.js - CSV parsing
  *   - PositionBuilder.js - spread pairing/aggregation
  *   - PortfolioWriter.js - sheet output
  */
 
-/**
- * Import Latest Transactions - adds new transactions, skips duplicates.
- * Menu action for incremental imports.
- */
-function importLatestTransactions() {
-  importEtradePortfolio_("update");
-}
-
-/**
- * Clear & Rebuild Portfolio - deletes existing portfolio and imports all transactions fresh.
- * Menu action for full rebuild.
- */
-function rebuildPortfolio() {
-  importEtradePortfolio_("rebuild");
-}
-
-/**
- * Imports E*Trade portfolio and transactions from CSV files in Google Drive.
- *
- * @param {string} importMode - "fresh" (no existing), "update" (merge), or "rebuild" (delete and recreate)
- * @param {string} [fileName] - Transaction CSV filename (default: all "DownloadTxnHistory*.csv" files)
- * @param {string} [folderPath] - Folder path in Drive (default: "<DataFolder>/Etrade")
- */
-function importEtradePortfolio_(importMode, fileName, folderPath) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const ui = SpreadsheetApp.getUi();
-  const path = folderPath || getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA") + "/Etrade";
-
-  // Navigate to folder
-  const root = DriveApp.getRootFolder();
-  let folder = root;
-  const parts = path.split('/').filter(p => p.trim());
-  try {
-    for (const part of parts) {
-      folder = getFolder_(folder, part);
-    }
-  } catch (e) {
-    ui.alert(
-      "Folder Not Found",
-      `Folder not found: ${path}\n\n` +
-      `To set up your E*Trade import folder:\n` +
-      `1. Create the folder in Google Drive: ${path}\n` +
-      `2. Upload your E*Trade CSV files there\n\n` +
-      `Or change the DataFolder setting on the Config sheet.`,
-      ui.ButtonSet.OK
-    );
-    return;
-  }
-
-  // Handle rebuild mode - check for custom groups and warn before deleting
-  if (importMode === "rebuild") {
-    const existingSheet = ss.getSheetByName("Portfolio");
-    if (existingSheet) {
-      const customGroups = findCustomGroups_(existingSheet);
-      if (customGroups.length > 0) {
-        const groupList = customGroups.map(g => `  • Group ${g.group}: ${g.description}`).join("\n");
-        const resp = ui.alert(
-          "Custom Groups Will Be Lost",
-          `The following custom groups cannot be auto-recreated from transactions:\n\n${groupList}\n\n` +
-          `These would need to be manually re-created after rebuild.\n\n` +
-          `Continue with rebuild?`,
-          ui.ButtonSet.OK_CANCEL
-        );
-        if (resp !== ui.Button.OK) return;
-      }
-      ss.deleteSheet(existingSheet);
-      const nr = ss.getNamedRanges().find(r => r.getName() === "PortfolioTable");
-      if (nr) nr.remove();
-    }
-  }
-
-  // Read existing Portfolio table (if kept) to merge with imported data
-  const portfolioRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
-  let existingPositions = new Map();
-  let headers = [];
-  if (portfolioRange) {
-    const rows = portfolioRange.getValues();
-    headers = rows[0];
-    existingPositions = parsePortfolioTable_(rows);
-  }
-
-  // Find CSV files
-  const txnFiles = fileName
-    ? findFilesByName_(folder, fileName)
-    : findFilesByPrefix_(folder, "DownloadTxnHistory");
-  const portfolioFiles = findFilesByPrefix_(folder, "PortfolioDownload");
-
-  if (txnFiles.length === 0 && portfolioFiles.length === 0) {
-    SpreadsheetApp.getUi().alert(
-      `No E*Trade CSV files found.\n\n` +
-      `To import your portfolio:\n` +
-      `1. Log into E*Trade\n` +
-      `2. Download "Portfolio" CSV (Accounts > Portfolio > Download)\n` +
-      `3. Download "Transaction History" CSV (Accounts > Transactions > Download)\n` +
-      `4. Upload both files to Google Drive:\n` +
-      `   ${path}/\n\n` +
-      `Expected filenames:\n` +
-      `  • PortfolioDownload*.csv\n` +
-      `  • DownloadTxnHistory*.csv`
-    );
-    return;
-  }
-
-  if (txnFiles.length === 0) {
-    SpreadsheetApp.getUi().alert(
-      `No transaction history CSV found.\n\n` +
-      `Found ${portfolioFiles.length} PortfolioDownload file(s), but no DownloadTxnHistory files.\n\n` +
-      `To download transaction history from E*Trade:\n` +
-      `1. Go to Accounts > Transactions\n` +
-      `2. Select date range and click Download\n` +
-      `3. Upload the CSV to: ${path}/`
-    );
-    return;
-  }
-
-  // Process all transaction CSVs, dedup across file boundaries
-  log.info("import", `Processing ${txnFiles.length} transaction CSV(s)`);
-
-  let transactions = [];
-  let stockTxns = [];
-  const seenTxns = new Set();
-  const seenStockTxns = new Set();
-
-  for (const file of txnFiles) {
-    const csvContent = file.getBlob().getDataAsString();
-    const result = parseEtradeTransactionsFromCsv_(csvContent);
-    let txnAdded = 0, txnDupes = 0;
-    for (const txn of result.transactions) {
-      const key = `${txn.date}|${txn.txnType}|${txn.ticker}|${txn.expiration}|${txn.strike}|${txn.optionType}|${txn.qty}|${txn.price}|${txn.amount}`;
-      if (seenTxns.has(key)) { txnDupes++; continue; }
-      seenTxns.add(key);
-      transactions.push(txn);
-      txnAdded++;
-    }
-    for (const stk of result.stockTxns) {
-      const key = `${stk.date}|${stk.ticker}|${stk.qty}|${stk.price}|${stk.amount}`;
-      if (seenStockTxns.has(key)) continue;
-      seenStockTxns.add(key);
-      stockTxns.push(stk);
-    }
-    log.debug("import", `${file.getName()}: ${txnAdded} transactions (${txnDupes} dupes skipped)`);
-  }
-
-  if (transactions.length === 0) {
-    const fileNames = txnFiles.map(f => f.getName()).join(", ");
-    SpreadsheetApp.getUi().alert(
-      `No option transactions found in CSV file(s).\n\n` +
-      `Files checked: ${fileNames}\n\n` +
-      `Make sure you downloaded the Transaction History CSV from E*Trade ` +
-      `(Accounts > Transactions > Download), not a different report type.`
-    );
-    return;
-  }
-
-  // Get stock positions based on import mode
-  let stockPositions = [];
-  let portfolioCash = 0;
-  if (importMode === "rebuild" || importMode === "fresh") {
-    if (portfolioFiles.length > 0) {
-      const portfolioResult = parsePortfolioStocksAndCashFromFile_(portfolioFiles[0], stockTxns);
-      stockPositions = portfolioResult.stocks;
-      portfolioCash = portfolioResult.cash || 0;
-      log.info("import", `Found ${stockPositions.length} stock positions and $${portfolioCash} cash from portfolio CSV`);
-    }
-  } else {
-    const stockCutoffDates = new Map();
-    for (const [key, pos] of existingPositions) {
-      if (key.endsWith("|STOCK")) {
-        const ticker = key.split("|")[0];
-        const cutoff = parseDateAtMidnight_(pos.lastTxnDate);
-        if (cutoff) {
-          stockCutoffDates.set(ticker, cutoff);
-        }
-      }
-    }
-    stockPositions = aggregateStockTransactions_(stockTxns, stockCutoffDates);
-    log.info("import", `Found ${stockPositions.length} stock positions with new transactions`);
-  }
-
-  // Pair into spreads (opens only)
-  const rawSpreads = [...stockPositions, ...pairTransactionsIntoSpreads_(transactions)];
-
-  // Add cash as a position if present
-  if (portfolioCash > 0) {
-    rawSpreads.push({
-      type: "cash",
-      ticker: "CASH",
-      qty: 1,
-      price: portfolioCash,
-      date: new Date(),
-      expiration: null,
-      lowerStrike: null,
-      upperStrike: null,
-      optionType: "Cash",
-    });
-    log.debug("import", `Added cash position: $${portfolioCash}`);
-  }
-
-  // Pre-merge spreads with the same key
-  const spreads = preMergeSpreads_(rawSpreads);
-  log.info("import", `Paired into ${spreads.length} spread orders (including stocks)`);
-
-  // Build map of closing prices by leg key
-  const closingPrices = buildClosingPricesMap_(transactions, stockTxns);
-  log.debug("import", `Found closing prices for ${closingPrices.size} legs`);
-
-  // Validate option quantities against portfolio CSV (for rebuild/fresh mode)
-  let validationWarnings = "";
-  if ((importMode === "rebuild" || importMode === "fresh") && portfolioFiles.length > 0) {
-    const portfolioOptionData = parsePortfolioOptionsWithPricesFromFile_(portfolioFiles[0]);
-    log.debug("import", `Portfolio options map has ${portfolioOptionData.quantities.size} entries`);
-    const validation = validateOptionQuantities_(spreads, portfolioOptionData.quantities, transactions);
-
-    // Add orphaned options as single-leg positions (in portfolio but not matched by transactions)
-    if (validation.extra.length > 0) {
-      validationWarnings += "\n\n⚠️ ORPHANED OPTIONS (added as single legs):\n";
-      for (const m of validation.extra) {
-        const [ticker, exp, strike, type] = m.key.split("|");
-        const priceInfo = portfolioOptionData.prices.get(m.key) || { pricePaid: 0 };
-
-        const isLong = m.qty > 0;
-        const singleLeg = {
-          type: "single-option",
-          ticker: ticker,
-          qty: isLong ? m.qty : Math.abs(m.qty),
-          expiration: exp,
-          optionType: type,
-          lowerStrike: isLong ? parseFloat(strike) : null,
-          upperStrike: isLong ? null : parseFloat(strike),
-          lowerPrice: isLong ? priceInfo.pricePaid : 0,
-          upperPrice: isLong ? 0 : priceInfo.pricePaid,
-          date: new Date(),
-        };
-        spreads.push(singleLeg);
-
-        const direction = isLong ? "long" : "short";
-        validationWarnings += `  • Added ${ticker} ${exp} $${strike} ${type}: ${m.qty} contracts (${direction})\n`;
-        log.debug("import", `Added orphaned option: ${m.key} qty=${m.qty}`);
-      }
-    }
-
-    if (validation.mismatches.length > 0) {
-      validationWarnings += "\n⚠️ QUANTITY MISMATCHES (check transactions):\n";
-      for (const m of validation.mismatches) {
-        const [ticker, exp, strike, type] = m.key.split("|");
-        validationWarnings += `  • ${ticker} ${exp} $${strike} ${type}: expected ${m.expected}, portfolio has ${m.actual}\n`;
-      }
-    }
-
-    if (validationWarnings) {
-      log.warn("import", "Validation warnings: " + validationWarnings);
-    }
-  }
-
-  // Merge spreads into existing positions
-  const { updatedLegs, newLegs, skippedCount } = mergeSpreads_(existingPositions, spreads);
-
-  // Write back to Portfolio table
-  writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices);
-
-  // Report
-  const txnFileNames = txnFiles.map(f => f.getName()).join("\n  ");
-  const portfolioFileNames = portfolioFiles.map(f => f.getName()).join("\n  ");
-  const modeLabel = importMode === "update" ? "Import Latest Transactions" : "Portfolio Import";
-  let summary = `Transaction files:\n  ${txnFileNames || "(none)"}\n`;
-  if (portfolioFiles.length > 0) {
-    summary += `Portfolio files:\n  ${portfolioFileNames}\n`;
-  }
-  summary += `\nTransactions parsed: ${transactions.length}\n`;
-  summary += `Spread orders: ${spreads.length}\n`;
-
-  if (importMode === "update") {
-    summary += `\nNew positions added: ${newLegs.length}`;
-    if (newLegs.length > 0) {
-      summary += "\n  " + newLegs.map(s => formatSpreadLabel_(s)).join("\n  ");
-    }
-    summary += `\n\nExisting positions updated: ${updatedLegs.length}`;
-    if (updatedLegs.length > 0) {
-      summary += "\n  " + updatedLegs.map(p => formatPositionLabel_(p)).join("\n  ");
-    }
-    summary += `\n\nSkipped (already imported): ${skippedCount}`;
-  } else {
-    summary += `Positions imported: ${newLegs.length}`;
-    if (portfolioCash > 0) {
-      summary += `\nCash: $${portfolioCash.toLocaleString()}`;
-    }
-    if (stockPositions.length > 0) {
-      summary += `\nStocks: ${stockPositions.map(s => s.ticker).join(", ")}`;
-    }
-  }
-
-  summary += validationWarnings;
-
-  ui.alert(modeLabel + " Complete", summary, ui.ButtonSet.OK);
-}
-
-/**
- * Imports E*Trade portfolio from a specific folder and filenames.
- * Used by loadSamplePortfolio to import sample data without UI prompts.
- *
- * @param {Folder} folder - Google Drive folder containing the CSV files
- * @param {string} txnFileName - Transaction history CSV filename
- * @param {string} portfolioFileName - Portfolio CSV filename
- */
-function importEtradePortfolioFromFolder_(folder, txnFileName, portfolioFileName) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-
-  const txnFiles = findFilesByName_(folder, txnFileName);
-  const portfolioFiles = findFilesByName_(folder, portfolioFileName);
-
-  if (txnFiles.length === 0) {
-    throw new Error(`Transaction file not found: ${txnFileName}`);
-  }
-
-  let transactions = [];
-  let stockTxns = [];
-
-  for (const file of txnFiles) {
-    const csvContent = file.getBlob().getDataAsString();
-    const result = parseEtradeTransactionsFromCsv_(csvContent);
-    transactions.push(...result.transactions);
-    stockTxns.push(...result.stockTxns);
-  }
-
-  if (transactions.length === 0) {
-    throw new Error("No transactions found in " + txnFileName);
-  }
-
-  let stockPositions = [];
-  let portfolioCash = 0;
-  if (portfolioFiles.length > 0) {
-    const portfolioResult = parsePortfolioStocksAndCashFromFile_(portfolioFiles[0], stockTxns);
-    stockPositions = portfolioResult.stocks;
-    portfolioCash = portfolioResult.cash || 0;
-  }
-
-  const spreads = [...stockPositions, ...pairTransactionsIntoSpreads_(transactions)];
-
-  if (portfolioCash > 0) {
-    spreads.push({
-      type: "cash",
-      ticker: "CASH",
-      qty: 1,
-      price: portfolioCash,
-      date: new Date(),
-      expiration: null,
-      lowerStrike: null,
-      upperStrike: null,
-      optionType: "Cash",
-    });
-  }
-
-  const closingPrices = buildClosingPricesMap_(transactions, stockTxns);
-
-  writePortfolioTable_(ss, [], [], spreads, closingPrices);
-
-  log.info("import", `Sample portfolio imported: ${spreads.length} positions`);
-}
-
 /* =========================================================
-   File Finding Utilities
+   File Upload Dialog
    ========================================================= */
 
 /**
- * Finds all files in a folder whose name starts with prefix, sorted newest first by name.
+ * Checks if the Portfolio sheet has any data.
+ * @returns {boolean} True if there is an existing portfolio.
  */
-function findFilesByPrefix_(folder, prefix) {
-  log.debug("files", `Looking for '${prefix}' in folder '${folder.getName()}'`);
-
-  let iter = folder.searchFiles(`title contains '${prefix}' and mimeType = 'text/csv'`);
-  let files = [];
-  while (iter.hasNext()) files.push(iter.next());
-  log.debug("files", `CSV MIME type search found: ${files.length} files`);
-
-  if (files.length === 0) {
-    iter = folder.searchFiles(`title contains '${prefix}'`);
-    while (iter.hasNext()) {
-      const f = iter.next();
-      log.debug("files", `Found file: ${f.getName()} (MIME: ${f.getMimeType()})`);
-      const name = f.getName().toLowerCase();
-      if (name.endsWith('.csv') || name.endsWith('.cindy') || name.endsWith('.txt')) {
-        files.push(f);
-      }
-    }
-    log.debug("files", `After extension filter: ${files.length} files`);
-  }
-
-  if (files.length === 0) {
-    log.warn("files", `No files found. Listing all files in folder:`);
-    const allFiles = folder.getFiles();
-    while (allFiles.hasNext()) {
-      const f = allFiles.next();
-      log.debug("files", `  - ${f.getName()} (MIME: ${f.getMimeType()})`);
-    }
-  }
-
-  const realFiles = files.filter(f => !f.getName().toLowerCase().includes("-sample"));
-  const result = realFiles.length > 0 ? realFiles : files;
-
-  result.sort((a, b) => b.getName().localeCompare(a.getName()));
-  log.debug("files", `Returning ${result.length} files`);
-  return result;
+function hasExistingPortfolio() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("Portfolio");
+  if (!sheet) return false;
+  return sheet.getLastRow() > 1; // More than just header row
 }
 
 /**
- * Finds all files in a folder with an exact name.
- */
-function findFilesByName_(folder, name) {
-  const iter = folder.getFilesByName(name);
-  const files = [];
-  while (iter.hasNext()) files.push(iter.next());
-  return files;
-}
-
-/* =========================================================
-   File Upload Dialogs
-   ========================================================= */
-
-/**
- * Shows file upload dialog for full portfolio rebuild.
+ * Shows file upload dialog for portfolio import.
  */
 function showUploadRebuildDialog() {
   const html = HtmlService.createHtmlOutputFromFile("ui/FileUpload")
@@ -451,87 +47,322 @@ function stripBrowserDisambiguator_(fileName) {
   return fileName.replace(/\s*\(\d+\)(?=\.[^.]+$|$)/, "");
 }
 
+/* =========================================================
+   Portfolio Upload Handler
+   ========================================================= */
+
 /**
- * Handles uploaded files for portfolio rebuild.
- * Saves files to Drive and rebuilds portfolio.
- * @param {{name: string, content: string}|null} portfolio - Portfolio CSV (optional)
- * @param {Array<{name: string, content: string}>} transactions - Transaction CSV(s) (optional)
- * @returns {string} Status message
+ * Uploads portfolio/transaction files and processes them directly (no Drive storage).
+ * @param {{name: string, content: string}} portfolio - Portfolio CSV file (optional)
+ * @param {Array<{name: string, content: string}>} transactions - Transaction CSV files
+ * @param {string} importMode - "addTransactions" or "rebuild"
+ * @returns {string} Status message including any missing option prices warning
  */
-function uploadAndRebuildPortfolio(portfolio, transactions) {
-  if (!portfolio && (!transactions || transactions.length === 0)) {
-    throw new Error("At least one file (Portfolio or Transactions) is required");
+function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
+  importMode = importMode || "rebuild";
+
+  if (importMode === "addTransactions") {
+    if (!transactions || transactions.length === 0) {
+      throw new Error("Transaction file(s) required for 'Add transactions' mode");
+    }
+  } else {
+    if (!portfolio && (!transactions || transactions.length === 0)) {
+      throw new Error("At least one file (Portfolio or Transactions) is required");
+    }
   }
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const folder = getOrCreateEtradeFolder_(ss);
 
-  const uploadedParts = [];
-
-  if (portfolio) {
-    saveFileToFolder_(folder, "PortfolioDownload.csv", portfolio.content);
-    uploadedParts.push("portfolio");
+  // Handle rebuild mode - delete existing sheet
+  if (importMode === "rebuild") {
+    const existingSheet = ss.getSheetByName("Portfolio");
+    if (existingSheet) {
+      ss.deleteSheet(existingSheet);
+      const nr = ss.getNamedRanges().find(r => r.getName() === "PortfolioTable");
+      if (nr) nr.remove();
+    }
   }
 
+  // Read existing Portfolio table (if kept) to merge with imported data
+  const portfolioRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
+  let existingPositions = new Map();
+  let headers = [];
+  if (portfolioRange) {
+    const rows = portfolioRange.getValues();
+    headers = rows[0];
+    existingPositions = parsePortfolioTable_(rows);
+    log.info("import", `Existing positions: ${existingPositions.size} groups`);
+    for (const [key, pos] of existingPositions) {
+      if (key.includes("STOCK")) {
+        log.info("import", `  Existing stock: ${key} qty=${pos.legs?.[0]?.qty}`);
+      }
+    }
+  } else {
+    log.info("import", `No existing Portfolio table found`);
+  }
+
+  // Parse transaction CSVs directly
+  let allTransactions = [];
+  let stockTxns = [];
+  const seenTxns = new Set();
+  const seenStockTxns = new Set();
+  const uploadedParts = [];
+
   if (transactions && transactions.length > 0) {
-    for (const txn of transactions) {
-      const cleanName = stripBrowserDisambiguator_(txn.name);
-      saveFileWithUniqueName_(folder, cleanName, txn.content);
+    for (const txnFile of transactions) {
+      let result;
+      try {
+        result = parseEtradeTransactionsFromCsv_(txnFile.content);
+      } catch (e) {
+        // Check if this looks like a portfolio file uploaded in wrong slot
+        if (txnFile.content.includes("Symbol,Last Price")) {
+          throw new Error(
+            `"${txnFile.name}" appears to be a Portfolio CSV, not a Transaction CSV.\n` +
+            "Use the Portfolio file chooser for portfolio downloads."
+          );
+        }
+        throw e;
+      }
+      let txnAdded = 0;
+      for (const txn of result.transactions) {
+        const key = `${txn.date}|${txn.txnType}|${txn.ticker}|${txn.expiration}|${txn.strike}|${txn.optionType}|${txn.qty}|${txn.price}|${txn.amount}`;
+        if (seenTxns.has(key)) continue;
+        seenTxns.add(key);
+        allTransactions.push(txn);
+        txnAdded++;
+      }
+      for (const stk of result.stockTxns) {
+        const key = `${stk.date}|${stk.ticker}|${stk.qty}|${stk.price}|${stk.amount}`;
+        if (seenStockTxns.has(key)) continue;
+        seenStockTxns.add(key);
+        stockTxns.push(stk);
+      }
+      log.debug("import", `${txnFile.name}: ${txnAdded} transactions`);
     }
     uploadedParts.push(`${transactions.length} transaction file(s)`);
   }
 
-  rebuildPortfolio();
+  if (allTransactions.length === 0 && importMode === "addTransactions") {
+    throw new Error("No option transactions found in the uploaded file(s)");
+  }
 
-  return `Uploaded ${uploadedParts.join(" and ")}. Rebuilt portfolio.`;
-}
+  // Parse portfolio CSV directly
+  let stockPositions = [];
+  let portfolioCash = 0;
+  let portfolioOptionData = null;
 
-/**
- * Gets or creates the E*Trade data folder.
- */
-function getOrCreateEtradeFolder_(ss) {
-  const dataFolderPath = getConfigValue_(ss, "DataFolder", "SpreadFinder/DATA") + "/Etrade";
-  let folder = DriveApp.getRootFolder();
-  for (const part of dataFolderPath.split("/").filter(p => p.trim())) {
-    const it = folder.getFoldersByName(part);
-    if (it.hasNext()) {
-      folder = it.next();
-    } else {
-      folder = folder.createFolder(part);
+  if (portfolio && importMode !== "addTransactions") {
+    let portfolioResult;
+    try {
+      portfolioResult = parsePortfolioStocksAndCash_(portfolio.content, stockTxns);
+    } catch (e) {
+      // Check if this looks like a transaction file uploaded in wrong slot
+      if (portfolio.content.includes("TransactionDate,") || portfolio.content.includes("Activity/Trade Date,")) {
+        throw new Error(
+          `"${portfolio.name}" appears to be a Transaction CSV, not a Portfolio CSV.\n` +
+          "Use the Transaction file chooser for transaction history."
+        );
+      }
+      throw e;
+    }
+    stockPositions = portfolioResult.stocks;
+    portfolioCash = portfolioResult.cash || 0;
+    portfolioOptionData = parsePortfolioOptionsWithPrices_(portfolio.content);
+    uploadedParts.push("portfolio");
+    log.info("import", `Found ${stockPositions.length} stock positions and $${portfolioCash} cash from portfolio CSV`);
+  } else if (importMode === "addTransactions") {
+    // For update mode, aggregate stock transactions
+    const stockCutoffDates = new Map();
+    for (const [key, pos] of existingPositions) {
+      if (key.endsWith("|STOCK")) {
+        const ticker = key.split("|")[0];
+        const cutoff = parseDateAtMidnight_(pos.lastTxnDate);
+        if (cutoff) stockCutoffDates.set(ticker, cutoff);
+      }
+    }
+    stockPositions = aggregateStockTransactions_(stockTxns, stockCutoffDates);
+  }
+
+  // Pair into spreads
+  const rawSpreads = [...stockPositions, ...pairTransactionsIntoSpreads_(allTransactions)];
+
+  // Debug: log stock positions
+  for (const sp of rawSpreads) {
+    if (sp.type === "stock") {
+      log.info("import", `Stock position: ${sp.ticker} qty=${sp.qty} from ${sp.date}`);
     }
   }
-  return folder;
-}
 
-/**
- * Saves a file to a folder, replacing existing file with same name.
- */
-function saveFileToFolder_(folder, fileName, content) {
-  const existing = folder.getFilesByName(fileName);
-  if (existing.hasNext()) {
-    existing.next().setTrashed(true);
+  // Add cash as a position if present
+  if (portfolioCash > 0) {
+    rawSpreads.push({
+      type: "cash",
+      ticker: "CASH",
+      qty: 1,
+      price: portfolioCash,
+      date: new Date(),
+      expiration: null,
+      lowerStrike: null,
+      upperStrike: null,
+      optionType: "Cash",
+    });
   }
-  folder.createFile(fileName, content, MimeType.CSV);
-}
 
-/**
- * Saves a file to a folder with a unique name.
- * If a file with the same name exists, appends a timestamp to make it unique.
- */
-function saveFileWithUniqueName_(folder, fileName, content) {
-  const existing = folder.getFilesByName(fileName);
-  let finalName = fileName;
+  // Pre-merge spreads with the same key
+  const spreads = preMergeSpreads_(rawSpreads);
+  log.info("import", `Paired into ${spreads.length} spread orders`);
 
-  if (existing.hasNext()) {
-    const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd-HHmmss");
-    const lastDot = fileName.lastIndexOf(".");
-    if (lastDot > 0) {
-      finalName = fileName.substring(0, lastDot) + "-" + timestamp + fileName.substring(lastDot);
-    } else {
-      finalName = fileName + "-" + timestamp;
+  // Debug: log stock positions after merge
+  for (const sp of spreads) {
+    if (sp.type === "stock") {
+      log.info("import", `After merge: ${sp.ticker} qty=${sp.qty}`);
     }
   }
 
-  folder.createFile(finalName, content, MimeType.CSV);
-  return finalName;
+  // Build closing prices map
+  const closingPrices = buildClosingPricesMap_(allTransactions, stockTxns);
+
+  // Validate quantities if we have portfolio data
+  if (portfolioOptionData && importMode !== "addTransactions") {
+    const validation = validateOptionQuantities_(spreads, portfolioOptionData.quantities, allTransactions);
+
+    // Add orphaned options as single-leg positions
+    if (validation.extra.length > 0) {
+      for (const m of validation.extra) {
+        const [ticker, exp, strike, type] = m.key.split("|");
+        const priceInfo = portfolioOptionData.prices.get(m.key) || { pricePaid: 0 };
+        const isLong = m.qty > 0;
+        spreads.push({
+          type: "single-option",
+          ticker: ticker,
+          qty: isLong ? m.qty : Math.abs(m.qty),
+          expiration: exp,
+          optionType: type,
+          lowerStrike: isLong ? parseFloat(strike) : null,
+          upperStrike: isLong ? null : parseFloat(strike),
+          lowerPrice: isLong ? priceInfo.pricePaid : 0,
+          upperPrice: isLong ? 0 : priceInfo.pricePaid,
+          date: new Date(),
+        });
+      }
+    }
+  }
+
+  // Merge spreads into existing positions
+  const { updatedLegs, newLegs, skippedCount } = mergeSpreads_(existingPositions, spreads);
+
+  // Write to Portfolio table
+  writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices);
+
+  // Build summary
+  let summary = "";
+  if (importMode === "addTransactions") {
+    summary = `Added ${newLegs.length} new positions, updated ${updatedLegs.length} existing.`;
+    if (skippedCount > 0) summary += ` Skipped ${skippedCount} (already imported).`;
+  } else {
+    summary = `Rebuilt portfolio with ${newLegs.length} positions.`;
+    if (portfolioCash > 0) summary += ` Cash: $${portfolioCash.toLocaleString()}.`;
+  }
+
+  // Check for missing option prices
+  const missingPrices = findMissingOptionPrices_(ss);
+  if (missingPrices.length > 0) {
+    summary += "\n\n⚠️ Missing option prices for:\n• " + missingPrices.join("\n• ");
+    summary += "\n\nUpload option prices for these expirations to see current values.";
+  }
+
+  return summary;
+}
+
+/* =========================================================
+   Missing Prices Check
+   ========================================================= */
+
+/**
+ * Finds open portfolio positions that don't have option prices uploaded.
+ * Skips closed positions (qty = 0).
+ * @returns {string[]} List of "SYMBOL EXP_DATE" strings for positions missing prices
+ */
+function findMissingOptionPrices_(ss) {
+  const missing = [];
+
+  // Get portfolio positions
+  const portfolioRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
+  if (!portfolioRange) return missing;
+
+  const rows = portfolioRange.getValues();
+  if (rows.length < 2) return missing;
+
+  const headers = rows[0];
+  const symIdx = findColumn_(headers, ["symbol", "ticker"]);
+  const expIdx = findColumn_(headers, ["expiration", "exp", "expiry"]);
+  const qtyIdx = findColumn_(headers, ["qty", "quantity", "contracts"]);
+
+  if (symIdx < 0 || expIdx < 0) return missing;
+
+  // Collect unique symbol+expiration combos from open positions only
+  const portfolioCombos = new Set();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  for (let i = 1; i < rows.length; i++) {
+    const sym = String(rows[i][symIdx] || "").trim().toUpperCase();
+    const expRaw = rows[i][expIdx];
+    if (!sym || !expRaw) continue;
+
+    // Skip closed positions
+    if (qtyIdx >= 0) {
+      const qty = parseFloat(rows[i][qtyIdx]) || 0;
+      if (qty === 0) continue;
+    }
+
+    const expDate = parseDateAtMidnight_(expRaw);
+    if (!expDate) continue;
+
+    // Skip expired positions
+    if (expDate < today) continue;
+
+    const expStr = expDate.getFullYear() + "-" +
+      String(expDate.getMonth() + 1).padStart(2, "0") + "-" +
+      String(expDate.getDate()).padStart(2, "0");
+
+    portfolioCombos.add(`${sym}|${expStr}`);
+  }
+
+  if (portfolioCombos.size === 0) return missing;
+
+  // Get uploaded option prices
+  const optionSheet = ss.getSheetByName("OptionPricesUploaded");
+  const uploadedCombos = new Set();
+
+  if (optionSheet && optionSheet.getLastRow() > 1) {
+    const optionData = optionSheet.getRange(2, 1, optionSheet.getLastRow() - 1, 2).getValues();
+    for (const row of optionData) {
+      const sym = String(row[0] || "").trim().toUpperCase();
+      const expRaw = row[1];
+      if (!sym || !expRaw) continue;
+
+      const expDate = parseDateAtMidnight_(expRaw);
+      if (!expDate) continue;
+
+      const expStr = expDate.getFullYear() + "-" +
+        String(expDate.getMonth() + 1).padStart(2, "0") + "-" +
+        String(expDate.getDate()).padStart(2, "0");
+
+      uploadedCombos.add(`${sym}|${expStr}`);
+    }
+  }
+
+  // Find portfolio combos not in uploaded prices
+  for (const combo of portfolioCombos) {
+    if (!uploadedCombos.has(combo)) {
+      const [sym, exp] = combo.split("|");
+      missing.push(`${sym} ${exp}`);
+    }
+  }
+
+  // Sort by symbol, then date
+  missing.sort();
+
+  return missing;
 }
