@@ -18,9 +18,85 @@ Each bubble represents a potential **bull call spread** you could purchase. The 
 
 
 
-Expected ROI is based on an estimated probability that the stock price will reach the upper strike before expiration. This accounts for: (1) the chance the spread expires fully in-the-money at max profit, or (2) the price touches the upper strike earlier, allowing you to exit early yet still capture ~80% of gains
+### Expected ROI Explained
 
-Selecting a Spread
+**Expected ROI** uses a probability-weighted model based on a key insight: you don't need the stock to expire above the upper strike to profit. If it *touches* that price anytime before expiration, you can exit early at ~80% of max profit.
+
+**The calculation:**
+
+1. **Probability of Touch** = Upper strike's delta × 1.6 (capped at 95%)
+   - If upper strike has delta 0.30, probability of touch ≈ 48%
+   - This is higher than "probability of expiring ITM" because the stock only needs to reach that price once
+
+2. **Target Profit** = 80% of max profit (conservative early exit assumption)
+
+3. **Expected Value**:
+   ```
+   EV = (Prob of Touch × Target Profit) + (Prob of Loss × -Debit)
+   ```
+
+4. **Expected ROI** = EV / Debit
+
+**Example**: 400/450 spread, $20 debit, upper delta 0.35
+- Max profit = $50 - $20 = $30
+- Target profit = $30 × 0.80 = $24
+- Prob of touch = 0.35 × 1.6 = 56%
+- EV = (0.56 × $24) + (0.44 × -$20) = $13.44 - $8.80 = $4.64
+- Expected ROI = $4.64 / $20 = **23%**
+
+This is more realistic than raw ROI (150% in this example) because it weights by probability.
+
+### SpreadFinderConfig Settings
+
+When you first run SpreadFinder, it creates a **SpreadFinderConfig** sheet with settings you can customize:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `symbol` | (from prices) | Comma-separated symbols to analyze (blank=all) |
+| `minSpreadWidth` | 20 | Minimum spread width in dollars |
+| `maxSpreadWidth` | 150 | Maximum spread width in dollars |
+| `minLiquidityScore` | 0.50 | 0-1 scale (60% bid-ask spread, 25% volume, 15% OI) |
+| `patience` | 60 | Minutes for price calculation (0=aggressive, 60=patient) |
+| `minROI` | 2.0 | Minimum ROI (2.0 = 200% return) |
+| `minStrike` | (auto) | Minimum lower strike price (default: 50% below current price) |
+| `maxStrike` | (auto) | Maximum upper strike price (default: 100% above current price) |
+| `minExpirationMonths` | 6 | Minimum months until expiration |
+| `maxExpirationMonths` | 36 | Maximum months until expiration |
+
+**Outlook settings** (optional — boost spreads aligned with your price target):
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `outlookFuturePrice` | (auto) | Your target price (default: current price + 25%) |
+| `outlookDate` | (auto) | When you expect it (default: 1 year from now) |
+| `outlookConfidence` | 0.5 | How confident you are, 0-1 (0.5 = 50%) |
+
+### How Outlook Affects Fitness
+
+The **Outlook Boost** adjusts fitness based on your price target, confidence, and timeline. Two components multiply together:
+
+**1. Price Boost**
+
+| Spread Position | Effect |
+|-----------------|--------|
+| Both strikes below target | Full boost — higher strikes get more |
+| Straddles target | Partial boost |
+| Both strikes above target | Penalty — worse the further above |
+
+**2. Date Boost**
+
+| Expiration | Effect |
+|------------|--------|
+| After target date | Slight boost (with falloff for much later) |
+| Before target date | Penalty (may expire before move happens) |
+
+**Example**: Target $500 by March 2027, 50% confidence
+- 400/450 spread expiring June 2028: outlookBoost ≈ **1.6× fitness**
+- 550/600 spread expiring Dec 2026: outlookBoost ≈ **0.8× fitness**
+
+Higher confidence amplifies both boosts and penalties.
+
+### Selecting a Spread
 
 Click any bubble to see its details in the panel below, including strike prices, debit cost, ROI, expected ROI, and liquidity metrics.
 

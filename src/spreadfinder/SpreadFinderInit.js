@@ -210,7 +210,7 @@ function ensureSpreadFinderConfigSheet_(ss) {
     ["symbol", defaultSymbols, "Comma-separated symbols to analyze (blank=all)"],
     ["minSpreadWidth", minSpreadWidth, "Minimum spread width in dollars"],
     ["maxSpreadWidth", 150, "Maximum spread width in dollars"],
-    ["minLiquidityScore", 0.25, "0-1 scale (60% spread, 25% volume, 15% OI)"],
+    ["minLiquidityScore", 0.50, "0-1 scale (60% spread, 25% volume, 15% OI)"],
     ["patience", 60, "Minutes for price calculation (0=aggressive, 60=patient)"],
     ["minROI", 2.0, "Minimum ROI (0.5 = 50% return)"],
     ["minStrike", minStrike, "Minimum lower strike price"],
