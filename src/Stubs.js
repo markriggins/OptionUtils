@@ -439,6 +439,20 @@ function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecu
 }
 
 /**
+ * Returns the liquidity score (0-1) for an option.
+ * Uses composite formula: 60% bid-ask spread, 25% volume, 15% OI.
+ * @param {string|Range} symbol - Ticker symbol or range to search upward.
+ * @param {Date|string} expiration - Expiration date.
+ * @param {number} strike - Strike price.
+ * @param {string} type - Option type ("Call" or "Put").
+ * @returns {number} Liquidity score 0-1.
+ * @customfunction
+ */
+function getOptionLiquidity(symbol, expiration, strike, type) {
+  return customFn_(SpreadFinder.getOptionLiquidity, [symbol, expiration, strike, type]);
+}
+
+/**
  * Returns first non-empty value from a range.
  * @param {Range} range - Range to search for non-empty value.
  * @returns {*} The first non-empty value, or empty string if none found.

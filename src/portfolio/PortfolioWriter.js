@@ -362,17 +362,17 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
     let sheet = ss.getSheetByName("Portfolio");
     if (!sheet) sheet = ss.insertSheet("Portfolio");
 
-    headers = ["Symbol", "Group", "Description", "Strategy", "Strike", "Type", "Expiration", "Qty", "Price", "Investment", "Rec Close", "Closed", "Gain", "Current Value", "LastTxnDate", "Link"];
+    headers = ["Symbol", "Group", "Description", "Strategy", "Strike", "Type", "Expiration", "Qty", "Price", "Investment", "Rec Close", "Liquidity", "Closed", "Gain", "Current Value", "LastTxnDate", "Link"];
     const headerRange = sheet.getRange(1, 1, 1, headers.length);
     headerRange.setValues([headers]);
     headerRange.setBackground("#93c47d");
     headerRange.setFontWeight("bold");
-    ss.setNamedRange("PortfolioTable", sheet.getRange("A:P"));
+    ss.setNamedRange("PortfolioTable", sheet.getRange("A:Q"));
 
-    const filterRange = sheet.getRange("A:P");
+    const filterRange = sheet.getRange("A:Q");
     filterRange.createFilter();
 
-    sheet.getRange("A:P").setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+    sheet.getRange("A:Q").setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
   }
 
   const range = getNamedRangeWithTableFallback_(ss, "Portfolio");
@@ -392,6 +392,7 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
   const idxPrice = findColumn_(headers, ["price"]);
   const idxInvestment = findColumn_(headers, ["investment"]);
   const idxRecClose = findColumn_(headers, ["recclose", "rec close"]);
+  const idxLiquidity = findColumn_(headers, ["liquidity"]);
   const idxClosed = findColumn_(headers, ["closed", "actualclose", "closedat"]);
   const idxGain = findColumn_(headers, ["gain"]);
   const idxCurrentValue = findColumn_(headers, ["currentvalue", "current value", "currvalue"]);
@@ -660,6 +661,23 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
 
       const allClosed = idxClosed >= 0 && rows.every(r => r[idxClosed] !== "");
 
+      // Position liquidity = MIN of all legs (on first row only, skip if closed)
+      if (idxLiquidity >= 0 && !isStock && !isCash && rows.length > 0 && !allClosed) {
+        if (rows.length === 1) {
+          const formula = `=getOptionLiquidity($${symCol}$1:$${symCol}${firstRow}, $${expCol}${firstRow}, $${strikeCol}${firstRow}, $${typeCol}${firstRow})`;
+          sheet.getRange(firstRow, startCol + idxLiquidity).setFormula(formula);
+        } else {
+          // MIN of all legs' liquidity
+          const legFormulas = [];
+          for (let i = 0; i < rows.length; i++) {
+            const legRow = firstRow + i;
+            legFormulas.push(`getOptionLiquidity($${symCol}$1:$${symCol}${legRow}, $${expCol}${legRow}, $${strikeCol}${legRow}, $${typeCol}${legRow})`);
+          }
+          const formula = `=MIN(${legFormulas.join(", ")})`;
+          sheet.getRange(firstRow, startCol + idxLiquidity).setFormula(formula);
+        }
+      }
+
       const bgColor = (nextGroup % 2 === 1) ? "#fff2cc" : "#ffffff";
       const groupRange = sheet.getRange(firstRow, startCol, rows.length, headers.length);
       groupRange.setBackground(bgColor);
@@ -716,6 +734,7 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
       { idx: idxPrice, fmt: "#,##0.00" },
       { idx: idxInvestment, fmt: "#,##0.00" },
       { idx: idxRecClose, fmt: "#,##0.00" },
+      { idx: idxLiquidity, fmt: "0.00" },
       { idx: idxClosed, fmt: "#,##0.00" },
       { idx: idxGain, fmt: "#,##0.00" },
       { idx: idxCurrentValue, fmt: "#,##0.00" },

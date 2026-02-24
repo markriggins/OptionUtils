@@ -137,22 +137,17 @@ function normalizeSpreadInputs_(symbol, expiration, lowerStrike, upperStrike, av
 }
 
 /**
- * normalizeExpiration_ - Normalizes expiration to "YYYY-MM-DD" string.
+ * normalizeExpiration_ - Normalizes expiration to a Date object at midnight.
  *
- * Accepts Date objects or valid "YYYY-MM-DD" strings.
+ * Accepts Date objects, serial dates, or various string formats.
  * Returns null if invalid.
  *
- * @param {string|Date} expiration - Input expiration.
- * @returns {string|null} Normalized "M/D/YYYY" or null.
+ * @param {string|Date|number} expiration - Input expiration.
+ * @returns {Date|null} Normalized Date at midnight, or null.
  */
 
 function normalizeExpiration_(expiration) {
-  // Use centralized date parsing, then format to M/D/YYYY
-  const d = parseDateAtMidnight_(expiration);
-  if (d) {
-    return formatDateMDYYYY_(d);
-  }
-  return null;
+  return parseDateAtMidnight_(expiration);
 }
 
 /**
@@ -300,10 +295,11 @@ function recommendIronCondorOpenCredit(
   const qSellPut = getOptionQuote_(sym, exp, sp, "Put"); // SELL
   const qBuyCall = getOptionQuote_(sym, exp, bc, "Call"); // BUY
   const qSellCall = getOptionQuote_(sym, exp, sc, "Call"); // SELL
-  if (!hasBidAsk_(qBuyPut)) return "#No Data for Buy Put:" + sym + " " + exp + " @" + buyPut;
-  if (!hasBidAsk_(qSellPut)) return "#No Data for Sell Put:" + sym + " " + exp + " @" + sellPut;
-  if (!hasBidAsk_(qSellCall)) return "#No Data for Sell Call:" + sym + " " + exp + " @" + sellCall;
-  if (!hasBidAsk_(qBuyCall)) return "#No Data for Buy Call:" + sym + " " + exp + " @" + buyCall;
+  const expStr = formatDateMDYYYY_(exp);
+  if (!hasBidAsk_(qBuyPut)) return "#No Data for Buy Put:" + sym + " " + expStr + " @" + buyPut;
+  if (!hasBidAsk_(qSellPut)) return "#No Data for Sell Put:" + sym + " " + expStr + " @" + sellPut;
+  if (!hasBidAsk_(qSellCall)) return "#No Data for Sell Call:" + sym + " " + expStr + " @" + sellCall;
+  if (!hasBidAsk_(qBuyCall)) return "#No Data for Buy Call:" + sym + " " + expStr + " @" + buyCall;
   // Use liquidity-aware pricing
   const buyPutLimit = getRealisticBuyPrice_(qBuyPut, alpha);
   const buyCallLimit = getRealisticBuyPrice_(qBuyCall, alpha);
@@ -404,7 +400,7 @@ function recommendOpen(symbol, expiration, strike, type, qty, avgMinutesToExecut
   const { sym, exp, k, optType, position, alpha } = parsed;
 
   const quote = getOptionQuote_(sym, exp, k, optType);
-  if (!hasBidAsk_(quote)) return "#No Data:" + sym + " " + exp + " " + k + " " + optType;
+  if (!hasBidAsk_(quote)) return "#No Data:" + sym + " " + formatDateMDYYYY_(exp) + " " + k + " " + optType;
 
   if (position > 0) {
     // Long position: BUY to open → return buy price (debit)
@@ -445,7 +441,7 @@ function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecu
   const { sym, exp, k, optType, position, alpha } = parsed;
 
   const quote = getOptionQuote_(sym, exp, k, optType);
-  if (!hasBidAsk_(quote)) return "#No Data:" + sym + " " + exp + " " + k + " " + optType;
+  if (!hasBidAsk_(quote)) return "#No Data:" + sym + " " + formatDateMDYYYY_(exp) + " " + k + " " + optType;
 
   if (position > 0) {
     // Long position: SELL to close → return sell price
@@ -456,6 +452,29 @@ function recommendClose(symbol, expiration, strike, type, qty, avgMinutesToExecu
     const buyLimit = getRealisticBuyPrice_(quote, alpha);
     return roundTo_(buyLimit, 2);
   }
+}
+
+/**
+ * Returns the liquidity score (0-1) for an option leg.
+ * Uses the composite formula: 60% bid-ask spread, 25% volume, 15% OI.
+ *
+ * @param {string|Array} symbol - Stock symbol, or a vertical range to search upward for first non-blank.
+ * @param {string|Date} expiration - Expiration date.
+ * @param {number} strike - Strike price.
+ * @param {string} type - "Call" or "Put".
+ * @return {number} Liquidity score 0-1, or error string
+ * @customfunction
+ */
+function getOptionLiquidity(symbol, expiration, strike, type) {
+  const parsed = normalizeLegInputs_(symbol, expiration, strike, type, 1, 0);
+  if (parsed.error) return parsed.error;
+
+  const { sym, exp, k, optType } = parsed;
+
+  const quote = getOptionQuote_(sym, exp, k, optType);
+  if (!hasBidAsk_(quote)) return "#No Data";
+
+  return calcLiquidityScore(quote.bid, quote.ask, quote.volume, quote.openint);
 }
 
 /**
