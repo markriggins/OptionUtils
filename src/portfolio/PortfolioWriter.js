@@ -352,9 +352,11 @@ function validateOptionQuantities_(spreads, portfolioOptions, transactions) {
  * @param {Object[]} updatedLegs - Existing positions to update
  * @param {Object[]} newLegs - New positions to append
  * @param {Map} [closingPrices] - Map of leg keys to closing prices
+ * @param {number[]} [rowsToDelete] - Row indexes (0-based from data start) to delete
  */
-function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) {
+function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices, rowsToDelete) {
   closingPrices = closingPrices || new Map();
+  rowsToDelete = rowsToDelete || [];
 
   const legsRange = getNamedRangeWithTableFallback_(ss, "Portfolio");
   if (!legsRange || headers.length === 0) {
@@ -434,6 +436,17 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
     }
     if (idxLastTxnDate >= 0 && pos.lastTxnDate && pos.legs.length > 0 && pos.legs[0].row != null) {
       sheet.getRange(startRow + pos.legs[0].row, startCol + idxLastTxnDate).setValue(formatDateLong_(pos.lastTxnDate));
+    }
+  }
+
+  // Delete rows for positions that were combined (e.g., naked puts now part of spreads)
+  // Delete in reverse order to avoid shifting row numbers
+  if (rowsToDelete.length > 0) {
+    const sortedRows = [...rowsToDelete].sort((a, b) => b - a); // Descending order
+    for (const rowIdx of sortedRows) {
+      const rowNum = startRow + rowIdx;
+      log.info("import", `Deleting row ${rowNum} (combined position)`);
+      sheet.deleteRow(rowNum);
     }
   }
 

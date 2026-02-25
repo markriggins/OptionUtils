@@ -249,6 +249,92 @@ function pairTransactionsIntoSpreads_(transactions) {
 }
 
 /**
+ * Combines naked single-leg options across different dates into spreads.
+ *
+ * When a user sells a put on one date and buys a protective put on another date,
+ * they end up as separate "naked" positions. This function combines them into
+ * proper vertical spreads if they have matching ticker, expiration, and quantity.
+ *
+ * @param {Object[]} spreads - Array of spread positions from pairTransactionsIntoSpreads_
+ * @returns {Object[]} Array with naked positions combined into spreads where possible
+ */
+function combineNakedLegsIntoSpreads_(spreads) {
+  const result = [];
+
+  // Separate naked puts and other positions
+  const nakedShortPuts = []; // lowerStrike: null
+  const nakedLongPuts = [];  // upperStrike: null
+  const other = [];
+
+  for (const sp of spreads) {
+    if (sp.optionType === "Put" && sp.lowerStrike === null && sp.upperStrike !== null) {
+      nakedShortPuts.push(sp);
+    } else if (sp.optionType === "Put" && sp.upperStrike === null && sp.lowerStrike !== null) {
+      nakedLongPuts.push(sp);
+    } else {
+      other.push(sp);
+    }
+  }
+
+  // Try to match naked short puts with naked long puts
+  const usedLongs = new Set();
+
+  for (const shortPut of nakedShortPuts) {
+    const exp = formatExpirationForKey_(shortPut.expiration);
+    const shortQty = Math.abs(shortPut.qty);
+
+    // Find matching long put: same ticker, same expiration, same quantity, lower strike
+    let matched = false;
+    for (let i = 0; i < nakedLongPuts.length; i++) {
+      if (usedLongs.has(i)) continue;
+
+      const longPut = nakedLongPuts[i];
+      const longExp = formatExpirationForKey_(longPut.expiration);
+
+      if (longPut.ticker === shortPut.ticker &&
+          longExp === exp &&
+          longPut.qty === shortQty &&
+          longPut.lowerStrike < shortPut.upperStrike) {
+
+        // Combine into bull put spread
+        result.push({
+          ticker: shortPut.ticker,
+          expiration: shortPut.expiration,
+          lowerStrike: longPut.lowerStrike,
+          upperStrike: shortPut.upperStrike,
+          optionType: "Put",
+          qty: shortQty,
+          lowerPrice: longPut.lowerPrice,
+          upperPrice: shortPut.upperPrice,
+          date: shortPut.date, // Use short put date as the position date
+        });
+
+        usedLongs.add(i);
+        matched = true;
+        log.info("combine", `Combined naked puts into spread: ${shortPut.ticker} ${exp} ${longPut.lowerStrike}/${shortPut.upperStrike}`);
+        break;
+      }
+    }
+
+    if (!matched) {
+      result.push(shortPut); // Keep as naked short put
+    }
+  }
+
+  // Add unmatched long puts back
+  for (let i = 0; i < nakedLongPuts.length; i++) {
+    if (!usedLongs.has(i)) {
+      result.push(nakedLongPuts[i]);
+    }
+  }
+
+  // Add all other positions
+  result.push(...other);
+
+  return result;
+}
+
+/**
  * Builds a map of closing prices from close transactions.
  * Key: "TICKER|EXPIRATION|STRIKE|TYPE" -> price
  *

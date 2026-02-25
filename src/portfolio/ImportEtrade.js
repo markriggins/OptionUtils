@@ -176,8 +176,102 @@ function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
     stockPositions = aggregateStockTransactions_(stockTxns, stockCutoffDates);
   }
 
-  // Pair into spreads
-  const rawSpreads = [...stockPositions, ...pairTransactionsIntoSpreads_(allTransactions)];
+  // Pair into spreads, then combine naked legs across dates
+  const pairedSpreads = pairTransactionsIntoSpreads_(allTransactions);
+
+  // In addTransactions mode, include existing naked short puts for combining
+  // so new long puts can be matched with them
+  let existingNakedShortPuts = [];
+  const combinedExistingKeys = new Set();
+  const rowsToDelete = []; // Track spreadsheet rows to delete for combined positions
+
+  if (importMode === "addTransactions" && existingPositions.size > 0) {
+    for (const [key, pos] of existingPositions) {
+      // Look for single-leg naked short puts: key like "TSLA|12/20/2024|400|Put"
+      // Single strike means it's a naked position (not a spread)
+      if (pos.legs && pos.legs.length === 1) {
+        const leg = pos.legs[0];
+        if (leg.type === "Put" && leg.qty < 0 && leg.strike) {
+          existingNakedShortPuts.push({
+            ticker: leg.symbol,
+            expiration: leg.expiration,
+            lowerStrike: null,
+            upperStrike: leg.strike,
+            optionType: "Put",
+            qty: leg.qty,
+            lowerPrice: 0,
+            upperPrice: leg.price || 0,
+            date: pos.lastTxnDate,
+            _existingKey: key, // Track which existing position this came from
+            _existingRow: leg.row, // Track the spreadsheet row number
+          });
+        }
+      }
+    }
+    log.info("import", `Found ${existingNakedShortPuts.length} existing naked short puts to check for combining`);
+  }
+
+  // Build a set of existing naked short put keys to filter duplicates from transactions
+  const existingShortPutKeys = new Set();
+  for (const esp of existingNakedShortPuts) {
+    const exp = formatExpirationForKey_(esp.expiration);
+    const key = `${esp.ticker}|${exp}|${esp.upperStrike}`;
+    existingShortPutKeys.add(key);
+  }
+
+  // Filter out naked short puts from transactions that duplicate existing portfolio positions
+  // This ensures the EXISTING shorts (with _existingKey) get matched with new longs
+  const filteredPairedSpreads = pairedSpreads.filter(sp => {
+    if (sp.optionType === "Put" && sp.lowerStrike === null && sp.upperStrike !== null) {
+      const exp = formatExpirationForKey_(sp.expiration);
+      const key = `${sp.ticker}|${exp}|${sp.upperStrike}`;
+      if (existingShortPutKeys.has(key)) {
+        log.info("import", `Filtering duplicate naked short from transactions: ${key}`);
+        return false; // Skip - use existing portfolio position instead
+      }
+    }
+    return true;
+  });
+
+  // Combine naked legs - include filtered transactions AND existing naked puts
+  const allNakedLegs = [...filteredPairedSpreads, ...existingNakedShortPuts];
+  const combinedSpreads = combineNakedLegsIntoSpreads_(allNakedLegs);
+
+  // Identify which existing naked puts were combined vs still naked
+  // - Unmatched existing puts remain in result with _existingKey
+  // - Matched existing puts are NOT in result (replaced by combined spread without _existingKey)
+  const unmatchedExistingKeys = new Set();
+  for (const sp of combinedSpreads) {
+    if (sp._existingKey) {
+      unmatchedExistingKeys.add(sp._existingKey);
+    }
+  }
+
+  // Existing positions that were matched (combined) need to be removed from existingPositions
+  for (const existing of existingNakedShortPuts) {
+    if (!unmatchedExistingKeys.has(existing._existingKey)) {
+      // This existing naked put was combined with a new long put
+      combinedExistingKeys.add(existing._existingKey);
+      existingPositions.delete(existing._existingKey);
+      // Track the row number to delete from the spreadsheet
+      if (existing._existingRow != null) {
+        rowsToDelete.push(existing._existingRow);
+      }
+      log.info("import", `Removed existing naked put ${existing._existingKey} row ${existing._existingRow} (now combined into spread)`);
+    }
+  }
+
+  // Filter out unmatched existing naked puts (they already exist in portfolio)
+  // and clean up tracking field
+  const newSpreadsOnly = combinedSpreads.filter(sp => {
+    if (sp._existingKey) {
+      delete sp._existingKey; // Clean up tracking field
+      return false; // Filter out - already in portfolio
+    }
+    return true;
+  });
+
+  const rawSpreads = [...stockPositions, ...newSpreadsOnly];
 
   // Debug: log stock positions
   for (const sp of rawSpreads) {
@@ -244,8 +338,8 @@ function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
   // Merge spreads into existing positions
   const { updatedLegs, newLegs, skippedCount } = mergeSpreads_(existingPositions, spreads);
 
-  // Write to Portfolio table
-  writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices);
+  // Write to Portfolio table (pass rows to delete for combined positions)
+  writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices, rowsToDelete);
 
   // Build summary
   let summary = "";
