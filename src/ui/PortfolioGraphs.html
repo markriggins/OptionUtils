@@ -208,6 +208,7 @@
     var valueMode = 'expiration'; // 'expiration' or 'current'
     var rawData = null;
     var charts = {};
+    var selectedSpreadSeries = -1; // Track which spread series is bolded (-1 = none)
 
     // Explorer options for drag-to-zoom on all charts
     var explorerOptions = {
@@ -525,6 +526,15 @@
 
             charts.spreads = charts.spreads || new google.visualization.LineChart(document.getElementById('chart_spreads'));
             setupChartPriceLineListeners('chart_spreads', 'spreads');
+
+            // Build series options with bold for selected series
+            var spreadsSeriesOptions = {};
+            d.spreadLabels.forEach(function(l, j) {
+                spreadsSeriesOptions[j] = {
+                    lineWidth: (selectedSpreadSeries === j) ? 4 : 2
+                };
+            });
+
             charts.spreads.draw(dtSpreads, {
                 title: '',
                 legend: { position: 'right' },
@@ -532,7 +542,8 @@
                 vAxis: { title: 'Value ($)', format: '#,##0' },
                 chartArea: { width: '70%', height: '80%' },
                 curveType: 'none',
-                explorer: explorerOptions
+                explorer: explorerOptions,
+                series: spreadsSeriesOptions
             });
 
             // Chart 4: Individual Spreads ROI (%)
@@ -551,6 +562,15 @@
 
             charts.spreadsRoi = charts.spreadsRoi || new google.visualization.LineChart(document.getElementById('chart_spreads_roi'));
             setupChartPriceLineListeners('chart_spreads_roi', 'spreadsRoi');
+
+            // Build series options with bold for selected series (same selection as $ chart)
+            var spreadsRoiSeriesOptions = {};
+            d.spreadLabels.forEach(function(l, j) {
+                spreadsRoiSeriesOptions[j] = {
+                    lineWidth: (selectedSpreadSeries === j) ? 4 : 2
+                };
+            });
+
             charts.spreadsRoi.draw(dtSpreadRoi, {
                 title: '',
                 legend: { position: 'right' },
@@ -558,7 +578,8 @@
                 vAxis: { title: 'ROI (%)', format: '#,##0\'%\'' },
                 chartArea: { width: '70%', height: '80%' },
                 curveType: 'none',
-                explorer: explorerOptions
+                explorer: explorerOptions,
+                series: spreadsRoiSeriesOptions
             });
 
             // Double-click on legend or line to open OptionStrat
@@ -580,13 +601,19 @@
                 if (url) window.open(url, '_blank');
             }
         });
-        // Also handle selection for click feedback
+        // Single click to toggle bold on/off for the selected series
         google.visualization.events.addListener(chart, 'select', function() {
             var sel = chart.getSelection();
             if (sel.length > 0 && sel[0].column > 0) {
                 var spreadIdx = sel[0].column - 1;
-                var label = rawData.spreadLabels[spreadIdx];
-                console.log('Selected spread:', label, 'URL:', rawData.spreadUrls[spreadIdx]);
+                // Toggle: if same series clicked, unbold; otherwise bold the new one
+                if (selectedSpreadSeries === spreadIdx) {
+                    selectedSpreadSeries = -1; // Unbold
+                } else {
+                    selectedSpreadSeries = spreadIdx; // Bold new series
+                }
+                // Redraw both spread charts to reflect the change
+                drawCharts();
             }
         });
     }
