@@ -686,6 +686,12 @@ function writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices) 
         groupRange.setFontColor("#999999");
       }
 
+      // Highlight short puts in dark red bold (margin risk)
+      if (spreadDescription.includes("short-put") && idxDescription >= 0 && !allClosed) {
+        const descCell = sheet.getRange(firstRow, startCol + idxDescription);
+        descCell.setFontColor("#b71c1c").setFontWeight("bold");
+      }
+
       lastRow = lastLegRow;
       nextGroup++;
     }

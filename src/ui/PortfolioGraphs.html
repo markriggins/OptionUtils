@@ -26,6 +26,15 @@
             background: #dc3545; color: white; padding: 2px 6px; border-radius: 3px;
             font-size: 11px; font-weight: bold; white-space: nowrap; z-index: 11;
         }
+        .margin-call-line {
+            position: absolute; top: 0; bottom: 0; width: 0;
+            border-left: 3px solid #b71c1c; pointer-events: none; z-index: 9;
+        }
+        .margin-call-label {
+            position: absolute; bottom: 5px; transform: translateX(-50%);
+            background: #b71c1c; color: white; padding: 2px 6px; border-radius: 3px;
+            font-size: 10px; font-weight: bold; white-space: nowrap; z-index: 11;
+        }
         .chart-spinner {
           position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
           display: flex; flex-direction: column; align-items: center; gap: 10px; color: #5f6368;
@@ -190,6 +199,7 @@
         <div class="metric-box" data-help="Cash holdings"><span class="label">Cash</span><span id="sum-cash" class="value">—</span></div>
         <div class="metric-box" data-help="Current stock price"><span class="label">Current Price</span><span id="sum-price" class="value">—</span></div>
         <div class="metric-box" data-help="Total portfolio value at current price"><span class="label">Current Value</span><span id="sum-value" class="value">—</span></div>
+        <div class="metric-box" data-help="Price at which portfolio value equals margin requirement (40% of short put exposure)" style="border-bottom-color: #b71c1c;"><span class="label" style="color: #ef9a9a;">Margin Call</span><span id="sum-margin-call" class="value" style="color: #ef5350;">—</span></div>
     </div>
 </div>
 
@@ -293,6 +303,15 @@
                 document.getElementById('sum-value').innerText = '$' + formatNumber(data.totalValues[idx]);
             }
         }
+
+        // Display margin call price
+        if (data.marginCallPrice) {
+            document.getElementById('sum-margin-call').innerText = '$' + data.marginCallPrice.toFixed(0);
+        } else if (data.marginRequired > 0) {
+            document.getElementById('sum-margin-call').innerText = 'Below range';
+        } else {
+            document.getElementById('sum-margin-call').innerText = 'N/A';
+        }
     }
 
     function formatNumber(n) {
@@ -349,6 +368,45 @@
         }
     }
 
+    // Draw vertical line at margin call price on portfolio value chart only
+    function drawMarginCallLine(chartDivId, chart, marginCallPrice) {
+        if (!marginCallPrice || !chart) return;
+
+        // Remove existing margin call line
+        var container = document.getElementById(chartDivId);
+        var existing = container.querySelectorAll('.margin-call-line, .margin-call-label');
+        existing.forEach(function(el) { el.remove(); });
+
+        try {
+            var cli = chart.getChartLayoutInterface();
+            var chartArea = cli.getChartAreaBoundingBox();
+
+            var xMin = cli.getHAxisValue(chartArea.left);
+            var xMax = cli.getHAxisValue(chartArea.left + chartArea.width);
+
+            if (marginCallPrice < xMin || marginCallPrice > xMax) return;
+
+            var xRatio = (marginCallPrice - xMin) / (xMax - xMin);
+            var xPos = chartArea.left + (xRatio * chartArea.width);
+
+            var line = document.createElement('div');
+            line.className = 'margin-call-line';
+            line.style.left = xPos + 'px';
+            line.style.top = chartArea.top + 'px';
+            line.style.height = chartArea.height + 'px';
+            container.appendChild(line);
+
+            var label = document.createElement('div');
+            label.className = 'margin-call-label';
+            label.style.left = xPos + 'px';
+            label.style.top = (chartArea.top + chartArea.height - 20) + 'px';
+            label.innerText = 'Margin $' + marginCallPrice.toFixed(0);
+            container.appendChild(label);
+        } catch (e) {
+            console.log('Could not draw margin call line:', e);
+        }
+    }
+
     // Set up chart listeners for price line (only once per chart)
     // Handles both initial draw and zoom/pan redraws
     function setupChartPriceLineListeners(chartDivId, chartKey) {
@@ -359,6 +417,10 @@
             if (rawData && rawData.currentPrice) {
                 setTimeout(function() {
                     drawCurrentPriceLine(chartDivId, charts[chartKey], rawData.currentPrice, rawData.symbol);
+                    // Draw margin call line only on the portfolio value chart
+                    if (chartDivId === 'chart_value' && rawData.marginCallPrice) {
+                        drawMarginCallLine(chartDivId, charts[chartKey], rawData.marginCallPrice);
+                    }
                 }, 50);
             }
         };

@@ -687,6 +687,39 @@ function computePortfolioGraphData_(ss, symbol) {
     totalValuesCurrent.push(roundTo_(sharesValue + optionsCurrent, 2));
   }
 
+  // Calculate margin call price from short puts
+  // Margin required = SUM(strike × qty × 100) × marginRequirement
+  const MARGIN_REQUIREMENT = 0.40; // 40% for TSLA
+  let marginRequired = 0;
+  for (const sp of shortPuts) {
+    marginRequired += sp.strike * sp.qty * 100 * MARGIN_REQUIREMENT;
+  }
+
+  // Find price where portfolio value drops to margin required
+  let marginCallPrice = null;
+  if (marginRequired > 0 && totalValues.length > 0) {
+    // Scan from high to low price to find where value crosses below margin required
+    for (let i = totalValues.length - 1; i >= 0; i--) {
+      if (totalValues[i] <= marginRequired) {
+        // Linear interpolation between this point and the next higher one
+        if (i < totalValues.length - 1) {
+          const v0 = totalValues[i];
+          const v1 = totalValues[i + 1];
+          const p0 = prices[i];
+          const p1 = prices[i + 1];
+          // Interpolate: at what price does value = marginRequired?
+          const t = (marginRequired - v0) / (v1 - v0);
+          marginCallPrice = roundTo_(p0 + t * (p1 - p0), 0);
+        } else {
+          marginCallPrice = prices[i];
+        }
+        break;
+      }
+    }
+  }
+
+  log.info("margin", `Short puts: ${shortPuts.length}, margin required: $${marginRequired}, margin call price: $${marginCallPrice}`);
+
   return {
     symbol: symbol,
     prices: prices,
@@ -711,6 +744,8 @@ function computePortfolioGraphData_(ss, symbol) {
     spreadCount: allSpreads.length,
     spreadInvestment: totalSpreadInvestment,
     currentPrice: currentPrice,
+    marginCallPrice: marginCallPrice,
+    marginRequired: marginRequired,
   };
 }
 
