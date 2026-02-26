@@ -262,39 +262,75 @@ function combineNakedLegsIntoSpreads_(spreads) {
   const result = [];
 
   // Separate naked puts and other positions
-  const nakedShortPuts = []; // lowerStrike: null
-  const nakedLongPuts = [];  // upperStrike: null
+  const rawShortPuts = []; // lowerStrike: null
+  const rawLongPuts = [];  // upperStrike: null
   const other = [];
 
   for (const sp of spreads) {
     if (sp.optionType === "Put" && sp.lowerStrike === null && sp.upperStrike !== null) {
-      nakedShortPuts.push(sp);
+      rawShortPuts.push(sp);
     } else if (sp.optionType === "Put" && sp.upperStrike === null && sp.lowerStrike !== null) {
-      nakedLongPuts.push(sp);
+      rawLongPuts.push(sp);
     } else {
       other.push(sp);
     }
   }
 
-  // Try to match naked short puts with naked long puts
-  const usedLongs = new Set();
+  // Merge duplicate naked legs (same ticker/expiration/strike) before combining
+  // This handles cases where multiple transactions created separate entries for the same position
+  const mergeNakedLegs = function(legs, isShort) {
+    const merged = new Map();
+    for (const leg of legs) {
+      const exp = formatExpirationForKey_(leg.expiration);
+      const strike = isShort ? leg.upperStrike : leg.lowerStrike;
+      const key = `${leg.ticker}|${exp}|${strike}`;
 
-  for (const shortPut of nakedShortPuts) {
+      if (!merged.has(key)) {
+        merged.set(key, { ...leg });
+      } else {
+        const existing = merged.get(key);
+        const oldQty = Math.abs(existing.qty);
+        const newQty = Math.abs(leg.qty);
+        const totalQty = oldQty + newQty;
+
+        // Weighted average price
+        const priceField = isShort ? 'upperPrice' : 'lowerPrice';
+        existing[priceField] = (oldQty * existing[priceField] + newQty * leg[priceField]) / totalQty;
+        existing.qty = isShort ? -totalQty : totalQty;
+
+        // Keep latest date
+        if (leg.date && (!existing.date || leg.date > existing.date)) {
+          existing.date = leg.date;
+        }
+      }
+    }
+    return Array.from(merged.values());
+  };
+
+  const nakedShortPuts = mergeNakedLegs(rawShortPuts, true);
+  const nakedLongPuts = mergeNakedLegs(rawLongPuts, false);
+
+  // Try to match naked short puts with naked long puts (supports partial matching)
+  // Clone arrays since we'll modify quantities
+  const shortsToProcess = nakedShortPuts.map(sp => ({ ...sp, remainingQty: Math.abs(sp.qty) }));
+  const longsToProcess = nakedLongPuts.map(lp => ({ ...lp, remainingQty: lp.qty }));
+
+  for (const shortPut of shortsToProcess) {
     const exp = formatExpirationForKey_(shortPut.expiration);
-    const shortQty = Math.abs(shortPut.qty);
 
-    // Find matching long put: same ticker, same expiration, same quantity, lower strike
-    let matched = false;
-    for (let i = 0; i < nakedLongPuts.length; i++) {
-      if (usedLongs.has(i)) continue;
+    // Find matching long puts: same ticker, same expiration, lower strike
+    for (const longPut of longsToProcess) {
+      if (longPut.remainingQty <= 0) continue;
 
-      const longPut = nakedLongPuts[i];
       const longExp = formatExpirationForKey_(longPut.expiration);
 
       if (longPut.ticker === shortPut.ticker &&
           longExp === exp &&
-          longPut.qty === shortQty &&
-          longPut.lowerStrike < shortPut.upperStrike) {
+          longPut.lowerStrike < shortPut.upperStrike &&
+          shortPut.remainingQty > 0) {
+
+        // Match as many contracts as possible
+        const matchQty = Math.min(shortPut.remainingQty, longPut.remainingQty);
 
         // Combine into bull put spread
         result.push({
@@ -303,28 +339,36 @@ function combineNakedLegsIntoSpreads_(spreads) {
           lowerStrike: longPut.lowerStrike,
           upperStrike: shortPut.upperStrike,
           optionType: "Put",
-          qty: shortQty,
+          qty: matchQty,
           lowerPrice: longPut.lowerPrice,
           upperPrice: shortPut.upperPrice,
-          date: shortPut.date, // Use short put date as the position date
+          date: shortPut.date,
         });
 
-        usedLongs.add(i);
-        matched = true;
-        log.info("combine", `Combined naked puts into spread: ${shortPut.ticker} ${exp} ${longPut.lowerStrike}/${shortPut.upperStrike}`);
-        break;
+        shortPut.remainingQty -= matchQty;
+        longPut.remainingQty -= matchQty;
+        log.info("combine", `Combined naked puts into spread: ${shortPut.ticker} ${exp} ${longPut.lowerStrike}/${shortPut.upperStrike} x${matchQty}`);
       }
     }
 
-    if (!matched) {
-      result.push(shortPut); // Keep as naked short put
+    // Add any remaining short quantity as naked short put
+    if (shortPut.remainingQty > 0) {
+      result.push({
+        ...shortPut,
+        qty: -shortPut.remainingQty, // Restore negative sign for short
+      });
+      delete result[result.length - 1].remainingQty;
     }
   }
 
-  // Add unmatched long puts back
-  for (let i = 0; i < nakedLongPuts.length; i++) {
-    if (!usedLongs.has(i)) {
-      result.push(nakedLongPuts[i]);
+  // Add remaining long puts
+  for (const longPut of longsToProcess) {
+    if (longPut.remainingQty > 0) {
+      result.push({
+        ...longPut,
+        qty: longPut.remainingQty,
+      });
+      delete result[result.length - 1].remainingQty;
     }
   }
 
