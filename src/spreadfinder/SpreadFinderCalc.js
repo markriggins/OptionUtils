@@ -78,8 +78,20 @@ function estimateCurrentPrice_(calls) {
 /**
  * Generates all valid spreads from a sorted chain of calls.
  * Returns array of spread objects with metrics.
+ * @deprecated Use generateCallSpreads_ instead
  */
 function generateSpreads_(chain, config) {
+  return generateCallSpreads_(chain, config);
+}
+
+/**
+ * Generates all valid call spreads from a sorted chain of calls.
+ * Uses the new Outlook system with pro-rated targets.
+ * @param {Array} chain - Sorted array of call options
+ * @param {Object} config - Config including outlook data
+ * @returns {Array} Array of spread objects with metrics
+ */
+function generateCallSpreads_(chain, config) {
   const spreads = [];
   const n = chain.length;
 
@@ -95,8 +107,7 @@ function generateSpreads_(chain, config) {
       // Skip if no valid bid/ask
       if (lower.ask <= 0 || upper.bid < 0) continue;
 
-      // Calculate debit using mid pricing (validated by executed trades with GT 60 patience)
-      // For patient orders, mid is achievable; below mid may not fill
+      // Calculate debit using mid pricing
       const lowerMid = (lower.bid + lower.ask) / 2;
       const upperMid = (upper.bid + upper.ask) / 2;
 
@@ -118,53 +129,29 @@ function generateSpreads_(chain, config) {
       const expectedGain = calculateExpectedGain(lowerMid, upperMid, lower.strike, upper.strike, Math.abs(upper.delta));
       const expectedROI = debit > 0 ? expectedGain / debit : 0;
 
-      // Fitness = ExpROI * liquidity^0.2 (bid-ask spread is already in liquidity)
-      // timeFactor dropped — already baked into delta and probTouch
-      // Outlook boost: adjust fitness based on price target, date, and confidence
+      // Outlook boost using pro-rated target from Outlook sheet
       let outlookBoost = 1;
-      if (config.outlookFuturePrice > 0 && config.outlookConfidence > 0) {
-        const target = config.outlookFuturePrice;
-        const conf = config.outlookConfidence;
+      const outlook = config.outlook;
+      if (outlook && outlook.proRatedTarget > 0 && outlook.confidence > 0) {
+        const target = outlook.proRatedTarget;
+        const conf = outlook.confidence;
 
-        // Price proximity boost
+        // Price proximity boost based on pro-rated target
         let priceBoost;
         if (lower.strike >= target) {
-          // Both strikes above target — graduated penalty (further above = worse)
+          // Both strikes above target — graduated penalty
           const overshoot = (lower.strike - target) / target;
           priceBoost = 1 - conf * 0.5 * overshoot;
         } else if (upper.strike <= target) {
           // Both strikes below target — full boost by proximity
           priceBoost = 1 + conf * (upper.strike / target);
         } else {
-          // Straddles target — partial boost by how much width is captured
+          // Straddles target — partial boost
           const captured = (target - lower.strike) / width;
           priceBoost = 1 + conf * captured * 0.5;
         }
 
-        // Date proximity boost: expirations near outlookDate get more boost
-        // Expirations before target date are penalized (may expire before move happens)
-        let dateBoost = 1;
-        if (config.outlookDate) {
-          const expDate = parseDateAtMidnight_(lower.expiration);
-          const targetDate = parseDateAtMidnight_(config.outlookDate);
-          const now = new Date();
-          if (!expDate || !targetDate) continue;
-          const totalDays = Math.max(1, (targetDate - now) / (1000 * 60 * 60 * 24));
-          const diffDays = (expDate - targetDate) / (1000 * 60 * 60 * 24);
-
-          if (diffDays < 0) {
-            // Expires before target date — penalize proportionally
-            // Expiring way before target = bigger penalty
-            const earlyRatio = Math.abs(diffDays) / totalDays;
-            dateBoost = 1 - conf * Math.min(earlyRatio, 0.5);
-          } else {
-            // Expires on or after target date — boost, with falloff for much later
-            const lateRatio = diffDays / totalDays;
-            dateBoost = 1 + conf * Math.max(0, 0.3 - lateRatio * 0.2);
-          }
-        }
-
-        outlookBoost = priceBoost * dateBoost;
+        outlookBoost = priceBoost;
       }
 
       const fitness = roundTo_(expectedROI * Math.pow(liquidityScore, 0.2) * outlookBoost, 2);

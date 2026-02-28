@@ -2,14 +2,15 @@
  * SpreadFinder.js
  * Analyzes OptionPricesUploaded to find and rank bull call spread opportunities.
  *
- * Config lives on the SpreadFinderConfig sheet.
- * Results are written to the Spreads sheet.
+ * Config is stored in hidden per-symbol sheets: _<Symbol>CallSpreadFinderConfig
+ * Results are written to <Symbol>CallSpreads sheets.
+ * Outlook data lives in the Outlook sheet.
  *
  * Related files:
  * - SpreadFinderInit.js: Initialization, loading, and output functions
  * - SpreadFinderCalc.js: Calculation functions
  *
- * Version: 2.1
+ * Version: 3.0
  */
 
 /* =========================================================
@@ -17,188 +18,240 @@
    ========================================================= */
 
 /**
- * Runs SpreadFinder using config symbols or all available symbols/expirations.
+ * Shows the Call Spread Finder modal dialog.
  */
-function runSpreadFinder() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-
-  // Check if config sheet already exists (to show first-run message)
-  const isFirstRun = !ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
-
-  // Get available symbols and expirations from option prices
-  const options = getSpreadFinderOptions();
-
-  // Use config symbols if set, otherwise use all available
-  const configSheet = ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
-  const config = configSheet ? loadSpreadFinderConfig_(configSheet) : {};
-
-  const symbols = (config.symbols && config.symbols.length > 0)
-    ? config.symbols
-    : options.symbols;
-
-  // Use all expirations
-  const expirations = options.expirations.map(e => e.value);
-
-  // Run with these selections
-  runSpreadFinderWithSelection(symbols, expirations);
-
-  // Show first-run message
-  if (isFirstRun) {
-    SpreadsheetApp.getUi().alert(
-      "SpreadFinder Initialized",
-      "SpreadFinderConfig sheet created with default settings.\n\n" +
-      "You can modify it to customize:\n" +
-      "• Target ROI and max debit\n" +
-      "• Strike range and spread width\n" +
-      "• Months to expiration\n" +
-      "• Minimum volume/open interest\n\n" +
-      "Run SpreadFinder again after making changes.",
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
-  }
+function showCallSpreadFinderDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('ui/CallSpreadFinderDialog')
+    .setWidth(450)
+    .setHeight(520);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Call Spread Finder');
 }
 
 /**
- * Runs SpreadFinder with the selected symbols and expirations.
- * @param {string[]} symbols - Selected symbols
- * @param {string[]} expirations - Selected expiration dates (YYYY-MM-DD format)
+ * Gets data for the Call Spread Finder dialog.
+ * Returns symbols, expirations per symbol, and saved config per symbol.
  */
-function runSpreadFinderWithSelection(symbols, expirations) {
+function getCallSpreadFinderDialogData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(OPTION_PRICES_SHEET);
+
+  if (!sheet) {
+    throw new Error("No option prices loaded. Run 'Upload Option Prices' first.");
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    throw new Error("No option data found in " + OPTION_PRICES_SHEET);
+  }
+
+  // Read header row to find column indices
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]
+    .map(h => h.toString().trim().toLowerCase());
+  const symIdx = headers.indexOf("symbol");
+  const expIdx = headers.indexOf("expiration");
+
+  if (symIdx < 0 || expIdx < 0) {
+    throw new Error("Required columns 'symbol' and 'expiration' not found");
+  }
+
+  // Read symbol and expiration columns
+  const symCol = sheet.getRange(2, symIdx + 1, lastRow - 1, 1).getValues();
+  const expCol = sheet.getRange(2, expIdx + 1, lastRow - 1, 1).getValues();
+
+  // Build symbols set and expirations per symbol
+  const symbols = new Set();
+  const expirationsBySymbol = {}; // { TSLA: Map(key -> Date) }
+
+  for (let i = 0; i < symCol.length; i++) {
+    const sym = (symCol[i][0] || "").toString().trim().toUpperCase();
+    if (!sym) continue;
+    symbols.add(sym);
+
+    const exp = expCol[i][0];
+    if (exp) {
+      const expDate = parseDateAtMidnight_(exp);
+      if (expDate) {
+        const key = expDate.getFullYear() + "-" +
+          String(expDate.getMonth() + 1).padStart(2, "0") + "-" +
+          String(expDate.getDate()).padStart(2, "0");
+        if (!expirationsBySymbol[sym]) {
+          expirationsBySymbol[sym] = new Map();
+        }
+        expirationsBySymbol[sym].set(key, expDate);
+      }
+    }
+  }
+
+  // Sort symbols
+  const sortedSymbols = Array.from(symbols).sort();
+
+  // Format expirations per symbol
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const formattedExpirationsBySymbol = {};
+  for (const sym of sortedSymbols) {
+    const expMap = expirationsBySymbol[sym] || new Map();
+    formattedExpirationsBySymbol[sym] = Array.from(expMap.entries())
+      .sort((a, b) => a[1] - b[1])
+      .map(([key, date]) => ({
+        value: key,
+        label: months[date.getMonth()] + " " + date.getDate() + ", " + date.getFullYear()
+      }));
+  }
+
+  // Load saved config for each symbol
+  const configBySymbol = {};
+  for (const sym of sortedSymbols) {
+    configBySymbol[sym] = loadCallSpreadConfig_(ss, sym);
+  }
+
+  return {
+    symbols: sortedSymbols,
+    expirationsBySymbol: formattedExpirationsBySymbol,
+    configBySymbol: configBySymbol
+  };
+}
+
+/**
+ * Runs Call Spread Finder for a single symbol with the given config.
+ * Called from the dialog.
+ * @param {string} symbol - Stock symbol
+ * @param {Object} config - Config from dialog
+ */
+function runCallSpreadFinder(symbol, config) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  // Ensure config sheet exists, load config
-  const configSheet = ensureSpreadFinderConfigSheet_(ss);
-  const config = loadSpreadFinderConfig_(configSheet);
+  // Save config to hidden sheet
+  saveCallSpreadConfig_(ss, symbol, config);
 
-  // Override config with selection
-  config.symbols = symbols;
-  config.selectedExpirations = new Set(expirations);
+  // Ensure Outlook sheet exists
+  ensureOutlookSheet_(ss);
 
-  // Name results sheet after symbol(s)
-  const spreadsSheetName = symbols.length > 0
-    ? symbols.join(",") + "Spreads"
-    : SPREADS_SHEET;
-  const sheet = ensureSpreadsSheet_(ss, spreadsSheetName);
-  log.debug("spreadFinder", "Config: " + JSON.stringify(config));
+  // Parse selected expirations
+  const selectedExpirations = new Set(
+    (config.selectedExpirations || "").split(",").filter(Boolean)
+  );
 
-  // Load option data (filtered by selection)
-  const options = loadOptionData_(ss, config.symbols, config.selectedExpirations);
-  log.info("spreadFinder", "Loaded " + options.length + " options");
+  if (selectedExpirations.size === 0) {
+    throw new Error("No expirations selected");
+  }
+
+  // Load option data for this symbol and selected expirations
+  const options = loadOptionData_(ss, [symbol], selectedExpirations);
+  log.info("spreadFinder", "Loaded " + options.length + " options for " + symbol);
 
   // Filter to calls only
   const calls = options.filter(o => o.type === "Call");
   log.debug("spreadFinder", "Filtered to " + calls.length + " calls");
 
-  // Group by symbol+expiration
+  if (calls.length === 0) {
+    throw new Error("No call options found for " + symbol + " with selected expirations");
+  }
+
+  // Group by expiration
   const grouped = groupBySymbolExpiration_(calls);
 
-  // Derive current price from ATM calls (delta closest to 0.5)
+  // Derive current price from ATM calls
   const currentPrice = estimateCurrentPrice_(calls);
   log.debug("spreadFinder", "Estimated current price: " + currentPrice);
-
-  // Default outlook if not set by user
-  if (!config.outlookFuturePrice) {
-    config.outlookFuturePrice = roundTo_(currentPrice * 1.25, 2);
-    log.debug("spreadFinder", "Defaulting outlookFuturePrice to " + config.outlookFuturePrice);
-  }
-  if (!config.outlookConfidence) {
-    config.outlookConfidence = 0.5;
-  }
-  if (!config.outlookDate) {
-    // Default to 18 months from now
-    const d = new Date();
-    d.setMonth(d.getMonth() + 18);
-    config.outlookDate = d;
-  }
 
   // Generate and score all spreads
   const spreads = [];
   for (const key of Object.keys(grouped)) {
     const chain = grouped[key];
-    const chainSpreads = generateSpreads_(chain, config);
+    const expDate = parseDateAtMidnight_(chain[0].expiration);
+
+    // Get outlook for this expiration
+    const outlook = getOutlookForExpiration_(ss, symbol, expDate, currentPrice);
+
+    const chainConfig = {
+      ...config,
+      currentPrice: currentPrice,
+      outlook: outlook
+    };
+
+    const chainSpreads = generateCallSpreads_(chain, chainConfig);
     spreads.push(...chainSpreads);
   }
   log.info("spreadFinder", "Generated " + spreads.length + " spreads");
 
-  // Load held positions from Positions sheet
+  // Load held positions
   const conflicts = loadHeldPositions_(ss);
-  log.debug("spreadFinder", "Loaded " + conflicts.size + " held positions");
 
-  // Filter by config constraints, mark conflicts instead of removing
-  // Skip expiration date range filter if user selected specific expirations
-  const minExpDate = config.minExpirationDate;
-  const maxExpDate = config.maxExpirationDate;
-  const skipExpDateFilter = !!config.selectedExpirations;
+  // Filter by config constraints
   const filtered = spreads.filter(s => {
-    const expDate = parseDateAtMidnight_(s.expiration);
-    // Mark conflicts as held (but keep them in results)
     s.held = conflicts.has(`${s.symbol}|${s.lowerStrike}|${s.expiration}`);
-    if (config.symbols && !config.symbols.includes(s.symbol)) return false;
     return s.debit > 0 &&
       s.roi >= config.minROI &&
       s.liquidityScore >= config.minLiquidityScore &&
       s.lowerStrike >= config.minStrike &&
-      s.upperStrike <= config.maxStrike &&
-      (skipExpDateFilter || (expDate >= minExpDate && expDate <= maxExpDate));
+      s.upperStrike <= config.maxStrike;
   });
   log.info("spreadFinder", "Filtered to " + filtered.length + " spreads meeting criteria");
 
   // Sort by fitness (descending)
   filtered.sort((a, b) => b.fitness - a.fitness);
 
-  // Output results to same sheet below config
-  outputSpreadResults_(sheet, filtered, config);
+  // Output to <Symbol>CallSpreads sheet
+  const sheetName = symbol + "CallSpreads";
+  const outputSheet = ensureSpreadsSheet_(ss, sheetName);
+  outputSpreadResults_(outputSheet, filtered, config);
 
-  // Debug info
-  const debugMsg = `Options loaded: ${options.length}\n` +
+  // Show summary
+  SpreadsheetApp.getUi().alert(
+    "Call Spread Finder Complete",
+    `Symbol: ${symbol}\n` +
+    `Options loaded: ${options.length}\n` +
     `Calls found: ${calls.length}\n` +
     `Spreads generated: ${spreads.length}\n` +
-    `After filtering: ${filtered.length}`;
-
-  SpreadsheetApp.getUi().alert(
-    "SpreadFinder Complete",
-    debugMsg,
+    `After filtering: ${filtered.length}`,
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
 
 /**
+ * Legacy: Runs SpreadFinder using old config (deprecated).
+ * Redirects to the new Call Spread Finder dialog.
+ */
+function runSpreadFinder() {
+  showCallSpreadFinderDialog();
+}
+
+/**
+ * Finds the most recently modified CallSpreads sheet.
+ * @param {Spreadsheet} ss - The active spreadsheet
+ * @returns {Sheet|null} The CallSpreads sheet or null
+ */
+function findCallSpreadsSheet_(ss) {
+  const sheets = ss.getSheets();
+  // Look for sheets ending in "CallSpreads"
+  const callSpreadsSheets = sheets.filter(s => s.getName().endsWith("CallSpreads"));
+  if (callSpreadsSheets.length === 0) return null;
+  // Return first one found (could enhance to track most recent)
+  return callSpreadsSheets[0];
+}
+
+/**
  * Opens a large dashboard window with Delta vs ROI and Strike vs ROI.
- * If no spreads data exists or config has changed, runs SpreadFinder first.
+ * If no spreads data exists, prompts user to run Call Spread Finder first.
  */
 function showSpreadFinderGraphs() {
   SpreadsheetApp.flush();
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const configSheet = ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
-  const config = configSheet ? loadSpreadFinderConfig_(configSheet) : {};
-  const spreadsSheetName = config.symbols && config.symbols.length > 0
-    ? config.symbols.join(",") + "Spreads"
-    : SPREADS_SHEET;
-  let sheet = ss.getSheetByName(spreadsSheetName);
+  const sheet = findCallSpreadsSheet_(ss);
 
-  // Check if we need to run SpreadFinder
-  let needsRun = false;
   if (!sheet || sheet.getLastRow() < 3) {
-    // No spreads data
-    needsRun = true;
-  } else {
-    // Check if config has changed since last run
-    const currentHash = computeConfigHash_(config);
-    const storedHash = getStoredConfigHash_(sheet);
-    if (currentHash !== storedHash) {
-      needsRun = true;
-    }
-  }
-
-  if (needsRun) {
-    runSpreadFinder();
-    SpreadsheetApp.flush();
+    SpreadsheetApp.getUi().alert(
+      "No Spread Data",
+      "No call spread data found. Please run 'Call Spread Finder' first.",
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    return;
   }
 
   // Creates the SpreadFinderGraphs modal dialog
   const html = HtmlService.createHtmlOutputFromFile('ui/SpreadFinderGraphs')
-      .setWidth(1050) // Wide enough for side-by-side or large stacked charts
+      .setWidth(1050)
       .setHeight(850);
 
   SpreadsheetApp.getUi().showModalDialog(html, 'Spread Finder Graphs');
@@ -211,12 +264,10 @@ function showSpreadFinderGraphs() {
 function getSpreadFinderGraphData() {
   log.debug("spreadFinder", "getSpreadFinderGraphData called");
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const configSheet = ss.getSheetByName(SPREAD_FINDER_CONFIG_SHEET);
-  const config = configSheet ? loadSpreadFinderConfig_(configSheet) : {};
-  const spreadsSheetName = config.symbols && config.symbols.length > 0
-    ? config.symbols.join(",") + "Spreads"
-    : SPREADS_SHEET;
-  const sheet = ss.getSheetByName(spreadsSheetName);
+  const sheet = findCallSpreadsSheet_(ss);
+
+  if (!sheet) return [];
+
   const lastRow = sheet.getLastRow();
   const headerRow = 2; // Row 1=timestamp, Row 2=headers
   const startRow = 3;  // Row 3+=data

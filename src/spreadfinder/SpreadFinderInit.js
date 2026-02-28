@@ -3,15 +3,265 @@
  * Initialization, loading, and output functions for SpreadFinder.
  */
 
-const SPREAD_FINDER_CONFIG_SHEET = "SpreadFinderConfig";
-const SPREADS_SHEET = "Spreads";
+const SPREAD_FINDER_CONFIG_SHEET = "SpreadFinderConfig"; // Legacy, to be removed
+const SPREADS_SHEET = "Spreads"; // Legacy, to be removed
 const OPTION_PRICES_SHEET = "OptionPricesUploaded";
+const OUTLOOK_SHEET = "Outlook";
 const CONFIG_COL = 1; // Column A
 const CONFIG_START_ROW = 1;
+
+/**
+ * Gets the hidden config sheet name for a symbol's call spread finder.
+ * @param {string} symbol - The stock symbol
+ * @returns {string} Sheet name like "_TSLACallSpreadFinderConfig"
+ */
+function getCallSpreadConfigSheetName_(symbol) {
+  return `_${symbol.toUpperCase()}CallSpreadFinderConfig`;
+}
 
 /** Test function to verify file loads */
 function testSpreadFinderLoaded() {
   return "SpreadFinder.js loaded OK";
+}
+
+/* =========================================================
+   Outlook Sheet Functions
+   ========================================================= */
+
+/**
+ * Ensures the Outlook sheet exists with proper structure.
+ * Columns: Symbol, TargetPrice, TargetDate, Confidence
+ * @param {Spreadsheet} ss - The active spreadsheet
+ * @returns {Sheet} The Outlook sheet
+ */
+function ensureOutlookSheet_(ss) {
+  let sheet = ss.getSheetByName(OUTLOOK_SHEET);
+  if (sheet) return sheet;
+
+  sheet = ss.insertSheet(OUTLOOK_SHEET);
+
+  const headers = ["Symbol", "TargetPrice", "TargetDate", "Confidence"];
+  const headerNotes = [
+    "Stock ticker symbol (e.g., TSLA)",
+    "Target price you expect the stock to reach",
+    "Date by which you expect the target price",
+    "Confidence level 0-1 (e.g., 0.7 = 70% confident)"
+  ];
+
+  // Set headers
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setValues([headers]);
+  headerRange.setNotes([headerNotes]);
+  headerRange.setFontWeight("bold").setBackground("#4285f4").setFontColor("white");
+
+  // Add sample data
+  const sampleData = [
+    ["TSLA", 500, "6/15/2027", 0.7],
+    ["TSLA", 650, "6/15/2028", 0.5]
+  ];
+  sheet.getRange(2, 1, sampleData.length, headers.length).setValues(sampleData);
+
+  // Format columns
+  sheet.setColumnWidth(1, 80);   // Symbol
+  sheet.setColumnWidth(2, 100);  // TargetPrice
+  sheet.setColumnWidth(3, 100);  // TargetDate
+  sheet.setColumnWidth(4, 100);  // Confidence
+
+  // Number formats
+  sheet.getRange(2, 2, 100, 1).setNumberFormat("$#,##0");      // TargetPrice
+  sheet.getRange(2, 3, 100, 1).setNumberFormat("M/d/yyyy");    // TargetDate
+  sheet.getRange(2, 4, 100, 1).setNumberFormat("0.00");        // Confidence
+
+  return sheet;
+}
+
+/**
+ * Loads outlook data for a symbol and calculates pro-rated target for an expiration.
+ * Uses linear interpolation from current price to target price.
+ * @param {Spreadsheet} ss - The active spreadsheet
+ * @param {string} symbol - Stock symbol
+ * @param {Date} expirationDate - The option expiration date
+ * @param {number} currentPrice - Current stock price
+ * @returns {Object|null} { targetPrice, confidence, proRatedTarget } or null if no outlook
+ */
+function getOutlookForExpiration_(ss, symbol, expirationDate, currentPrice) {
+  const sheet = ss.getSheetByName(OUTLOOK_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) return null;
+
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 4).getValues();
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+
+  // Find all outlook rows for this symbol
+  const outlooks = [];
+  for (const row of data) {
+    const sym = (row[0] || "").toString().trim().toUpperCase();
+    if (sym !== symbol.toUpperCase()) continue;
+
+    const targetPrice = parseFloat(row[1]);
+    const targetDate = parseDateAtMidnight_(row[2]);
+    const confidence = parseFloat(row[3]);
+
+    if (!Number.isFinite(targetPrice) || !targetDate || !Number.isFinite(confidence)) continue;
+
+    outlooks.push({ targetPrice, targetDate, confidence });
+  }
+
+  if (outlooks.length === 0) return null;
+
+  // Find the outlook with TargetDate closest to (but <= ) expiration
+  // If none found, use the closest overall
+  let bestOutlook = null;
+  let bestDiff = Infinity;
+
+  for (const o of outlooks) {
+    const diff = expirationDate.getTime() - o.targetDate.getTime();
+    if (diff >= 0 && diff < bestDiff) {
+      // TargetDate <= expiration, prefer closest
+      bestDiff = diff;
+      bestOutlook = o;
+    }
+  }
+
+  // If no outlook before expiration, use closest overall
+  if (!bestOutlook) {
+    for (const o of outlooks) {
+      const diff = Math.abs(expirationDate.getTime() - o.targetDate.getTime());
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestOutlook = o;
+      }
+    }
+  }
+
+  if (!bestOutlook) return null;
+
+  // Pro-rate linearly: current price → target price
+  // proRatedTarget = currentPrice + (targetPrice - currentPrice) * (timeToExpiration / timeToTarget)
+  const timeToExpiration = (expirationDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+  const timeToTarget = (bestOutlook.targetDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+
+  let proRatedTarget;
+  if (timeToTarget <= 0) {
+    // Target date is in the past, use target price directly
+    proRatedTarget = bestOutlook.targetPrice;
+  } else {
+    const ratio = timeToExpiration / timeToTarget;
+    proRatedTarget = currentPrice + (bestOutlook.targetPrice - currentPrice) * ratio;
+  }
+
+  return {
+    targetPrice: bestOutlook.targetPrice,
+    targetDate: bestOutlook.targetDate,
+    confidence: bestOutlook.confidence,
+    proRatedTarget: roundTo_(proRatedTarget, 2)
+  };
+}
+
+/* =========================================================
+   Per-Symbol Call Spread Config Functions
+   ========================================================= */
+
+/**
+ * Default config values for call spread finder.
+ */
+const CALL_SPREAD_CONFIG_DEFAULTS = {
+  selectedExpirations: "",  // Comma-separated YYYY-MM-DD
+  minStrike: 200,
+  maxStrike: 800,
+  minSpreadWidth: 20,
+  maxSpreadWidth: 150,
+  minROI: 2.0,
+  minLiquidityScore: 0.50,
+  patience: 60
+};
+
+/**
+ * Ensures the hidden config sheet exists for a symbol.
+ * @param {Spreadsheet} ss - The active spreadsheet
+ * @param {string} symbol - Stock symbol
+ * @returns {Sheet} The config sheet (hidden)
+ */
+function ensureCallSpreadConfigSheet_(ss, symbol) {
+  const sheetName = getCallSpreadConfigSheetName_(symbol);
+  let sheet = ss.getSheetByName(sheetName);
+
+  if (sheet) return sheet;
+
+  // Create new hidden config sheet
+  sheet = ss.insertSheet(sheetName);
+  sheet.hideSheet();
+
+  // Initialize with defaults
+  const configData = [
+    ["Setting", "Value"],
+    ["selectedExpirations", ""],
+    ["minStrike", CALL_SPREAD_CONFIG_DEFAULTS.minStrike],
+    ["maxStrike", CALL_SPREAD_CONFIG_DEFAULTS.maxStrike],
+    ["minSpreadWidth", CALL_SPREAD_CONFIG_DEFAULTS.minSpreadWidth],
+    ["maxSpreadWidth", CALL_SPREAD_CONFIG_DEFAULTS.maxSpreadWidth],
+    ["minROI", CALL_SPREAD_CONFIG_DEFAULTS.minROI],
+    ["minLiquidityScore", CALL_SPREAD_CONFIG_DEFAULTS.minLiquidityScore],
+    ["patience", CALL_SPREAD_CONFIG_DEFAULTS.patience]
+  ];
+
+  sheet.getRange(1, 1, configData.length, 2).setValues(configData);
+  sheet.getRange(1, 1, 1, 2).setFontWeight("bold");
+
+  return sheet;
+}
+
+/**
+ * Loads config for a symbol's call spread finder.
+ * @param {Spreadsheet} ss - The active spreadsheet
+ * @param {string} symbol - Stock symbol
+ * @returns {Object} Config object with all settings
+ */
+function loadCallSpreadConfig_(ss, symbol) {
+  const config = { ...CALL_SPREAD_CONFIG_DEFAULTS };
+  const sheetName = getCallSpreadConfigSheetName_(symbol);
+  const sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet || sheet.getLastRow() < 2) return config;
+
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+  for (const row of data) {
+    const setting = (row[0] || "").toString().trim();
+    const value = row[1];
+
+    if (setting === "selectedExpirations") {
+      config.selectedExpirations = (value || "").toString().trim();
+    } else if (setting in CALL_SPREAD_CONFIG_DEFAULTS && value !== "" && value != null) {
+      config[setting] = parseFloat(value);
+    }
+  }
+
+  return config;
+}
+
+/**
+ * Saves config for a symbol's call spread finder.
+ * @param {Spreadsheet} ss - The active spreadsheet
+ * @param {string} symbol - Stock symbol
+ * @param {Object} config - Config object to save
+ */
+function saveCallSpreadConfig_(ss, symbol, config) {
+  const sheet = ensureCallSpreadConfigSheet_(ss, symbol);
+
+  const configData = [
+    ["Setting", "Value"],
+    ["selectedExpirations", config.selectedExpirations || ""],
+    ["minStrike", config.minStrike],
+    ["maxStrike", config.maxStrike],
+    ["minSpreadWidth", config.minSpreadWidth],
+    ["maxSpreadWidth", config.maxSpreadWidth],
+    ["minROI", config.minROI],
+    ["minLiquidityScore", config.minLiquidityScore],
+    ["patience", config.patience]
+  ];
+
+  sheet.getRange(1, 1, configData.length, 2).setValues(configData);
+  sheet.getRange(1, 1, 1, 2).setFontWeight("bold");
 }
 
 /**

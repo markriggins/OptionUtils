@@ -110,10 +110,17 @@ function PlotPortfolioValueByPrice() {
 }
 
 /**
- * Runs SpreadFinder analysis to find attractive spreads.
+ * Runs SpreadFinder analysis to find attractive spreads (legacy).
  */
 function runSpreadFinder() {
   runner_(SpreadFinder.runSpreadFinder);
+}
+
+/**
+ * Shows the Call Spread Finder dialog.
+ */
+function showCallSpreadFinderDialog() {
+  runner_(SpreadFinder.showCallSpreadFinderDialog);
 }
 
 /**
@@ -174,13 +181,30 @@ function getSpreadFinderOptions() {
 }
 
 /**
- * Runs SpreadFinder with user-selected symbols and expirations.
+ * Runs SpreadFinder with user-selected symbols and expirations (legacy).
  * @param {string[]} symbols - Selected ticker symbols.
  * @param {string[]} expirations - Selected expiration dates.
  * @returns {Object} Analysis results.
  */
 function runSpreadFinderWithSelection(symbols, expirations) {
   return runner_(SpreadFinder.runSpreadFinderWithSelection, [symbols, expirations]);
+}
+
+/**
+ * Gets data for Call Spread Finder dialog.
+ * @returns {Object} Symbols, expirations per symbol, and saved configs.
+ */
+function getCallSpreadFinderDialogData() {
+  return runner_(SpreadFinder.getCallSpreadFinderDialogData);
+}
+
+/**
+ * Runs Call Spread Finder for a single symbol.
+ * @param {string} symbol - Stock symbol.
+ * @param {Object} config - Config from dialog.
+ */
+function runCallSpreadFinder(symbol, config) {
+  return runner_(SpreadFinder.runCallSpreadFinder, [symbol, config]);
 }
 
 /**

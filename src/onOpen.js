@@ -8,8 +8,8 @@ function setupSpreadFinderMenu() {
   const spreadFinderMenu = ui.createMenu('SpreadFinder')
     .addItem('Upload Option Prices...', 'showUploadOptionPricesDialog')
     .addSeparator()
-    .addItem('Run SpreadFinder', 'runSpreadFinder')
-    .addItem('View Graphs', 'showSpreadFinderGraphs');
+    .addItem('Run Call Spread Finder', 'showCallSpreadFinderDialog')
+    .addItem('View Call Spread Graphs', 'showSpreadFinderGraphs');
 
   const portfolioMenu = ui.createMenu('Portfolio')
     .addItem('Upload Portfolio/Transactions...', 'showUploadRebuildDialog')
