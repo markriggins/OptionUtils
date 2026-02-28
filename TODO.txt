@@ -4,3 +4,21 @@
   4. Find out why, on a fresh copy it thinks TSLA is 826 shares and	$480.00
   10. Be sure that the DATA/OptionPrices support the sample portfolio.  Put "sample" in their name, so they will be ignored later
   11. Look at fitness, make it its own function, map it to 0-1
+
+
+  make liquidty for spreads factor in both legs
+
+
+  /**
+   * Calculates a conservative liquidity score for a two-legged spread.
+   * @param {Object} leg1 {bid, ask, vol, oi}
+   * @param {Object} leg2 {bid, ask, vol, oi}
+   * @return {number} Combined liquidity score 0-1.
+   */
+  function getSpreadLiquidity(leg1, leg2) {
+    const score1 = calculateLiquidityScore(leg1.bid, leg1.ask, leg1.vol, leg1.oi);
+    const score2 = calculateLiquidityScore(leg2.bid, leg2.ask, leg2.vol, leg2.oi);
+
+    // Return the minimum score because a spread is only as liquid as its worst leg.
+    return Math.min(score1, score2);
+  }
