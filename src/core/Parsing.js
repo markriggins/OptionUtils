@@ -371,8 +371,18 @@ function detectPositionType_(legs) {
 
     // Vertical spreads: same type, opposite signs, AND equal absolute quantities
     if (sameType && oppositeSigns && equalQty) {
-      if (a.type === "Call") return "bull-call-spread";
-      if (a.type === "Put") return "bull-put-spread";
+      const longLeg = a.qty > 0 ? a : b;
+      const shortLeg = a.qty > 0 ? b : a;
+      const longIsLower = longLeg.strike < shortLeg.strike;
+
+      if (a.type === "Call") {
+        // Bull call: long lower, short higher. Bear call: short lower, long higher.
+        return longIsLower ? "bull-call-spread" : "bear-call-spread";
+      }
+      if (a.type === "Put") {
+        // Bull put: long lower, short higher. Bear put: short lower, long higher.
+        return longIsLower ? "bull-put-spread" : "bear-put-spread";
+      }
     }
 
     // 2 option legs that don't match known patterns = custom
@@ -927,6 +937,23 @@ function test_detectPositionType_spreads() {
     ]),
     "custom",
     "unequal qty puts = custom (ratio spread)"
+  );
+  // Bear spreads: short lower strike, long higher strike
+  assertEqual(
+    detectPositionType_([
+      { strike: 425, type: "Call", qty: -4 },
+      { strike: 465, type: "Call", qty: 4 },
+    ]),
+    "bear-call-spread",
+    "Bear call spread: short lower, long higher"
+  );
+  assertEqual(
+    detectPositionType_([
+      { strike: 300, type: "Put", qty: -5 },
+      { strike: 350, type: "Put", qty: 5 },
+    ]),
+    "bear-put-spread",
+    "Bear put spread: short lower, long higher"
   );
   log.info("test", "All detectPositionType spread tests passed");
 }
