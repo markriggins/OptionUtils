@@ -397,7 +397,7 @@ function combineNakedLegsIntoSpreads_(spreads) {
  * @param {Object[]} spreads - Array of spread positions
  * @returns {Object[]} Array with matching spreads combined into iron condors/butterflies
  */
-function combineSpreadsIntoIronCondors_(spreads) {
+function combineRelatedSpreadsIntoIronCondorsAndButterflies_(spreads) {
   const result = [];
 
   // Identify bull-put-spreads and bear-call-spreads
