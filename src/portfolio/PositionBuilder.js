@@ -379,6 +379,129 @@ function combineNakedLegsIntoSpreads_(spreads) {
 }
 
 /**
+ * Combines matching bull-put-spreads and bear-call-spreads into iron condors/butterflies.
+ *
+ * When a user has separate put and call credit spreads on the same underlying with
+ * matching expiration and quantity, they form an iron condor (or iron butterfly if
+ * the short strikes match).
+ *
+ * Spread structure from pairTransactionsIntoSpreads_:
+ * - lowerStrike = LONG leg's strike
+ * - upperStrike = SHORT leg's strike
+ * - qty = always positive (contract count)
+ *
+ * So:
+ * - Bull put spread: Put, lowerStrike < upperStrike (long lower, short higher)
+ * - Bear call spread: Call, lowerStrike > upperStrike (long higher, short lower)
+ *
+ * @param {Object[]} spreads - Array of spread positions
+ * @returns {Object[]} Array with matching spreads combined into iron condors/butterflies
+ */
+function combineSpreadsIntoIronCondors_(spreads) {
+  const result = [];
+
+  // Identify bull-put-spreads and bear-call-spreads
+  const bullPutSpreads = [];
+  const bearCallSpreads = [];
+  const other = [];
+
+  for (const sp of spreads) {
+    // Bull put spread: Put, long lower strike, short higher strike
+    // lowerStrike (long) < upperStrike (short)
+    if (sp.optionType === "Put" && sp.lowerStrike != null && sp.upperStrike != null &&
+        sp.lowerStrike < sp.upperStrike && sp.qty > 0) {
+      bullPutSpreads.push(sp);
+    }
+    // Bear call spread: Call, long higher strike, short lower strike
+    // lowerStrike (long) > upperStrike (short)
+    else if (sp.optionType === "Call" && sp.lowerStrike != null && sp.upperStrike != null &&
+             sp.lowerStrike > sp.upperStrike && sp.qty > 0) {
+      bearCallSpreads.push(sp);
+    }
+    else {
+      other.push(sp);
+    }
+  }
+
+  // Try to match bull-put-spreads with bear-call-spreads
+  const usedBullPuts = new Set();
+  const usedBearCalls = new Set();
+
+  for (let i = 0; i < bullPutSpreads.length; i++) {
+    const bps = bullPutSpreads[i];
+    const bpsExp = formatExpirationForKey_(bps.expiration);
+    const bpsQty = bps.qty;
+
+    for (let j = 0; j < bearCallSpreads.length; j++) {
+      if (usedBearCalls.has(j)) continue;
+
+      const bcs = bearCallSpreads[j];
+      const bcsExp = formatExpirationForKey_(bcs.expiration);
+      const bcsQty = bcs.qty;
+
+      // Match criteria: same ticker, same expiration, same quantity
+      if (bps.ticker === bcs.ticker && bpsExp === bcsExp && bpsQty === bcsQty) {
+        // For bull put spread: upperStrike is the SHORT put
+        // For bear call spread: upperStrike is the SHORT call
+        const shortPutStrike = bps.upperStrike;
+        const shortCallStrike = bcs.upperStrike;
+
+        // Determine if iron condor or iron butterfly
+        let strategyType;
+        if (shortPutStrike === shortCallStrike) {
+          strategyType = "iron-butterfly";
+        } else if (shortPutStrike < shortCallStrike) {
+          strategyType = "iron-condor";
+        } else {
+          // Short strikes overlap (put > call), not a valid IC/IB, skip
+          continue;
+        }
+
+        // Create the combined position with all 4 legs
+        // Bull put: long bps.lowerStrike put, short bps.upperStrike put
+        // Bear call: short bcs.upperStrike call, long bcs.lowerStrike call
+        result.push({
+          type: strategyType,
+          ticker: bps.ticker,
+          expiration: bps.expiration,
+          qty: bpsQty,
+          date: bps.date > bcs.date ? bps.date : bcs.date,
+          legs: [
+            { strike: bps.lowerStrike, optionType: "Put", qty: bpsQty, price: bps.lowerPrice },
+            { strike: bps.upperStrike, optionType: "Put", qty: -bpsQty, price: bps.upperPrice },
+            { strike: bcs.upperStrike, optionType: "Call", qty: -bcsQty, price: bcs.upperPrice },
+            { strike: bcs.lowerStrike, optionType: "Call", qty: bcsQty, price: bcs.lowerPrice },
+          ].sort((a, b) => a.strike - b.strike),
+        });
+
+        usedBullPuts.add(i);
+        usedBearCalls.add(j);
+        log.info("combine", `Combined ${bps.ticker} ${bpsExp} into ${strategyType}: ` +
+          `${bps.lowerStrike}/${bps.upperStrike}/${bcs.upperStrike}/${bcs.lowerStrike} x${bpsQty}`);
+        break;
+      }
+    }
+  }
+
+  // Add unmatched spreads
+  for (let i = 0; i < bullPutSpreads.length; i++) {
+    if (!usedBullPuts.has(i)) {
+      result.push(bullPutSpreads[i]);
+    }
+  }
+  for (let j = 0; j < bearCallSpreads.length; j++) {
+    if (!usedBearCalls.has(j)) {
+      result.push(bearCallSpreads[j]);
+    }
+  }
+
+  // Add all other positions
+  result.push(...other);
+
+  return result;
+}
+
+/**
  * Builds a map of closing prices from close transactions.
  * Key: "TICKER|EXPIRATION|STRIKE|TYPE" -> price
  *

@@ -235,7 +235,10 @@ function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
 
   // Combine naked legs - include filtered transactions AND existing naked puts
   const allNakedLegs = [...filteredPairedSpreads, ...existingNakedShortPuts];
-  const combinedSpreads = combineNakedLegsIntoSpreads_(allNakedLegs);
+  const nakedCombined = combineNakedLegsIntoSpreads_(allNakedLegs);
+
+  // Combine matching bull-put-spreads and bear-call-spreads into iron condors/butterflies
+  const combinedSpreads = combineSpreadsIntoIronCondors_(nakedCombined);
 
   // Identify which existing naked puts were combined vs still naked
   // - Unmatched existing puts remain in result with _existingKey
