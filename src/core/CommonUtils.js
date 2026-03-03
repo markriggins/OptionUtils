@@ -18,24 +18,9 @@ function roundTo_(n, digits) {
   return Math.round(Number(n) * f) / f;
 }
 
-// ---- TimeZone and Date Utilities ----
+// ---- Date Utilities ----
 // Standard: Store dates as Date objects at midnight.
 // Display: Format as M/D/YYYY using formatDateMDYYYY_().
-
-/**
- * Gets the timezone for date formatting.
- * Uses the spreadsheet's timezone setting, defaulting to NYSE timezone.
- * @returns {string} IANA timezone identifier
- */
-function getTimeZone_() {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (!ss) return "America/New_York";
-    return ss.getSpreadsheetTimeZone() || "America/New_York";
-  } catch (e) {
-    return "America/New_York";
-  }
-}
 
 /**
  * Creates a Date at midnight local time.
