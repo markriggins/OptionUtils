@@ -127,6 +127,59 @@ function numOr_(v, fallback) {
 }
 
 /**
+ * Parses a CSV line handling quoted fields.
+ * @param {string} line - CSV line to parse
+ * @returns {string[]} Array of field values
+ */
+function parseCsvLineIntoFields_(line) {
+  const result = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+    } else if (ch === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+/**
+ * Parses OCC-format option symbol like "TSLA--281215C00500000"
+ * Format: TICKER + padding + YYMMDD + C/P + 8-digit strike (price * 1000)
+ * @param {string} symbol - OCC option symbol
+ * @returns {{ ticker: string, expiration: string, strike: number, type: string }|null}
+ */
+function parseOccOptionSymbol_(symbol) {
+  const match = symbol.match(/^([A-Z]+)\W*(\d{6})([CP])(\d{8})$/i);
+  if (!match) return null;
+
+  const [, ticker, dateStr, typeChar, strikeStr] = match;
+
+  const yy = parseInt(dateStr.slice(0, 2), 10);
+  const mm = parseInt(dateStr.slice(2, 4), 10);
+  const dd = parseInt(dateStr.slice(4, 6), 10);
+  const fullYear = 2000 + yy;
+
+  const strike = parseInt(strikeStr, 10) / 1000;
+  const type = typeChar.toUpperCase() === "C" ? "Call" : "Put";
+
+  return {
+    ticker: ticker.toUpperCase(),
+    expiration: `${mm}/${dd}/${fullYear}`,
+    strike,
+    type,
+  };
+}
+
+/**
  * Format expiration for chart label: "Dec 28" from a Date or string.
  */
 function formatExpirationLabel_(exp) {

@@ -60,7 +60,7 @@ function parseEtradeTransactionsFromCsv_(csvContent) {
   const oldFormatSimpleTypes = ["Bought", "Sold"];
 
   // Find column indices from header
-  const headerCols = parseCsvLine_(lines[headerIdx]);
+  const headerCols = parseCsvLineIntoFields_(lines[headerIdx]);
   const colIndex = (name) => headerCols.findIndex(h => h.trim().toLowerCase() === name.toLowerCase());
 
   // Column mappings differ between formats
@@ -92,7 +92,7 @@ function parseEtradeTransactionsFromCsv_(csvContent) {
     const line = lines[i].trim();
     if (!line) continue;
 
-    const cols = parseCsvLine_(line);
+    const cols = parseCsvLineIntoFields_(line);
     if (cols.length < 6) continue;
 
     const dateStr = cols[dateIdx] || "";
@@ -238,56 +238,6 @@ function parseEtradeOptionSymbol_(symbol) {
 }
 
 /**
- * Parses OCC-format option symbol like "TSLA--281215C00500000"
- * Format: TICKER + padding + YYMMDD + C/P + 8-digit strike (price * 1000)
- * Returns { ticker, expiration, strike, type } or null
- */
-function parseOccOptionSymbol_(symbol) {
-  const match = symbol.match(/^([A-Z]+)\W*(\d{6})([CP])(\d{8})$/i);
-  if (!match) return null;
-
-  const [, ticker, dateStr, typeChar, strikeStr] = match;
-
-  const yy = parseInt(dateStr.slice(0, 2), 10);
-  const mm = parseInt(dateStr.slice(2, 4), 10);
-  const dd = parseInt(dateStr.slice(4, 6), 10);
-  const fullYear = 2000 + yy;
-
-  const strike = parseInt(strikeStr, 10) / 1000;
-  const type = typeChar.toUpperCase() === "C" ? "Call" : "Put";
-
-  return {
-    ticker: ticker.toUpperCase(),
-    expiration: `${mm}/${dd}/${fullYear}`,
-    strike,
-    type,
-  };
-}
-
-/**
- * Parses a CSV line handling quoted fields.
- */
-function parseCsvLine_(line) {
-  const result = [];
-  let current = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      inQuotes = !inQuotes;
-    } else if (ch === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = "";
-    } else {
-      current += ch;
-    }
-  }
-  result.push(current.trim());
-  return result;
-}
-
-/**
  * Parses stock positions and cash from E*Trade PortfolioDownload CSV.
  *
  * @param {File} file - Google Drive file object
@@ -333,7 +283,7 @@ function parsePortfolioStocksAndCash_(csvContent, stockTxns) {
     );
   }
 
-  const headers = parseCsvLine_(lines[headerIdx]);
+  const headers = parseCsvLineIntoFields_(lines[headerIdx]);
 
   // Validate required columns
   const required = validateRequiredColumns_(headers, [
@@ -363,7 +313,7 @@ function parsePortfolioStocksAndCash_(csvContent, stockTxns) {
     const line = lines[i].trim();
     if (!line) continue;
 
-    const cols = parseCsvLine_(line);
+    const cols = parseCsvLineIntoFields_(line);
     const symbol = (cols[idxSym] || "").trim().toUpperCase();
 
     if (!symbol || symbol === "TOTAL") continue;
@@ -451,7 +401,7 @@ function parsePortfolioOptionsWithPrices_(csvContent) {
     );
   }
 
-  const headers = parseCsvLine_(lines[headerIdx]);
+  const headers = parseCsvLineIntoFields_(lines[headerIdx]);
 
   // Validate required columns
   const required = validateRequiredColumns_(headers, [
@@ -478,7 +428,7 @@ function parsePortfolioOptionsWithPrices_(csvContent) {
     const line = lines[i].trim();
     if (!line) continue;
 
-    const cols = parseCsvLine_(line);
+    const cols = parseCsvLineIntoFields_(line);
     const symbolStr = (cols[idxSym] || "").trim();
     const qty = parseFloat(cols[idxQty]) || 0;
     const pricePaid = idxPricePaid >= 0 ? (parseFloat(cols[idxPricePaid]) || 0) : 0;
