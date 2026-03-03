@@ -152,7 +152,7 @@ The following functions are defined for use in Google Sheets:
 | `X3LOOKUP(key1, key2, key3, col1, col2, col3, returnCol)` | Three-key lookup |
 | `detectStrategy(strikes, types, qtys)` | Detects option strategy from legs |
 | `recommendClose(symbol, exp, strike, type, qty, patience)` | Recommended closing price |
-| `coalesce(range)` | First non-empty value |
+| `COALESCE(range)` | First non-empty value |
 
 ---
 
@@ -162,7 +162,7 @@ The following functions are defined for use in Google Sheets:
 
 1. Go to barchart.com, navigate to Options for your symbol
 2. Select expiration, choose "Stacked" view
-3. Download CSV (filename format: `symbol-options-exp-YYYY-MM-DD-....csv`)
+3. Download CSV (filename format: `<symbol>-options-exp-YYYY-MM-DD-....csv` such as `tsla-options-exp-2026-03-13-weekly-show-all-stacked-03-02-2026.csv`)
 4. Run **OptionTools > SpreadFinder > Upload Option Prices**
 5. Select your CSV file(s) and click Upload
 

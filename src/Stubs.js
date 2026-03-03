@@ -482,8 +482,8 @@ function getOptionLiquidity(symbol, expiration, strike, type) {
  * @returns {*} The first non-empty value, or empty string if none found.
  * @customfunction
  */
-function coalesce(range) {
-  return customFn_(SpreadFinder.coalesce, [range]);
+function COALESCE(range) {
+  return customFn_(SpreadFinder.COALESCE, [range]);
 }
 
 /**
