@@ -143,7 +143,7 @@ function formatExpirationLabel_(exp) {
 }
 
 // ---- Date Parsing ----
-// Date utilities (getTimeZone_, createDate_, formatDateMDYYYY_, formatDateWithTZ_) are in CommonUtils.js
+// Date utilities (getTimeZone_, createDate_, formatDateMDYYYY_) are in CommonUtils.js
 // Parsing functions are here.
 
 /**

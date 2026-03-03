@@ -63,19 +63,6 @@ function formatDateMDYYYY_(date) {
 }
 
 /**
- * Formats a Date using Utilities.formatDate with configured timezone.
- * For custom format patterns.
- *
- * @param {Date} date - Date to format
- * @param {string} pattern - Format pattern (e.g., "MMM d, yyyy")
- * @returns {string} Formatted date string or ""
- */
-function formatDateWithTZ_(date, pattern) {
-  if (!date || !(date instanceof Date) || isNaN(date.getTime())) return "";
-  return Utilities.formatDate(date, getTimeZone_(), pattern);
-}
-
-/**
  * Returns the first non-blank value from a range, scanning from bottom to top.
  * Useful for finding values in merged cells when called from a lower row.
  *
