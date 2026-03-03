@@ -195,10 +195,6 @@ function formatExpirationLabel_(exp) {
   return `${mon} ${yr}`;
 }
 
-// ---- Date Parsing ----
-// Date utilities (getTimeZone_, createDate_, formatDateMDYYYY_) are in CommonUtils.js
-// Parsing functions are here.
-
 /**
  * Parses various date formats into a Date at midnight local time.
  * Handles: Date objects, YYYY-MM-DD, M/D/YY, M/D/YYYY, Excel serial dates, and native Date parsing.
