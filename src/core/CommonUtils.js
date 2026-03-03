@@ -7,11 +7,6 @@
  * Keep shared helpers here to avoid duplicate function definitions across files.
  */
 
-/** Clamp a number between lo and hi. */
-function clamp_(x, lo, hi) {
-  return Math.max(lo, Math.min(hi, x));
-}
-
 /** Round to N decimal places. */
 function roundTo_(n, digits) {
   const f = Math.pow(10, digits);

@@ -427,7 +427,7 @@ function computePortfolioGraphData_(ss, symbol) {
       if (sp.flavor === "CALL") {
         // Bull call spread (debit spread)
         // VALUE = long call intrinsic - short call intrinsic = clamped spread
-        const intrinsic = clamp_(S - sp.kLong, 0, width);
+        const intrinsic = Math.max(0, Math.min(width, S - sp.kLong));
         valueExp = intrinsic * 100 * sp.qty;
         // Current: estimate value at stock price S, anchored at actual current value
         valueCurrent = estimateSpreadValueAtPrice_(S, sp.kLong, sp.kShort, currentSpreadValue, sp.dte || 365, currentPrice) * 100 * sp.qty;
@@ -436,7 +436,7 @@ function computePortfolioGraphData_(ss, symbol) {
         // VALUE = long put intrinsic - short put intrinsic = -loss (negative when losing)
         // At max profit (S > kShort): value = 0
         // At max loss (S < kLong): value = -width
-        const loss = clamp_(sp.kShort - S, 0, width);
+        const loss = Math.max(0, Math.min(width, sp.kShort - S));
         valueExp = -loss * 100 * sp.qty;
         // For current value, estimate uses recovery semantics, then convert to VALUE
         const putRecovery = quotes && quotes.longMid != null && quotes.shortMid != null
@@ -448,7 +448,7 @@ function computePortfolioGraphData_(ss, symbol) {
       } else {
         // Bear call spread (credit spread)
         // VALUE = long call intrinsic - short call intrinsic = -loss (negative when losing)
-        const loss = clamp_(S - sp.kLong, 0, width);
+        const loss = Math.max(0, Math.min(width, S - sp.kLong));
         valueExp = -loss * 100 * sp.qty;
         valueCurrent = valueExp; // Simplified for bear call
       }
@@ -926,7 +926,7 @@ function estimatePutSpreadValueAtPrice_(S, kLong, kShort, currentValue, dte, cur
   if (S <= 0) return 0;
 
   // Intrinsic value: what we keep of the width
-  const loss = clamp_(kShort - S, 0, width);
+  const loss = Math.max(0, Math.min(width, kShort - S));
   const intrinsic = width - loss;
 
   // If no valid current data, just return intrinsic
@@ -943,7 +943,7 @@ function estimatePutSpreadValueAtPrice_(S, kLong, kShort, currentValue, dte, cur
   }
 
   // Compute time value from actual market prices
-  const currentLoss = clamp_(kShort - currentStockPrice, 0, width);
+  const currentLoss = Math.max(0, Math.min(width, kShort - currentStockPrice));
   const currentIntrinsic = width - currentLoss;
   const timeValue = Math.max(0, currentValue - currentIntrinsic);
 
