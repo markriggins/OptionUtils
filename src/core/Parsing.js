@@ -20,10 +20,32 @@ function parseSpreadStrategy_(raw) {
     .replace(/\s+/g, " ")                  // collapse whitespace
     .trim();
 
+  // Single leg positions
   if (/^(stock|stocks|share|shares)$/.test(t)) return "stock";
+  if (/^(cash|money|usd|\$)$/.test(t)) return "cash";
+  if (/^long[\s.\-]?call(s)?$/.test(t)) return "long-call";
+  if (/^short[\s.\-]?call(s)?$/.test(t)) return "short-call";
+  if (/^long[\s.\-]?put(s)?$/.test(t)) return "long-put";
+  if (/^short[\s.\-]?put(s)?$/.test(t)) return "short-put";
+
+  // Vertical spreads
   if (/^(bcs|bull[\s.\-]?call[\s.\-]?spread(s)?)$/.test(t)) return "bull-call-spread";
   if (/^(bps|bull[\s.\-]?put[\s.\-]?spread(s)?)$/.test(t)) return "bull-put-spread";
-  if (/^(cash|money|usd|\$)$/.test(t)) return "cash";
+  if (/^(bear[\s.\-]?call[\s.\-]?spread(s)?)$/.test(t)) return "bear-call-spread";
+  if (/^(bear[\s.\-]?put[\s.\-]?spread(s)?)$/.test(t)) return "bear-put-spread";
+
+  // Straddles and strangles
+  if (/^long[\s.\-]?straddle(s)?$/.test(t)) return "long-straddle";
+  if (/^short[\s.\-]?straddle(s)?$/.test(t)) return "short-straddle";
+  if (/^long[\s.\-]?strangle(s)?$/.test(t)) return "long-strangle";
+  if (/^short[\s.\-]?strangle(s)?$/.test(t)) return "short-strangle";
+
+  // Iron condors and butterflies
+  if (/^(ic|iron[\s.\-]?condor(s)?)$/.test(t)) return "iron-condor";
+  if (/^(ib|iron[\s.\-]?butterfly|iron[\s.\-]?butterflies)$/.test(t)) return "iron-butterfly";
+
+  // Custom/unknown
+  if (/^custom$/.test(t)) return "custom";
 
   return null;
 }
@@ -803,12 +825,59 @@ function test_parseSpreadStrategy() {
   assertEqual(parseSpreadStrategy_("bull puts spread"), null, "invalid plural mismatch");
   assertEqual(parseSpreadStrategy_("bps extra"), null, "bps with extra");
 
+  // Bear Call Spread
+  assertEqual(parseSpreadStrategy_("bear call spread"), "bear-call-spread", "bear call spread spaces");
+  assertEqual(parseSpreadStrategy_("Bear-Call-Spread"), "bear-call-spread", "bear-call-spread dashes");
+  assertEqual(parseSpreadStrategy_("bear.call.spread"), "bear-call-spread", "bear.call.spread dots");
+  assertEqual(parseSpreadStrategy_("bear call spreads"), "bear-call-spread", "bear call spreads plural");
+
+  // Bear Put Spread
+  assertEqual(parseSpreadStrategy_("bear put spread"), "bear-put-spread", "bear put spread spaces");
+  assertEqual(parseSpreadStrategy_("Bear-Put-Spread"), "bear-put-spread", "bear-put-spread dashes");
+  assertEqual(parseSpreadStrategy_("bear.put.spread"), "bear-put-spread", "bear.put.spread dots");
+  assertEqual(parseSpreadStrategy_("bear put spreads"), "bear-put-spread", "bear put spreads plural");
+
+  // Single leg options
+  assertEqual(parseSpreadStrategy_("long call"), "long-call", "long call");
+  assertEqual(parseSpreadStrategy_("Long-Call"), "long-call", "Long-Call dashes");
+  assertEqual(parseSpreadStrategy_("long calls"), "long-call", "long calls plural");
+  assertEqual(parseSpreadStrategy_("short call"), "short-call", "short call");
+  assertEqual(parseSpreadStrategy_("short-call"), "short-call", "short-call dashes");
+  assertEqual(parseSpreadStrategy_("long put"), "long-put", "long put");
+  assertEqual(parseSpreadStrategy_("long-put"), "long-put", "long-put dashes");
+  assertEqual(parseSpreadStrategy_("short put"), "short-put", "short put");
+  assertEqual(parseSpreadStrategy_("short-put"), "short-put", "short-put dashes");
+
+  // Straddles and strangles
+  assertEqual(parseSpreadStrategy_("long straddle"), "long-straddle", "long straddle");
+  assertEqual(parseSpreadStrategy_("Long-Straddle"), "long-straddle", "Long-Straddle dashes");
+  assertEqual(parseSpreadStrategy_("short straddle"), "short-straddle", "short straddle");
+  assertEqual(parseSpreadStrategy_("long strangle"), "long-strangle", "long strangle");
+  assertEqual(parseSpreadStrategy_("short strangle"), "short-strangle", "short strangle");
+  assertEqual(parseSpreadStrategy_("short-strangle"), "short-strangle", "short-strangle dashes");
+
+  // Iron condors and butterflies
+  assertEqual(parseSpreadStrategy_("ic"), "iron-condor", "ic abbr");
+  assertEqual(parseSpreadStrategy_("IC"), "iron-condor", "IC upper");
+  assertEqual(parseSpreadStrategy_("iron condor"), "iron-condor", "iron condor");
+  assertEqual(parseSpreadStrategy_("Iron-Condor"), "iron-condor", "Iron-Condor dashes");
+  assertEqual(parseSpreadStrategy_("iron condors"), "iron-condor", "iron condors plural");
+  assertEqual(parseSpreadStrategy_("ib"), "iron-butterfly", "ib abbr");
+  assertEqual(parseSpreadStrategy_("IB"), "iron-butterfly", "IB upper");
+  assertEqual(parseSpreadStrategy_("iron butterfly"), "iron-butterfly", "iron butterfly");
+  assertEqual(parseSpreadStrategy_("Iron-Butterfly"), "iron-butterfly", "Iron-Butterfly dashes");
+  assertEqual(parseSpreadStrategy_("iron butterflies"), "iron-butterfly", "iron butterflies plural");
+
+  // Custom
+  assertEqual(parseSpreadStrategy_("custom"), "custom", "custom");
+
   // Invalid
   assertEqual(parseSpreadStrategy_("bull spread"), null, "missing type");
-  assertEqual(parseSpreadStrategy_("bear call spread"), null, "wrong direction");
   assertEqual(parseSpreadStrategy_("123"), null, "numbers");
   assertEqual(parseSpreadStrategy_("stock spread"), null, "mixed invalid");
   assertEqual(parseSpreadStrategy_("sto\u0301ck"), null, "accented stock");
+  assertEqual(parseSpreadStrategy_("call"), null, "call alone is not a strategy");
+  assertEqual(parseSpreadStrategy_("put"), null, "put alone is not a strategy");
 
   log.info("test", "All parseSpreadStrategy tests passed");
 }
