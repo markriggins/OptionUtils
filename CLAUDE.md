@@ -29,7 +29,7 @@ clasp pull
 
 - `SpreadFinder.js` - Scans option prices to find bull call spread opportunities. Ranks by expected ROI using probability-of-touch model. Results written to `<SYMBOL>Spreads` sheet.
 
-- `ImportEtrade.js` - Imports E*Trade portfolio and transaction CSVs into the Portfolio sheet. Pairs transactions into spreads, detects iron condors, and tracks closing prices.
+- `ImportPortfolio.js` - Imports portfolio and transaction CSVs into the Portfolio sheet. Pairs transactions into spreads, detects iron condors, and tracks closing prices.
 
 - `PlotPortfolioValueByPrice.js` - Reads positions from the Portfolio sheet (or legacy named ranges), generates per-symbol `<SYMBOL>PortfolioValueByPrice` tabs with charts showing $ value and % ROI at expiration.
 

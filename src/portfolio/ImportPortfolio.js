@@ -1,6 +1,6 @@
 /**
- * ImportEtrade.js
- * Orchestrates E*Trade portfolio import via file upload (no Drive storage).
+ * ImportPortfolio.js
+ * Orchestrates portfolio import via file upload (no Drive storage).
  *
  * Parsing, spread building, and sheet output are delegated to:
  *   - EtradeCsvParser.js - CSV parsing
@@ -105,6 +105,7 @@ function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
     for (const txnFile of transactions) {
       let result;
       try {
+        // TODO: support other brokerages
         result = parseEtradeTransactionsFromCsv_(txnFile.content);
       } catch (e) {
         // Check if this looks like a portfolio file uploaded in wrong slot
