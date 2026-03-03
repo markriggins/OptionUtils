@@ -244,9 +244,9 @@ function parseEtradeOptionSymbol_(symbol) {
  * @param {Object[]} stockTxns - Stock transactions for date lookup
  * @returns {{ stocks: Object[], cash: number }}
  */
-function parsePortfolioStocksAndCashFromFile_(file, stockTxns) {
+function parseEtradePortfolioStocksAndCashFromFile_(file, stockTxns) {
   const csv = file.getBlob().getDataAsString();
-  return parsePortfolioStocksAndCash_(csv, stockTxns);
+  return parseEtradePortfolioStocksAndCash_(csv, stockTxns);
 }
 
 /**
@@ -255,7 +255,7 @@ function parsePortfolioStocksAndCashFromFile_(file, stockTxns) {
  * @param {Object[]} stockTxns - Stock transactions for date lookup
  * @returns {{ stocks: Object[], cash: number }}
  */
-function parsePortfolioStocksAndCash_(csvContent, stockTxns) {
+function parseEtradePortfolioStocksAndCash_(csvContent, stockTxns) {
   const lines = csvContent.split(/\r?\n/);
 
   // Find the data header row
@@ -360,9 +360,9 @@ function parsePortfolioStocksAndCash_(csvContent, stockTxns) {
  * @param {File} file - The PortfolioDownload CSV file
  * @returns {{ quantities: Map<string, number>, prices: Map<string, {pricePaid: number}> }}
  */
-function parsePortfolioOptionsWithPricesFromFile_(file) {
+function parseEtradePortfolioOptionsWithPricesFromFile_(file) {
   const csv = file.getBlob().getDataAsString();
-  return parsePortfolioOptionsWithPrices_(csv);
+  return parseEtradePortfolioOptionsWithPrices_(csv);
 }
 
 /**
@@ -371,7 +371,7 @@ function parsePortfolioOptionsWithPricesFromFile_(file) {
  * @param {string} csvContent - The CSV content as a string
  * @returns {{ quantities: Map<string, number>, prices: Map<string, {pricePaid: number}> }}
  */
-function parsePortfolioOptionsWithPrices_(csvContent) {
+function parseEtradePortfolioOptionsWithPrices_(csvContent) {
   const quantities = new Map();
   const prices = new Map();
   const lines = csvContent.split(/\r?\n/);

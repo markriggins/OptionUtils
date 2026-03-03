@@ -147,7 +147,7 @@ function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
   if (portfolio && importMode !== "addTransactions") {
     let portfolioResult;
     try {
-      portfolioResult = parsePortfolioStocksAndCash_(portfolio.content, stockTxns);
+      portfolioResult = parseEtradePortfolioStocksAndCash_(portfolio.content, stockTxns);
     } catch (e) {
       // Check if this looks like a transaction file uploaded in wrong slot
       if (portfolio.content.includes("TransactionDate,") || portfolio.content.includes("Activity/Trade Date,")) {
@@ -160,7 +160,7 @@ function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
     }
     stockPositions = portfolioResult.stocks;
     portfolioCash = portfolioResult.cash || 0;
-    portfolioOptionData = parsePortfolioOptionsWithPrices_(portfolio.content);
+    portfolioOptionData = parseEtradePortfolioOptionsWithPrices_(portfolio.content);
     uploadedParts.push("portfolio");
     log.info("import", `Found ${stockPositions.length} stock positions and $${portfolioCash} cash from portfolio CSV`);
   } else if (importMode === "addTransactions") {
@@ -233,12 +233,11 @@ function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
     return true;
   });
 
-  // Combine naked legs - include filtered transactions AND existing naked puts
-  const allNakedLegs = [...filteredPairedSpreads, ...existingNakedShortPuts];
-  const nakedCombined = combineNakedLegsIntoSpreads_(allNakedLegs);
 
+  // Combine naked legs - include filtered transactions AND existing naked puts
   // Combine matching bull-put-spreads and bear-call-spreads into iron condors/butterflies
-  const combinedSpreads = combineRelatedSpreadsIntoIronCondorsAndButterflies_(nakedCombined);
+  const combinedSpreads = combineRelatedSpreadsIntoIronCondorsAndButterflies_(
+    combineNakedLegsIntoSpreads_([...filteredPairedSpreads, ...existingNakedShortPuts]));
 
   // Identify which existing naked puts were combined vs still naked
   // - Unmatched existing puts remain in result with _existingKey
