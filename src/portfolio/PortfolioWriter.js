@@ -7,6 +7,25 @@
  */
 
 /**
+ * Converts an expiration (Date or string) to M/D/YYYY format for consistent key matching.
+ */
+function formatExpirationForKey_(exp) {
+  // Normalize all dates to M/D/YYYY format for consistent key matching
+  if (exp instanceof Date) {
+    return `${exp.getMonth() + 1}/${exp.getDate()}/${exp.getFullYear()}`;
+  }
+  const s = String(exp || "").trim();
+  // Already in M/D/YYYY format
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) return s;
+  // YYYY-MM-DD → M/D/YYYY
+  const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    return `${parseInt(isoMatch[2], 10)}/${parseInt(isoMatch[3], 10)}/${isoMatch[1]}`;
+  }
+  return s;
+}
+
+/**
  * Formats a spread for display label.
  */
 function formatSpreadLabel_(spread) {
