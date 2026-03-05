@@ -209,14 +209,6 @@ function runCallSpreadFinder(symbol, config) {
 }
 
 /**
- * Legacy: Runs SpreadFinder using old config (deprecated).
- * Redirects to the new Call Spread Finder dialog.
- */
-function runSpreadFinder() {
-  showCallSpreadFinderDialog();
-}
-
-/**
  * Finds the most recently modified CallSpreads sheet.
  * @param {Spreadsheet} ss - The active spreadsheet
  * @returns {Sheet|null} The CallSpreads sheet or null
