@@ -291,7 +291,7 @@ function XLOOKUP_BY(key1, col1, ...args) {
  * @customfunction
  */
 function X2LOOKUP(key1, col1, key2, col2, returnCol) {
-  return customFn_(SpreadFinder.X2LOOKUP, [key1, col1, key2, col2, returnCol]);
+  return XLOOKUP_BY(key1, col1, key2, col2, returnCol);
 }
 
 /**
@@ -308,7 +308,7 @@ function X2LOOKUP(key1, col1, key2, col2, returnCol) {
  * @customfunction
  */
 function X3LOOKUP(key1, col1, key2, col2, key3, col3, returnCol) {
-  return customFn_(SpreadFinder.X3LOOKUP, [key1, col1, key2, col2, key3, col3, returnCol]);
+  return XLOOKUP_BY(key1, col1, key2, col2, key3, col3, returnCol);
 }
 
 /**

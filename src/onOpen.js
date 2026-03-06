@@ -63,6 +63,12 @@ function initializeProject() {
 function completeInitialization() {
   const ss = SpreadsheetApp.getActive();
 
+  // Save user data (notes and custom links) before clearing
+  const portfolioSheet = ss.getSheetByName("Portfolio");
+  if (portfolioSheet) {
+    saveUserData_(portfolioSheet, true); // persist to DocumentProperties
+  }
+
   // Find and delete sheets (everything except README)
   const keepSheets = ["README"];
   const sheetsToDelete = ss.getSheets().filter(s => !keepSheets.includes(s.getName()));

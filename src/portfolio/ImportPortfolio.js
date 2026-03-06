@@ -73,10 +73,14 @@ function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  // Handle rebuild mode - delete existing sheet
+  // Handle rebuild mode - save user data, then delete existing sheet
+  let savedUserData = new Map();
   if (importMode === "rebuild") {
     const existingSheet = ss.getSheetByName("Portfolio");
     if (existingSheet) {
+      // Save notes and custom values before deleting
+      savedUserData = saveUserData_(existingSheet);
+
       ss.deleteSheet(existingSheet);
       SpreadsheetApp.flush();
       const nr = ss.getNamedRanges().find(r => r.getName() === "PortfolioTable");
@@ -343,6 +347,13 @@ function uploadAndRebuildPortfolio(portfolio, transactions, importMode) {
 
   // Write to Portfolio table (pass rows to delete for combined positions)
   writePortfolioTable_(ss, headers, updatedLegs, newLegs, closingPrices, rowsToDelete);
+
+  // Restore user data (notes and custom links) from before rebuild
+  // Also checks DocumentProperties (for data saved during Initialize/Clear)
+  if (importMode === "rebuild") {
+    const portfolioSheet = ss.getSheetByName("Portfolio");
+    restoreUserData_(portfolioSheet, savedUserData);
+  }
 
   // Build summary
   let summary = "";

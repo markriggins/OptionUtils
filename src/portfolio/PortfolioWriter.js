@@ -6,6 +6,200 @@
  * formatting, and summary calculations.
  */
 
+/* =========================================================
+   User Data Preservation (notes and custom values)
+   ========================================================= */
+
+const USER_DATA_PROPERTY_KEY = "portfolioUserData";
+
+/**
+ * Saves user-entered data (notes and non-formula values) from the Portfolio sheet.
+ * Returns a Map keyed by leg identity (Symbol|Expiration|Strike|Type).
+ * Also persists to DocumentProperties for survival across Initialize/Clear.
+ *
+ * @param {Sheet} sheet - The Portfolio sheet
+ * @param {boolean} [persistToProps=true] - Whether to save to DocumentProperties
+ * @returns {Map<string, Object>} Map of key -> {notes: {col: note}, values: {col: value}, link: string}
+ */
+function saveUserData_(sheet, persistToProps) {
+  if (persistToProps === undefined) persistToProps = true;
+  const saved = new Map();
+  if (!sheet) return saved;
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return saved;
+
+  // Get headers to find column indices
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const idxSym = findColumn_(headers, ["symbol", "ticker"]);
+  const idxExp = findColumn_(headers, ["expiration", "exp"]);
+  const idxStrike = findColumn_(headers, ["strike"]);
+  const idxType = findColumn_(headers, ["type"]);
+  const idxLink = findColumn_(headers, ["link"]);
+
+  if (idxSym < 0 || idxStrike < 0) return saved;
+
+  // Get all data, notes, and formulas
+  const dataRange = sheet.getRange(2, 1, lastRow - 1, lastCol);
+  const values = dataRange.getValues();
+  const notes = dataRange.getNotes();
+  const formulas = dataRange.getFormulas();
+
+  // Track current symbol for leg rows (which have empty Symbol column)
+  let currentSymbol = "";
+
+  for (let r = 0; r < values.length; r++) {
+    const row = values[r];
+    const rowNotes = notes[r];
+    const rowFormulas = formulas[r];
+
+    // Update current symbol if this row has one
+    const sym = idxSym >= 0 ? String(row[idxSym] || "").trim().toUpperCase() : "";
+    if (sym) currentSymbol = sym;
+
+    // Build key from leg identity
+    const strike = idxStrike >= 0 ? row[idxStrike] : "";
+    const type = idxType >= 0 ? String(row[idxType] || "").trim() : "";
+    const exp = idxExp >= 0 ? formatExpirationForKey_(row[idxExp]) : "";
+
+    // Skip rows without strike (summary rows, etc.)
+    if (!strike && strike !== 0) continue;
+
+    const key = `${currentSymbol}|${exp}|${strike}|${type}`;
+
+    const entry = { notes: {}, values: {}, link: null };
+
+    // Save all non-empty notes
+    for (let c = 0; c < rowNotes.length; c++) {
+      if (rowNotes[c]) {
+        entry.notes[c] = rowNotes[c];
+      }
+    }
+
+    // Save Link if it's a value (not formula) - user pasted a custom URL
+    if (idxLink >= 0) {
+      const linkFormula = rowFormulas[idxLink];
+      const linkValue = row[idxLink];
+      if (!linkFormula && linkValue && String(linkValue).startsWith("http")) {
+        entry.link = linkValue;
+      }
+    }
+
+    // Only save if there's something to preserve
+    if (Object.keys(entry.notes).length > 0 || entry.link) {
+      saved.set(key, entry);
+    }
+  }
+
+  log.info("import", `Saved user data for ${saved.size} positions`);
+
+  // Persist to DocumentProperties for survival across Initialize/Clear
+  if (persistToProps && saved.size > 0) {
+    const obj = Object.fromEntries(saved);
+    const json = JSON.stringify(obj);
+    PropertiesService.getDocumentProperties().setProperty(USER_DATA_PROPERTY_KEY, json);
+    log.info("import", `Persisted ${saved.size} user data entries to DocumentProperties (${json.length} bytes)`);
+  }
+
+  return saved;
+}
+
+/**
+ * Restores user-entered data (notes and custom values) to the Portfolio sheet.
+ * If savedData is not provided, loads from DocumentProperties.
+ *
+ * @param {Sheet} sheet - The Portfolio sheet
+ * @param {Map<string, Object>} [savedData] - Map from saveUserData_, or null to load from properties
+ * @param {boolean} [clearProps=true] - Whether to clear DocumentProperties after restore
+ */
+function restoreUserData_(sheet, savedData, clearProps) {
+  if (clearProps === undefined) clearProps = true;
+  if (!sheet) return;
+
+  // Load from DocumentProperties if no savedData provided
+  if (!savedData || savedData.size === 0) {
+    const json = PropertiesService.getDocumentProperties().getProperty(USER_DATA_PROPERTY_KEY);
+    if (json) {
+      try {
+        const obj = JSON.parse(json);
+        savedData = new Map(Object.entries(obj));
+        log.info("import", `Loaded ${savedData.size} user data entries from DocumentProperties`);
+      } catch (e) {
+        log.error("import", `Failed to parse user data from DocumentProperties: ${e.message}`);
+        return;
+      }
+    }
+  }
+
+  if (!savedData || savedData.size === 0) return;
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return;
+
+  // Get headers to find column indices
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const idxSym = findColumn_(headers, ["symbol", "ticker"]);
+  const idxExp = findColumn_(headers, ["expiration", "exp"]);
+  const idxStrike = findColumn_(headers, ["strike"]);
+  const idxType = findColumn_(headers, ["type"]);
+  const idxLink = findColumn_(headers, ["link"]);
+
+  if (idxSym < 0 || idxStrike < 0) return;
+
+  // Get all data
+  const dataRange = sheet.getRange(2, 1, lastRow - 1, lastCol);
+  const values = dataRange.getValues();
+
+  // Track current symbol for leg rows
+  let currentSymbol = "";
+  let restoredCount = 0;
+
+  for (let r = 0; r < values.length; r++) {
+    const row = values[r];
+
+    // Update current symbol if this row has one
+    const sym = idxSym >= 0 ? String(row[idxSym] || "").trim().toUpperCase() : "";
+    if (sym) currentSymbol = sym;
+
+    // Build key from leg identity
+    const strike = idxStrike >= 0 ? row[idxStrike] : "";
+    const type = idxType >= 0 ? String(row[idxType] || "").trim() : "";
+    const exp = idxExp >= 0 ? formatExpirationForKey_(row[idxExp]) : "";
+
+    // Skip rows without strike
+    if (!strike && strike !== 0) continue;
+
+    const key = `${currentSymbol}|${exp}|${strike}|${type}`;
+    const entry = savedData.get(key);
+    if (!entry) continue;
+
+    const sheetRow = r + 2; // 1-indexed, skip header
+
+    // Restore notes
+    for (const [colStr, note] of Object.entries(entry.notes)) {
+      const col = parseInt(colStr, 10) + 1; // 1-indexed
+      sheet.getRange(sheetRow, col).setNote(note);
+    }
+
+    // Restore custom Link (overwrites formula)
+    if (entry.link && idxLink >= 0) {
+      sheet.getRange(sheetRow, idxLink + 1).setValue(entry.link);
+    }
+
+    restoredCount++;
+  }
+
+  log.info("import", `Restored user data for ${restoredCount} positions`);
+
+  // Clear DocumentProperties after successful restore
+  if (clearProps && restoredCount > 0) {
+    PropertiesService.getDocumentProperties().deleteProperty(USER_DATA_PROPERTY_KEY);
+    log.info("import", "Cleared user data from DocumentProperties");
+  }
+}
+
 /**
  * Converts an expiration (Date or string) to M/D/YYYY format for consistent key matching.
  */
