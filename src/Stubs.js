@@ -262,33 +262,53 @@ function XLookupByKeys(keyValues, keyHeaders, returnHeaders, sheetName) {
 }
 
 /**
- * Two-key lookup. Finds a row matching two key values and returns a value from another column.
+ * Multi-key lookup with variable number of keys.
+ * Pass pairs of (key, column) followed by the return column.
  * @param {*} key1 - First key value to match.
- * @param {*} key2 - Second key value to match.
  * @param {Range} col1 - Range containing first key column.
+ * @param {...*} args - Additional (key, col) pairs, ending with returnCol.
+ * @returns {*} The matching value from returnCol, or #N/A if not found.
+ * @customfunction
+ *
+ * @example
+ * // 1 key:  XLOOKUP_BY(symbol, SymbolCol, PriceCol)
+ * // 2 keys: XLOOKUP_BY(symbol, SymbolCol, strike, StrikeCol, PriceCol)
+ * // 3 keys: XLOOKUP_BY(symbol, SymbolCol, exp, ExpCol, strike, StrikeCol, PriceCol)
+ */
+function XLOOKUP_BY(key1, col1, ...args) {
+  return customFn_(SpreadFinder.XLOOKUP_BY, [key1, col1, ...args]);
+}
+
+/**
+ * DEPRECATED: Use XLOOKUP_BY instead.
+ * Two-key lookup with signature: (key1, col1, key2, col2, returnCol).
+ * @param {*} key1 - First key value to match.
+ * @param {Range} col1 - Range containing first key column.
+ * @param {*} key2 - Second key value to match.
  * @param {Range} col2 - Range containing second key column.
  * @param {Range} returnCol - Range containing values to return.
  * @returns {*} The matching value from returnCol.
  * @customfunction
  */
-function X2LOOKUP(key1, key2, col1, col2, returnCol) {
-  return customFn_(SpreadFinder.X2LOOKUP, [key1, key2, col1, col2, returnCol]);
+function X2LOOKUP(key1, col1, key2, col2, returnCol) {
+  return customFn_(SpreadFinder.X2LOOKUP, [key1, col1, key2, col2, returnCol]);
 }
 
 /**
- * Three-key lookup. Finds a row matching three key values and returns a value from another column.
+ * DEPRECATED: Use XLOOKUP_BY instead.
+ * Three-key lookup with signature: (key1, col1, key2, col2, key3, col3, returnCol).
  * @param {*} key1 - First key value to match.
+ * @param {Range} col1 - Range containing first key column.
  * @param {*} key2 - Second key value to match.
+ * @param {Range} col2 - Range containing second key column.
  * @param {*} key3 - Third key value to match.
- * @param {Range} key1Col - Range containing first key column.
- * @param {Range} key2Col - Range containing second key column.
- * @param {Range} key3Col - Range containing third key column.
+ * @param {Range} col3 - Range containing third key column.
  * @param {Range} returnCol - Range containing values to return.
  * @returns {*} The matching value from returnCol.
  * @customfunction
  */
-function X3LOOKUP(key1, key2, key3, key1Col, key2Col, key3Col, returnCol) {
-  return customFn_(SpreadFinder.X3LOOKUP, [key1, key2, key3, key1Col, key2Col, key3Col, returnCol]);
+function X3LOOKUP(key1, col1, key2, col2, key3, col3, returnCol) {
+  return customFn_(SpreadFinder.X3LOOKUP, [key1, col1, key2, col2, key3, col3, returnCol]);
 }
 
 /**
