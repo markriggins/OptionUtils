@@ -1,7 +1,7 @@
 
 /**
  * CommonUtils.js
- * Shared small helpers used across OptionUtils.
+ * Shared small helpers used across SpreadFinder.
  *
  * IMPORTANT: Apps Script has a single global namespace across all .gs/.js files in a project.
  * Keep shared helpers here to avoid duplicate function definitions across files.

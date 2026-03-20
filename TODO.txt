@@ -1,5 +1,5 @@
   Architecture
-  1. Rename GitHub OptionUtils to SpreadFinder
+  1. [DONE] Rename GitHub OptionUtils to SpreadFinder
   3. Learn why you're not seeing links to SpreadFinder's Privacy Policy or Terms of Service
   4. Find out why, on a fresh copy it thinks TSLA is 826 shares and	$480.00
   10. Be sure that the DATA/OptionPrices support the sample portfolio.  Put "sample" in their name, so they will be ignored later

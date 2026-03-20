@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/OptionUtils.iml" filepath="$PROJECT_DIR$/.idea/OptionUtils.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/SpreadFinder.iml" filepath="$PROJECT_DIR$/.idea/SpreadFinder.iml" />
     </modules>
   </component>
 </project>

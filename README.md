@@ -1,4 +1,4 @@
-# OptionUtils
+# SpreadFinder
 
 Option portfolio analysis tools for Google Sheets. SpreadFinder scans option prices to find attractive bull call spread opportunities. Portfolio tools let you track positions and visualize profit/loss scenarios.
 
@@ -124,13 +124,13 @@ This is beta code, so please keep your expectations low.  But I wrote it for mys
 
 ## Installation
 
-1. Open the [OptionUtils Template Spreadsheet](https://docs.google.com/spreadsheets/d/1MYMzTpoGlKuAXFyN8eGePmAsZ8R6379zhDoe-JHm7D0/copy)
+1. Open the [SpreadFinder Template Spreadsheet](https://docs.google.com/spreadsheets/d/1MYMzTpoGlKuAXFyN8eGePmAsZ8R6379zhDoe-JHm7D0/copy)
 2. Click "File > Make a copy"
 3. The Apps Script will be automatically installed
 4. Wait for the **OptionTools** menu to appear
 5. Run **OptionTools > Initialize / Clear Project** to set up the README sheet
 
-You'll be prompted to authorize the app. The app only accesses your spreadsheet — no Drive access is required. Source code: https://github.com/markriggins/OptionUtils
+You'll be prompted to authorize the app. The app only accesses your spreadsheet — no Drive access is required. Source code: https://github.com/markriggins/SpreadFinder
 
 ---
 

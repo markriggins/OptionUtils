@@ -90,7 +90,7 @@ function completeInitialization() {
   }
 
   const readmeRows = [
-    ["OptionUtils - Option Portfolio Analysis Tools"],
+    ["SpreadFinder - Option Portfolio Analysis Tools"],
     ["Analyze option spreads, track portfolios, and visualize profit/loss scenarios."],
     [""],
     ["--- Quick Start: SpreadFinder ---"],
@@ -106,7 +106,7 @@ function completeInitialization() {
     [""],
     ["--- Apps Script Library ---"],
     ["Script ID: 1qvAlZ99zluKSr3ws4NsxH8xXo1FncbWzu6Yq6raBumHdCLpLDaKveM0T"],
-    ["Source: github.com/markriggins/OptionUtils"],
+    ["Source: github.com/markriggins/SpreadFinder"],
   ];
 
   readmeSheet.getRange(1, 1, readmeRows.length, 1).setValues(readmeRows);
