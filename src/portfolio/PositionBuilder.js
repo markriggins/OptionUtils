@@ -551,6 +551,7 @@ function buildClosingPricesMap_(transactions, stockTxns) {
 
   // 3. Expired worthless: if expiration < today and no close, set to 0
   const today = new Date();
+  today.setHours(0, 0, 0, 0);
   const openLegs = new Set();
   for (const txn of transactions) {
     if (!txn.isOpen) continue;
